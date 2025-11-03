@@ -100,20 +100,26 @@ function b64CustomEncode(s) {
 }
 function buildContentString(method, uri, payload) {
   payload = payload || {};
-  if (method === "POST") return uri + JSON.stringify(payload);
-  const keys = Object.keys(payload);
-  if (!keys.length) return uri;
-  return (
-    uri +
-    "?" +
-    keys
-      .map((k) =>
-        Array.isArray(payload[k])
-          ? `${k}=${payload[k].join(",")}`
-          : `${k}=${payload[k] ?? ""}`
-      )
-      .join("&")
-  );
+  if (method === "POST") {
+    return uri + JSON.stringify(payload);
+  }
+  const entries = Object.entries(payload);
+  if (!entries.length) return uri;
+  const parts = entries.map(([key, value]) => {
+    let valStr;
+    if (Array.isArray(value)) {
+      valStr = value
+        .map((v) => (v !== undefined && v !== null ? String(v) : ""))
+        .join(",");
+    } else if (value === null || value === undefined) {
+      valStr = "";
+    } else {
+      valStr = String(value);
+    }
+    valStr = valStr.replace(/=/g, "%3D");
+    return `${key}=${valStr}`;
+  });
+  return uri + "?" + parts.join("&");
 }
 function md5Hex(s) {
   return crypto.createHash("md5").update(s, "utf8").digest("hex");
@@ -259,8 +265,8 @@ function XsCommon(a1, xs, xt) {
   return b64Encode(encodeUtf8(dataStr));
 }
 
-function get_request_headers_params(api, data, a1) {
-  let xs_xt = signXs("POST", api, a1, "xhs-pc-web", data);
+function get_request_headers_params(api, data, a1,method="POST") {
+  let xs_xt = signXs(method, api, a1, "xhs-pc-web", data);
   let xs = xs_xt;
   let xt = new Date().getTime();
   let xs_common = XsCommon(a1, xs, xt);
@@ -270,7 +276,6 @@ function get_request_headers_params(api, data, a1) {
     xs_common: xs_common,
   };
 }
-
 
 if (typeof module !== "undefined") {
   module.exports = {
