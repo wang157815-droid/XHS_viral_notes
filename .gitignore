@@ -1,5 +1,20 @@
-__pycache__
-node_modules/
+# ============================
+# 环境与敏感文件
+# ============================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
 .Python
 build/
@@ -18,14 +33,84 @@ MANIFEST
 *.manifest
 *.spec
 .cache
-*.log
-local_settings.py
-db.sqlite3
-__pypackages__/
-.venv
-env/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+.venv/
 venv/
 ENV/
+env/
 env.bak/
 venv.bak/
+__pypackages__/
 
+# ============================
+# Node.js
+# ============================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ============================
+# IDE 与编辑器
+# ============================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# ============================
+# 运行时数据（重要！）
+# ============================
+# 日志文件
+logs/
+*.log
+
+# 数据目录（包含爬取的数据）
+datas/
+download/
+
+# 向量数据库存储
+viral_agent/storage/chromadb/
+
+# 文档存储（用户上传的文档）
+viral_agent/storage/documents/
+
+# ============================
+# 系统文件
+# ============================
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+*.temp
+
+# ============================
+# 测试与调试
+# ============================
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# ============================
+# Claude Code
+# ============================
+.claude/
+
+# ============================
+# 其他
+# ============================
+db.sqlite3
+local_settings.py

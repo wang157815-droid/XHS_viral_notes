@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>爆文模型 Agent 架构图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            padding: 30px;
+            color: #fff;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .title {
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .title h1 {
+            font-size: 32px;
+            color: #4fc3f7;
+            margin-bottom: 5px;
+        }
+        .title p {
+            color: #90caf9;
+            font-size: 14px;
+        }
+
+        /* 主架构区域 */
+        .architecture {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* 行 */
+        .row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        /* 模块样式 */
+        .module {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(10px);
+        }
+
+        .module-title {
+            background: linear-gradient(90deg, #4fc3f7 0%, #29b6f6 100%);
+            color: #fff;
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .module-title.orange {
+            background: linear-gradient(90deg, #ffb74d 0%, #ffa726 100%);
+        }
+
+        .module-title.green {
+            background: linear-gradient(90deg, #81c784 0%, #66bb6a 100%);
+        }
+
+        .module-title.purple {
+            background: linear-gradient(90deg, #ba68c8 0%, #ab47bc 100%);
+        }
+
+        .module-title.red {
+            background: linear-gradient(90deg, #ef5350 0%, #e53935 100%);
+        }
+
+        /* 输入区域 */
+        .input-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .user-icon {
+            width: 80px;
+            height: 80px;
+            background: rgba(79, 195, 247, 0.2);
+            border: 2px solid #4fc3f7;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .user-icon span {
+            font-size: 30px;
+            margin-bottom: 5px;
+        }
+
+        /* 输入框 */
+        .input-box {
+            background: rgba(255,255,255,0.95);
+            border-radius: 10px;
+            padding: 15px 20px;
+            color: #333;
+            min-width: 200px;
+        }
+
+        .input-box .label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .input-box .value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #1976d2;
+        }
+
+        /* 箭头 */
+        .arrow {
+            color: #4fc3f7;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .arrow-down {
+            text-align: center;
+            font-size: 30px;
+            color: #4fc3f7;
+            margin: 10px 0;
+        }
+
+        /* 处理流程区 */
+        .process-area {
+            background: rgba(79, 195, 247, 0.1);
+            border: 2px solid rgba(79, 195, 247, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+        }
+
+        .process-title {
+            color: #4fc3f7;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.3);
+        }
+
+        /* 三维度采集 */
+        .dimension-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+
+        .dimension-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            color: #333;
+        }
+
+        .dimension-card .icon {
+            font-size: 30px;
+            margin-bottom: 8px;
+        }
+
+        .dimension-card .name {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .dimension-card .desc {
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* 分析器网格 */
+        .analyzer-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .analyzer-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            color: #333;
+        }
+
+        .analyzer-card .icon {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .analyzer-card .name {
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        /* AI分析区 */
+        .ai-section {
+            display: flex;
+            gap: 20px;
+            align-items: stretch;
+        }
+
+        .knowledge-base {
+            flex: 1;
+            background: rgba(186, 104, 200, 0.1);
+            border: 2px solid rgba(186, 104, 200, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+        }
+
+        .ai-engine {
+            flex: 1;
+            background: rgba(239, 83, 80, 0.1);
+            border: 2px solid rgba(239, 83, 80, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+        }
+
+        .sub-module {
+            background: rgba(255,255,255,0.95);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .sub-module:last-child {
+            margin-bottom: 0;
+        }
+
+        .sub-module .name {
+            font-weight: bold;
+            font-size: 13px;
+            margin-bottom: 5px;
+        }
+
+        .sub-module .desc {
+            font-size: 11px;
+            color: #666;
+        }
+
+        /* 输出区域 */
+        .output-section {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .output-card {
+            background: rgba(129, 199, 132, 0.2);
+            border: 2px solid rgba(129, 199, 132, 0.5);
+            border-radius: 12px;
+            padding: 20px 30px;
+            text-align: center;
+        }
+
+        .output-card .icon {
+            font-size: 40px;
+            margin-bottom: 10px;
+        }
+
+        .output-card .name {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .output-card .desc {
+            font-size: 12px;
+            color: #a5d6a7;
+        }
+
+        /* 右侧Agent */
+        .agent-panel {
+            background: rgba(255, 183, 77, 0.1);
+            border: 2px solid rgba(255, 183, 77, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            min-width: 180px;
+        }
+
+        .agent-item {
+            background: rgba(255,255,255,0.95);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            color: #333;
+            text-align: center;
+        }
+
+        .agent-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .agent-item .icon {
+            font-size: 20px;
+            margin-bottom: 5px;
+        }
+
+        .agent-item .name {
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        /* 连接线样式 */
+        .connector {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #4fc3f7;
+        }
+
+        .connector-line {
+            width: 40px;
+            height: 2px;
+            background: linear-gradient(90deg, #4fc3f7, #29b6f6);
+        }
+
+        .connector-arrow {
+            font-size: 16px;
+        }
+
+        /* 标签 */
+        .tag {
+            display: inline-block;
+            background: rgba(79, 195, 247, 0.2);
+            border: 1px solid #4fc3f7;
+            border-radius: 12px;
+            padding: 3px 10px;
+            font-size: 11px;
+            margin: 2px;
+        }
+
+        .tag.orange {
+            background: rgba(255, 183, 77, 0.2);
+            border-color: #ffb74d;
+        }
+
+        /* 流程步骤 */
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            background: #4fc3f7;
+            color: #1a1a2e;
+            border-radius: 50%;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        /* 主流程容器 */
+        .main-flow {
+            flex: 1;
+        }
+
+        .side-panel {
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 标题 -->
+        <div class="title">
+            <h1>🔥 爆文模型 Agent 架构</h1>
+            <p>Viral Content Model Agent - Architecture</p>
+        </div>
+
+        <div class="architecture">
+            <!-- 第一层：用户输入 -->
+            <div class="row">
+                <div class="user-icon">
+                    <span>👤</span>
+                    <div>业务用户</div>
+                </div>
+                <span class="arrow">→</span>
+                <div class="input-box">
+                    <div class="label">输入搜索关键词</div>
+                    <div class="value">"防脱精华"</div>
+                </div>
+                <span class="arrow">→</span>
+                <div class="input-box">
+                    <div class="label">配置参数</div>
+                    <div class="value" style="font-size: 12px;">
+                        目标数量: 100<br>
+                        筛选比例: 前50%<br>
+                        笔记类型: 全部
+                    </div>
+                </div>
+                <span class="arrow">→</span>
+                <div class="module" style="flex: 1;">
+                    <div class="module-title">Web控制台</div>
+                    <div style="display: flex; gap: 10px;">
+                        <span class="tag">Cookie配置</span>
+                        <span class="tag">历史记录</span>
+                        <span class="tag">知识库管理</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow-down">⬇</div>
+
+            <!-- 第二层：数据采集 -->
+            <div class="row" style="align-items: flex-start;">
+                <div class="main-flow">
+                    <div class="process-area">
+                        <div class="process-title">
+                            <span class="step-number">1</span>
+                            数据采集层 - 三维度并行爬取
+                        </div>
+                        <div class="dimension-grid">
+                            <div class="dimension-card">
+                                <div class="icon">👍</div>
+                                <div class="name">点赞维度</div>
+                                <div class="desc">按点赞数排序<br>获取高赞笔记</div>
+                            </div>
+                            <div class="dimension-card">
+                                <div class="icon">💬</div>
+                                <div class="name">评论维度</div>
+                                <div class="desc">按评论数排序<br>获取高互动笔记</div>
+                            </div>
+                            <div class="dimension-card">
+                                <div class="icon">⭐</div>
+                                <div class="name">收藏维度</div>
+                                <div class="desc">按收藏数排序<br>获取高价值笔记</div>
+                            </div>
+                        </div>
+                        <div style="text-align: center; margin-top: 15px; color: #90caf9; font-size: 13px;">
+                            合并去重 → 计算互动分 → 按比例筛选爆款
+                        </div>
+                    </div>
+                </div>
+                <div class="side-panel">
+                    <div class="agent-panel">
+                        <div class="module-title orange">采集 Agent</div>
+                        <div class="agent-item">
+                            <div class="icon">🔍</div>
+                            <div class="name">搜索笔记</div>
+                        </div>
+                        <div class="agent-item">
+                            <div class="icon">📄</div>
+                            <div class="name">获取详情</div>
+                        </div>
+                        <div class="agent-item">
+                            <div class="icon">🖼️</div>
+                            <div class="name">下载图片/视频</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow-down">⬇</div>
+
+            <!-- 第三层：特征分析 -->
+            <div class="row" style="align-items: flex-start;">
+                <div class="main-flow">
+                    <div class="process-area">
+                        <div class="process-title">
+                            <span class="step-number">2</span>
+                            特征提取层 - 多维度分析
+                        </div>
+                        <div class="analyzer-grid">
+                            <div class="analyzer-card">
+                                <div class="icon">📝</div>
+                                <div class="name">标题分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">📖</div>
+                                <div class="name">内容分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">❤️</div>
+                                <div class="name">互动分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">👥</div>
+                                <div class="name">用户分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">🎨</div>
+                                <div class="name">封面分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">🎬</div>
+                                <div class="name">视频分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">🛍️</div>
+                                <div class="name">产品植入分析</div>
+                            </div>
+                            <div class="analyzer-card">
+                                <div class="icon">🎭</div>
+                                <div class="name">场景分析</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="side-panel">
+                    <div class="agent-panel">
+                        <div class="module-title orange">分析 Agent</div>
+                        <div class="agent-item">
+                            <div class="icon">🔤</div>
+                            <div class="name">关键词提取</div>
+                        </div>
+                        <div class="agent-item">
+                            <div class="icon">📊</div>
+                            <div class="name">模式识别</div>
+                        </div>
+                        <div class="agent-item">
+                            <div class="icon">🔍</div>
+                            <div class="name">OCR识别</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow-down">⬇</div>
+
+            <!-- 第四层：AI深度分析 -->
+            <div class="row" style="align-items: flex-start;">
+                <div class="main-flow">
+                    <div class="ai-section">
+                        <!-- 知识库 -->
+                        <div class="knowledge-base">
+                            <div class="module-title purple">知识库系统（双轨制）</div>
+                            <div class="sub-module">
+                                <div class="name">📋 JSON结构化知识</div>
+                                <div class="desc">行业规则 · 产品引出模板 · 植入方式</div>
+                            </div>
+                            <div class="sub-module">
+                                <div class="name">📚 RAG文档库</div>
+                                <div class="desc">PDF/Word/MD → 向量化 → ChromaDB</div>
+                            </div>
+                            <div class="sub-module">
+                                <div class="name">🔎 语义检索</div>
+                                <div class="desc">领域检测 → 融合检索 → Prompt增强</div>
+                            </div>
+                        </div>
+
+                        <!-- AI引擎 -->
+                        <div class="ai-engine">
+                            <div class="module-title red">AI大模型推理</div>
+                            <div class="sub-module">
+                                <div class="name">🧠 文本深度分析</div>
+                                <div class="desc">DeepSeek / 通义千问 / GLM</div>
+                            </div>
+                            <div class="sub-module">
+                                <div class="name">👁️ 多模态分析</div>
+                                <div class="desc">Qwen3-VL（图片+视频理解）</div>
+                            </div>
+                            <div class="sub-module">
+                                <div class="name">🎯 综合推理</div>
+                                <div class="desc">融合所有分析 → 生成爆文模型</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="side-panel">
+                    <div class="agent-panel">
+                        <div class="module-title orange">推理 Agent</div>
+                        <div class="agent-item">
+                            <div class="icon">💡</div>
+                            <div class="name">标题策略生成</div>
+                        </div>
+                        <div class="agent-item">
+                            <div class="icon">✍️</div>
+                            <div class="name">内容策略生成</div>
+                        </div>
+                        <div class="agent-item">
+                            <div class="icon">📈</div>
+                            <div class="name">互动预测</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow-down">⬇</div>
+
+            <!-- 第五层：输出 -->
+            <div class="row">
+                <div class="process-area" style="flex: 1; background: rgba(129, 199, 132, 0.1); border-color: rgba(129, 199, 132, 0.3);">
+                    <div class="process-title" style="color: #81c784; border-color: rgba(129, 199, 132, 0.3);">
+                        <span class="step-number" style="background: #81c784;">3</span>
+                        输出交付层 - 爆文模型报告
+                    </div>
+                    <div class="output-section">
+                        <div class="output-card">
+                            <div class="icon">📊</div>
+                            <div class="name">Excel完整报告</div>
+                            <div class="desc">7个Sheet页<br>多维度分析数据</div>
+                        </div>
+                        <div class="output-card">
+                            <div class="icon">📋</div>
+                            <div class="name">爆文模型</div>
+                            <div class="desc">标题策略 · 内容模板<br>产品植入 · 成功案例</div>
+                        </div>
+                        <div class="output-card">
+                            <div class="icon">🤖</div>
+                            <div class="name">AI洞察报告</div>
+                            <div class="desc">深度分析<br>创作建议</div>
+                        </div>
+                        <div class="output-card">
+                            <div class="icon">📁</div>
+                            <div class="name">原始数据</div>
+                            <div class="desc">JSON格式<br>可二次分析</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部说明 -->
+            <div style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 10px; font-size: 12px; color: #90caf9;">
+                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 20px;">
+                    <div>
+                        <strong>支持的AI模型：</strong>
+                        <span class="tag">DeepSeek</span>
+                        <span class="tag">通义千问</span>
+                        <span class="tag">智谱GLM</span>
+                        <span class="tag">Qwen3-VL</span>
+                    </div>
+                    <div>
+                        <strong>分析能力：</strong>
+                        <span class="tag orange">图文分析</span>
+                        <span class="tag orange">视频分析</span>
+                        <span class="tag orange">产品植入</span>
+                        <span class="tag orange">知识增强</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

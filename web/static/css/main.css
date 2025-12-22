@@ -1,0 +1,16 @@
+/**
+ * 主 CSS 入口文件
+ * 小红书爆文分析工具
+ */
+
+/* 引入 Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* 引入基础模块 */
+@import './base/variables.css';
+
+/* 引入组件覆盖样式 */
+@import './components/override.css';
+
+/* 引入动画 */
+@import './animations.css';

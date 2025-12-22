@@ -158,6 +158,23 @@ function buildPayload(dHex, a1, appId, content) {
   );
   return arr;
 }
+// 从 login.js 引入的 seccore_signv2 函数
+const CryptoJs = require("crypto-js");
+require(__dirname + '/static/xs-common-1128.js');
+
+function seccore_signv2(e, a) {
+  let d = CryptoJs.MD5(e).toString();
+  let s = window.mnsv2(e, d);
+  let f = {
+    x0: "4.2.6",
+    x1: "xhs-pc-web",
+    x2: "Windows",
+    x3: s,
+    x4: a ? (typeof a === "undefined" ? "undefined" : typeof a) : ""
+  };
+  return "XYS_" + b64Encode(encodeUtf8(JSON.stringify(f)));
+}
+
 function signXs(
   method,
   uri,
@@ -167,19 +184,8 @@ function signXs(
 ) {
   method = method.toUpperCase();
   const content = buildContentString(method, uri, payload);
-  const dVal = md5Hex(content);
-  const payloadArr = buildPayload(
-    dVal,
-    a1Value.trim(),
-    xsecAppid.trim(),
-    content
-  );
-  const xorBytes = xorArray(payloadArr);
-  const x3Body = base58Encode(xorBytes);
-  const x3Full = CONFIG.X3_PREFIX + x3Body;
-  const jsonCompact = JSON.stringify({ ...CONFIG.TEMPLATE, x3: x3Full });
-  const encoded = b64CustomEncode(jsonCompact);
-  return CONFIG.XYS_PREFIX + encoded;
+  // 调用 seccore_signv2，第二个参数传空字符串
+  return seccore_signv2(content, "");
 }
 for (
   var c = [],

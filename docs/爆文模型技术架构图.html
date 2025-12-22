@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>爆文模型 Agent 技术架构图</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0f1419 0%, #1a252f 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #fff;
+        }
+        .container { max-width: 1600px; margin: 0 auto; }
+
+        /* 标题 */
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #2d4a5e;
+        }
+        .header h1 { font-size: 28px; color: #5dade2; margin-bottom: 5px; }
+        .header p { color: #85c1e9; font-size: 13px; }
+
+        /* 主架构 */
+        .main-architecture {
+            display: flex;
+            gap: 15px;
+        }
+
+        /* 左侧输入区 */
+        .left-panel {
+            width: 140px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        /* 中间主流程 */
+        .center-flow {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* 右侧Agent区 */
+        .right-panel {
+            width: 160px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        /* 通用模块样式 */
+        .module {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .module-header {
+            font-size: 11px;
+            font-weight: bold;
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .module-header.blue { background: linear-gradient(90deg, #3498db, #2980b9); }
+        .module-header.orange { background: linear-gradient(90deg, #f39c12, #e67e22); }
+        .module-header.green { background: linear-gradient(90deg, #27ae60, #229954); }
+        .module-header.purple { background: linear-gradient(90deg, #9b59b6, #8e44ad); }
+        .module-header.red { background: linear-gradient(90deg, #e74c3c, #c0392b); }
+        .module-header.teal { background: linear-gradient(90deg, #1abc9c, #16a085); }
+
+        /* 输入数据区 */
+        .input-section {
+            background: rgba(52, 152, 219, 0.1);
+            border: 2px solid rgba(52, 152, 219, 0.4);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .input-item {
+            background: rgba(255,255,255,0.95);
+            border-radius: 6px;
+            padding: 8px;
+            margin-bottom: 6px;
+            color: #333;
+            font-size: 11px;
+        }
+        .input-item:last-child { margin-bottom: 0; }
+        .input-item .label { color: #666; font-size: 10px; }
+        .input-item .value { font-weight: bold; color: #2980b9; }
+
+        /* 处理流程区 */
+        .process-section {
+            background: rgba(46, 204, 113, 0.08);
+            border: 2px solid rgba(46, 204, 113, 0.3);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        /* 工具网格 */
+        .tool-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 8px;
+        }
+
+        .tool-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 6px;
+            padding: 8px;
+            text-align: center;
+            color: #333;
+            font-size: 10px;
+            border-left: 3px solid #3498db;
+        }
+        .tool-card.api { border-left-color: #e74c3c; }
+        .tool-card.ai { border-left-color: #9b59b6; }
+        .tool-card.storage { border-left-color: #27ae60; }
+
+        .tool-card .icon { font-size: 18px; margin-bottom: 4px; }
+        .tool-card .name { font-weight: bold; font-size: 11px; }
+        .tool-card .tech { color: #888; font-size: 9px; margin-top: 2px; }
+
+        /* 数据流箭头 */
+        .flow-arrow {
+            text-align: center;
+            color: #5dade2;
+            font-size: 16px;
+            padding: 3px 0;
+        }
+        .flow-arrow.horizontal {
+            writing-mode: horizontal-tb;
+            padding: 0 5px;
+        }
+
+        /* Agent卡片 */
+        .agent-card {
+            background: rgba(243, 156, 18, 0.1);
+            border: 1px solid rgba(243, 156, 18, 0.4);
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .agent-card .title {
+            font-size: 11px;
+            font-weight: bold;
+            color: #f39c12;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .agent-item {
+            background: rgba(255,255,255,0.9);
+            border-radius: 4px;
+            padding: 6px;
+            margin-bottom: 5px;
+            font-size: 10px;
+            color: #333;
+        }
+        .agent-item:last-child { margin-bottom: 0; }
+        .agent-item .func { font-weight: bold; }
+        .agent-item .desc { color: #666; font-size: 9px; }
+
+        /* 模型调用区 */
+        .model-section {
+            background: rgba(155, 89, 182, 0.1);
+            border: 2px solid rgba(155, 89, 182, 0.4);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .model-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .model-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 8px;
+            padding: 10px;
+            color: #333;
+        }
+        .model-card .header {
+            font-weight: bold;
+            font-size: 11px;
+            color: #8e44ad;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #eee;
+        }
+        .model-card .item {
+            font-size: 10px;
+            padding: 3px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .model-card .item .key { color: #666; }
+        .model-card .item .val { font-weight: bold; color: #2c3e50; }
+
+        /* 知识库区 */
+        .knowledge-section {
+            background: rgba(26, 188, 156, 0.1);
+            border: 2px solid rgba(26, 188, 156, 0.4);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        /* 输出区 */
+        .output-section {
+            background: rgba(39, 174, 96, 0.1);
+            border: 2px solid rgba(39, 174, 96, 0.4);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .output-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .output-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+            color: #333;
+        }
+        .output-card .icon { font-size: 24px; margin-bottom: 5px; }
+        .output-card .name { font-weight: bold; font-size: 11px; }
+        .output-card .detail { font-size: 9px; color: #666; margin-top: 3px; }
+
+        /* 连接线标注 */
+        .connection-label {
+            background: #2d4a5e;
+            color: #85c1e9;
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+
+        /* 技术标签 */
+        .tech-tag {
+            display: inline-block;
+            background: rgba(93, 173, 226, 0.2);
+            border: 1px solid #5dade2;
+            color: #5dade2;
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin: 2px;
+        }
+        .tech-tag.orange {
+            background: rgba(243, 156, 18, 0.2);
+            border-color: #f39c12;
+            color: #f39c12;
+        }
+        .tech-tag.green {
+            background: rgba(39, 174, 96, 0.2);
+            border-color: #27ae60;
+            color: #27ae60;
+        }
+        .tech-tag.purple {
+            background: rgba(155, 89, 182, 0.2);
+            border-color: #9b59b6;
+            color: #9b59b6;
+        }
+
+        /* 分隔行 */
+        .section-row {
+            display: flex;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .section-col {
+            flex: 1;
+        }
+
+        /* 子模块列表 */
+        .sub-list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .sub-item {
+            background: rgba(255,255,255,0.9);
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-size: 10px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .sub-item .icon { font-size: 14px; }
+        .sub-item .text .title { font-weight: bold; }
+        .sub-item .text .desc { color: #666; font-size: 9px; }
+
+        /* 横向流程 */
+        .horizontal-flow {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .flow-step {
+            flex: 1;
+            background: rgba(255,255,255,0.9);
+            border-radius: 6px;
+            padding: 8px;
+            text-align: center;
+            color: #333;
+            font-size: 10px;
+        }
+        .flow-step .num {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            line-height: 18px;
+            background: #3498db;
+            color: #fff;
+            border-radius: 50%;
+            font-size: 10px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        .flow-step .name { font-weight: bold; }
+
+        .flow-connector {
+            color: #5dade2;
+            font-size: 14px;
+        }
+
+        /* 底部说明 */
+        .footer-note {
+            margin-top: 15px;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            font-size: 10px;
+            color: #85c1e9;
+        }
+        .footer-note .title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #5dade2;
+        }
+        .footer-row {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        .footer-col strong {
+            color: #f39c12;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 标题 -->
+        <div class="header">
+            <h1>🔥 爆文模型 Agent 技术架构</h1>
+            <p>Viral Content Model Agent - Technical Architecture & Data Flow</p>
+        </div>
+
+        <div class="main-architecture">
+            <!-- 左侧：数据输入 -->
+            <div class="left-panel">
+                <div class="input-section">
+                    <div class="module-header blue">📥 数据输入</div>
+                    <div class="input-item">
+                        <div class="label">搜索关键词</div>
+                        <div class="value">"防脱精华"</div>
+                    </div>
+                    <div class="input-item">
+                        <div class="label">目标数量</div>
+                        <div class="value">100篇</div>
+                    </div>
+                    <div class="input-item">
+                        <div class="label">筛选比例</div>
+                        <div class="value">前50%爆款</div>
+                    </div>
+                    <div class="input-item">
+                        <div class="label">笔记类型</div>
+                        <div class="value">全部/图文/视频</div>
+                    </div>
+                    <div class="input-item">
+                        <div class="label">Cookie</div>
+                        <div class="value">用户认证</div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">⬇</div>
+
+                <div class="module">
+                    <div class="module-header orange">📚 知识输入</div>
+                    <div class="sub-list">
+                        <div class="sub-item">
+                            <span class="icon">📋</span>
+                            <div class="text">
+                                <div class="title">JSON配置</div>
+                                <div class="desc">领域规则模板</div>
+                            </div>
+                        </div>
+                        <div class="sub-item">
+                            <span class="icon">📄</span>
+                            <div class="text">
+                                <div class="title">RAG文档</div>
+                                <div class="desc">PDF/Word/MD</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 中间：主处理流程 -->
+            <div class="center-flow">
+                <!-- 第一层：数据采集 -->
+                <div class="process-section">
+                    <div class="module-header blue">① 数据采集层 <span class="connection-label">viral_collector.py</span></div>
+
+                    <div class="horizontal-flow" style="margin-bottom: 10px;">
+                        <div class="flow-step">
+                            <div class="num">1</div>
+                            <div class="name">三维度搜索</div>
+                            <div>点赞/评论/收藏</div>
+                        </div>
+                        <div class="flow-connector">→</div>
+                        <div class="flow-step">
+                            <div class="num">2</div>
+                            <div class="name">获取详情</div>
+                            <div>图片/视频URL</div>
+                        </div>
+                        <div class="flow-connector">→</div>
+                        <div class="flow-step">
+                            <div class="num">3</div>
+                            <div class="name">合并去重</div>
+                            <div>note_id唯一</div>
+                        </div>
+                        <div class="flow-connector">→</div>
+                        <div class="flow-step">
+                            <div class="num">4</div>
+                            <div class="name">互动评分</div>
+                            <div>likes+collects+comments</div>
+                        </div>
+                        <div class="flow-connector">→</div>
+                        <div class="flow-step">
+                            <div class="num">5</div>
+                            <div class="name">筛选爆款</div>
+                            <div>Top 50%</div>
+                        </div>
+                    </div>
+
+                    <div class="tool-grid">
+                        <div class="tool-card api">
+                            <div class="icon">🔍</div>
+                            <div class="name">search_notes</div>
+                            <div class="tech">xhs_pc_apis.py</div>
+                        </div>
+                        <div class="tool-card api">
+                            <div class="icon">📄</div>
+                            <div class="name">get_note_detail</div>
+                            <div class="tech">xhs_pc_apis.py</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">🔐</div>
+                            <div class="name">generate_xs</div>
+                            <div class="tech">xhs_util.py + JS</div>
+                        </div>
+                        <div class="tool-card storage">
+                            <div class="icon">💾</div>
+                            <div class="name">save_json</div>
+                            <div class="tech">viral_notes_*.json</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">⬇ <span class="connection-label">JSON数据</span></div>
+
+                <!-- 第二层：特征分析 -->
+                <div class="process-section">
+                    <div class="module-header green">② 特征提取层 <span class="connection-label">feature_extractor.py</span></div>
+
+                    <div class="tool-grid">
+                        <div class="tool-card">
+                            <div class="icon">📝</div>
+                            <div class="name">标题特征</div>
+                            <div class="tech">长度/关键词/模式</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">📖</div>
+                            <div class="name">内容特征</div>
+                            <div class="tech">结构/标签/关键词</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">❤️</div>
+                            <div class="name">互动特征</div>
+                            <div class="tech">点赞/收藏/评论率</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">👥</div>
+                            <div class="name">用户特征</div>
+                            <div class="tech">地域/粉丝/认证</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">🎨</div>
+                            <div class="name">封面分析</div>
+                            <div class="tech">cover_analyzer.py</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">🛍️</div>
+                            <div class="name">产品分析</div>
+                            <div class="tech">product_analyzer.py</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">🎭</div>
+                            <div class="name">场景分析</div>
+                            <div class="tech">scene_analyzer.py</div>
+                        </div>
+                        <div class="tool-card">
+                            <div class="icon">🎬</div>
+                            <div class="name">视频分析</div>
+                            <div class="tech">video_analyzer.py</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">⬇ <span class="connection-label">特征数据</span></div>
+
+                <!-- 第三层：AI模型调用 -->
+                <div class="section-row">
+                    <!-- 知识库 -->
+                    <div class="section-col">
+                        <div class="knowledge-section">
+                            <div class="module-header teal">③ 知识库系统 <span class="connection-label">双轨制RAG</span></div>
+
+                            <div class="horizontal-flow" style="margin-bottom: 10px;">
+                                <div class="flow-step">
+                                    <div class="name">领域检测</div>
+                                    <div>关键词匹配</div>
+                                </div>
+                                <div class="flow-connector">→</div>
+                                <div class="flow-step">
+                                    <div class="name">JSON检索</div>
+                                    <div>规则+模板</div>
+                                </div>
+                                <div class="flow-connector">→</div>
+                                <div class="flow-step">
+                                    <div class="name">向量检索</div>
+                                    <div>ChromaDB</div>
+                                </div>
+                                <div class="flow-connector">→</div>
+                                <div class="flow-step">
+                                    <div class="name">融合增强</div>
+                                    <div>Prompt注入</div>
+                                </div>
+                            </div>
+
+                            <div class="tool-grid">
+                                <div class="tool-card storage">
+                                    <div class="icon">📋</div>
+                                    <div class="name">knowledge_base.json</div>
+                                    <div class="tech">结构化领域知识</div>
+                                </div>
+                                <div class="tool-card ai">
+                                    <div class="icon">🔢</div>
+                                    <div class="name">Embedding</div>
+                                    <div class="tech">text-embedding-v4</div>
+                                </div>
+                                <div class="tool-card storage">
+                                    <div class="icon">🗄️</div>
+                                    <div class="name">ChromaDB</div>
+                                    <div class="tech">向量数据库</div>
+                                </div>
+                                <div class="tool-card">
+                                    <div class="icon">🔎</div>
+                                    <div class="name">knowledge_retriever</div>
+                                    <div class="tech">统一检索接口</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI模型 -->
+                    <div class="section-col">
+                        <div class="model-section">
+                            <div class="module-header purple">④ AI模型调用 <span class="connection-label">viral_analyzer.py</span></div>
+
+                            <div class="model-grid">
+                                <div class="model-card">
+                                    <div class="header">🧠 文本分析模型</div>
+                                    <div class="item"><span class="key">API</span><span class="val">OpenAI兼容</span></div>
+                                    <div class="item"><span class="key">模型</span><span class="val">deepseek-reasoner</span></div>
+                                    <div class="item"><span class="key">用途</span><span class="val">深度推理分析</span></div>
+                                </div>
+                                <div class="model-card">
+                                    <div class="header">👁️ 多模态模型</div>
+                                    <div class="item"><span class="key">API</span><span class="val">阿里云DashScope</span></div>
+                                    <div class="item"><span class="key">模型</span><span class="val">qwen3-vl-flash</span></div>
+                                    <div class="item"><span class="key">用途</span><span class="val">图片+视频理解</span></div>
+                                </div>
+                                <div class="model-card">
+                                    <div class="header">🎬 视频分析模型</div>
+                                    <div class="item"><span class="key">API</span><span class="val">阿里云DashScope</span></div>
+                                    <div class="item"><span class="key">模型</span><span class="val">qwen3-vl-flash</span></div>
+                                    <div class="item"><span class="key">用途</span><span class="val">视频时间轴分析</span></div>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 10px;">
+                                <div class="tool-grid">
+                                    <div class="tool-card ai">
+                                        <div class="icon">📊</div>
+                                        <div class="name">analyze_with_ai</div>
+                                        <div class="tech">文本深度分析</div>
+                                    </div>
+                                    <div class="tool-card ai">
+                                        <div class="icon">🖼️</div>
+                                        <div class="name">multimodal_analyze</div>
+                                        <div class="tech">图文联合分析</div>
+                                    </div>
+                                    <div class="tool-card ai">
+                                        <div class="icon">🎥</div>
+                                        <div class="name">video_timeline</div>
+                                        <div class="tech">7时间点提取</div>
+                                    </div>
+                                    <div class="tool-card ai">
+                                        <div class="icon">🔮</div>
+                                        <div class="name">synthesis</div>
+                                        <div class="tech">综合推理</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flow-arrow">⬇ <span class="connection-label">爆文模型</span></div>
+
+                <!-- 第四层：输出 -->
+                <div class="output-section">
+                    <div class="module-header green">⑤ 输出交付层 <span class="connection-label">export_service.py</span></div>
+
+                    <div class="output-grid">
+                        <div class="output-card">
+                            <div class="icon">📊</div>
+                            <div class="name">Excel报告</div>
+                            <div class="detail">7个Sheet页<br>完整分析数据</div>
+                        </div>
+                        <div class="output-card">
+                            <div class="icon">📋</div>
+                            <div class="name">爆文模型</div>
+                            <div class="detail">标题策略<br>内容模板<br>产品植入</div>
+                        </div>
+                        <div class="output-card">
+                            <div class="icon">🤖</div>
+                            <div class="name">AI洞察</div>
+                            <div class="detail">深度分析<br>创作建议</div>
+                        </div>
+                        <div class="output-card">
+                            <div class="icon">📁</div>
+                            <div class="name">JSON数据</div>
+                            <div class="detail">原始数据<br>可二次分析</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：Agent面板 -->
+            <div class="right-panel">
+                <div class="agent-card">
+                    <div class="title">🤖 主控 Agent</div>
+                    <div class="agent-item">
+                        <div class="func">viral_app.py</div>
+                        <div class="desc">FastAPI服务入口</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">BackgroundTasks</div>
+                        <div class="desc">异步任务调度</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">进度回调</div>
+                        <div class="desc">实时状态更新</div>
+                    </div>
+                </div>
+
+                <div class="agent-card">
+                    <div class="title">🔍 采集 Agent</div>
+                    <div class="agent-item">
+                        <div class="func">ViralCollector</div>
+                        <div class="desc">多维度并行爬取</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">XHS APIs</div>
+                        <div class="desc">小红书接口封装</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">签名生成</div>
+                        <div class="desc">xs/xsc/xt加密</div>
+                    </div>
+                </div>
+
+                <div class="agent-card">
+                    <div class="title">🧪 分析 Agent</div>
+                    <div class="agent-item">
+                        <div class="func">FeatureExtractor</div>
+                        <div class="desc">多维特征提取</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">ProductAnalyzer</div>
+                        <div class="desc">产品植入分析</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">VideoAnalyzer</div>
+                        <div class="desc">视频内容分析</div>
+                    </div>
+                </div>
+
+                <div class="agent-card">
+                    <div class="title">🧠 推理 Agent</div>
+                    <div class="agent-item">
+                        <div class="func">ViralAnalyzer</div>
+                        <div class="desc">AI深度分析</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">SynthesisService</div>
+                        <div class="desc">综合推理生成</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">KnowledgeRetriever</div>
+                        <div class="desc">知识增强</div>
+                    </div>
+                </div>
+
+                <div class="agent-card">
+                    <div class="title">📤 导出 Agent</div>
+                    <div class="agent-item">
+                        <div class="func">ExportService</div>
+                        <div class="desc">多格式导出</div>
+                    </div>
+                    <div class="agent-item">
+                        <div class="func">openpyxl</div>
+                        <div class="desc">Excel生成</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部技术说明 -->
+        <div class="footer-note">
+            <div class="title">📌 技术栈与调用链路</div>
+            <div class="footer-row">
+                <div>
+                    <strong>后端框架：</strong>
+                    <span class="tech-tag">FastAPI</span>
+                    <span class="tech-tag">Python 3.10+</span>
+                    <span class="tech-tag">asyncio</span>
+                </div>
+                <div>
+                    <strong>AI模型：</strong>
+                    <span class="tech-tag purple">DeepSeek</span>
+                    <span class="tech-tag purple">Qwen3-VL</span>
+                    <span class="tech-tag purple">GLM-4</span>
+                </div>
+                <div>
+                    <strong>存储：</strong>
+                    <span class="tech-tag green">JSON文件</span>
+                    <span class="tech-tag green">ChromaDB</span>
+                    <span class="tech-tag green">Excel</span>
+                </div>
+                <div>
+                    <strong>加密：</strong>
+                    <span class="tech-tag orange">execjs</span>
+                    <span class="tech-tag orange">Node.js</span>
+                </div>
+            </div>
+            <div style="margin-top: 10px;">
+                <strong>完整调用链：</strong>
+                用户输入 → FastAPI路由 → BackgroundTask → ViralCollector(XHS API) → FeatureExtractor → KnowledgeRetriever(JSON+RAG) → ViralAnalyzer(LLM) → SynthesisService → ExportService → Excel/JSON输出
+            </div>
+        </div>
+    </div>
+</body>
+</html>

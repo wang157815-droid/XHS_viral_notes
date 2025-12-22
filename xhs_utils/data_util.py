@@ -92,12 +92,97 @@ def handle_note_info(data):
         except:
             pass
     if note_type == '视频':
-        video_cover = image_list[0]
-        video_addr = 'https://sns-video-bd.xhscdn.com/' + data['note_card']['video']['consumer']['origin_video_key']
-        # success, msg, video_addr = XHS_Apis.get_note_no_water_video(note_id)
+        video_cover = image_list[0] if image_list else None
+
+        # 提取所有可用的视频URL（多源备选）
+        video_urls = []
+
+        try:
+            video_data = data['note_card']['video']
+
+            # 方法1：origin_video_key（主要方法）
+            origin_key = video_data.get('consumer', {}).get('origin_video_key')
+            if origin_key:
+                video_urls.append({
+                    'url': f'https://sns-video-bd.xhscdn.com/{origin_key}',
+                    'priority': 1,
+                    'source': 'origin_key',
+                    'codec': 'unknown',
+                    'quality': 'original'
+                })
+
+            # 方法2：从stream中提取所有URL
+            stream_data = video_data.get('media', {}).get('stream', {})
+
+            # H.265 超清（1080p）- 优先级最高
+            h265_list = stream_data.get('h265', [])
+            if len(h265_list) > 1:
+                h265_hd = h265_list[1]
+                if h265_hd.get('master_url'):
+                    video_urls.append({
+                        'url': h265_hd['master_url'],
+                        'priority': 2,
+                        'source': 'stream',
+                        'codec': 'H.265',
+                        'quality': f"{h265_hd.get('width', 1080)}x{h265_hd.get('height', 1920)}"
+                    })
+                # 添加备用URL
+                for backup_url in h265_hd.get('backup_urls', []):
+                    video_urls.append({
+                        'url': backup_url,
+                        'priority': 3,
+                        'source': 'stream_backup',
+                        'codec': 'H.265',
+                        'quality': f"{h265_hd.get('width', 1080)}x{h265_hd.get('height', 1920)}"
+                    })
+
+            # H.265 标准（720p）
+            if len(h265_list) > 0:
+                h265_std = h265_list[0]
+                if h265_std.get('master_url'):
+                    video_urls.append({
+                        'url': h265_std['master_url'],
+                        'priority': 4,
+                        'source': 'stream',
+                        'codec': 'H.265',
+                        'quality': f"{h265_std.get('width', 720)}x{h265_std.get('height', 1280)}"
+                    })
+
+            # H.264（最高兼容性）
+            h264_list = stream_data.get('h264', [])
+            if h264_list:
+                h264_video = h264_list[0]
+                if h264_video.get('master_url'):
+                    video_urls.append({
+                        'url': h264_video['master_url'],
+                        'priority': 5,
+                        'source': 'stream',
+                        'codec': 'H.264',
+                        'quality': f"{h264_video.get('width', 720)}x{h264_video.get('height', 1280)}"
+                    })
+                # 添加备用URL
+                for backup_url in h264_video.get('backup_urls', []):
+                    video_urls.append({
+                        'url': backup_url,
+                        'priority': 6,
+                        'source': 'stream_backup',
+                        'codec': 'H.264',
+                        'quality': f"{h264_video.get('width', 720)}x{h264_video.get('height', 1280)}"
+                    })
+
+        except (KeyError, TypeError, IndexError) as e:
+            pass  # 数据提取失败，使用已有的URL
+
+        # video_addr保持向后兼容（使用第一个可用URL）
+        video_addr = video_urls[0]['url'] if video_urls else None
+
+        # 按优先级排序
+        video_urls.sort(key=lambda x: x['priority'])
+
     else:
         video_cover = None
         video_addr = None
+        video_urls = []
     tags_temp = data['note_card']['tag_list']
     tags = []
     for tag in tags_temp:
@@ -126,6 +211,7 @@ def handle_note_info(data):
         'share_count': share_count,
         'video_cover': video_cover,
         'video_addr': video_addr,
+        'video_urls': video_urls if note_type == '视频' else [],  # 新增：多源视频URL列表
         'image_list': image_list,
         'tags': tags,
         'upload_time': upload_time,

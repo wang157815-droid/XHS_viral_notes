@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>爆文模型 Agent 架构图 Pro (中文版)</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --card-border: rgba(148, 163, 184, 0.1);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            
+            /* 颜色主题 */
+            --interaction-color: #10b981; /* 翡翠绿 */
+            --process-color: #a855f7;     /* 紫色 */
+            --tech-color: #3b82f6;        /* 蓝色 */
+            --accent-orange: #f59e0b;     /* 橙色 */
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                linear-gradient(rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.9)),
+                radial-gradient(#334155 1px, transparent 1px);
+            background-size: 100% 100%, 30px 30px; /* 网格背景 */
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 40px 20px;
+            line-height: 1.5;
+        }
+
+        .container { max-width: 1100px; margin: 0 auto; position: relative; }
+
+        /* 头部样式 */
+        .header { text-align: center; margin-bottom: 50px; position: relative; }
+        .header h1 {
+            font-size: 32px;
+            background: linear-gradient(to right, #60a5fa, #a855f7);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        .header p { color: var(--text-secondary); font-size: 14px; text-transform: uppercase; letter-spacing: 3px; }
+
+        /* 层级通用样式 */
+        .layer {
+            position: relative;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 0; /* 由grid或flex控制间距 */
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            animation: slideUp 0.6s ease-out forwards;
+            opacity: 0;
+        }
+
+        /* 动画延迟 */
+        .layer-interaction { border-top: 3px solid var(--interaction-color); animation-delay: 0.4s; }
+        .layer-process { border-top: 3px solid var(--process-color); animation-delay: 0.2s; }
+        .layer-tech { border-top: 3px solid var(--tech-color); animation-delay: 0s; }
+
+        .layer:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+        }
+
+        /* 侧边标签 */
+        .layer-label {
+            position: absolute;
+            left: -14px;
+            top: 25px;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            font-size: 11px; /* 稍微调大字体适配中文 */
+            font-weight: 800;
+            letter-spacing: 4px; /* 增加字间距 */
+            text-transform: uppercase;
+            padding: 10px 4px;
+            border-radius: 4px;
+            background: var(--bg-color);
+            border: 1px solid var(--card-border);
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+        .layer-interaction .layer-label { color: var(--interaction-color); border-color: var(--interaction-color); }
+        .layer-process .layer-label { color: var(--process-color); border-color: var(--process-color); }
+        .layer-tech .layer-label { color: var(--tech-color); border-color: var(--tech-color); }
+
+        /* 标题栏 */
+        .layer-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .layer-title { font-size: 16px; font-weight: 600; margin-right: 15px; }
+        .layer-desc { font-size: 12px; color: var(--text-secondary); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; }
+
+        /* 模块网格 */
+        .module-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .module-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            padding: 15px;
+            transition: all 0.3s ease;
+        }
+        .module-card:hover {
+            background: rgba(40, 50, 70, 0.8);
+            border-color: rgba(255,255,255,0.1);
+        }
+
+        .card-title {
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #e2e8f0;
+        }
+        
+        .card-items { display: flex; flex-wrap: wrap; gap: 6px; }
+
+        /* 标签胶囊样式 */
+        .tag {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.05);
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+        .tag:hover { color: #fff; transform: scale(1.05); }
+
+        /* 颜色变体 */
+        .theme-green .tag { color: #6ee7b7; background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.2); }
+        .theme-purple .tag { color: #d8b4fe; background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.2); }
+        .theme-blue .tag { color: #93c5fd; background: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.2); }
+        .theme-orange .tag { color: #fdba74; background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.2); }
+
+        /* 连接箭头区域 */
+        .flow-arrow-container {
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        
+        /* 动态SVG箭头 */
+        .flow-svg {
+            width: 24px;
+            height: 24px;
+            stroke: var(--text-secondary);
+            stroke-width: 2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            animation: bounce 2s infinite;
+            opacity: 0.5;
+        }
+
+        /* 内部流程指示器 */
+        .process-flow {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 15px 0;
+            padding: 0 10px;
+        }
+        .flow-line { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--process-color), transparent); opacity: 0.3; }
+        .flow-text { font-size: 10px; color: var(--process-color); font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* 底部 */
+        .footer {
+            margin-top: 40px;
+            text-align: center;
+            border-top: 1px solid var(--card-border);
+            padding-top: 20px;
+        }
+        .tech-stack {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .stack-badge {
+            font-size: 11px;
+            padding: 4px 12px;
+            border-radius: 4px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #94a3b8;
+            font-family: monospace;
+        }
+
+        /* 动画定义 */
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-5px); }
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            .layer { padding: 15px; }
+            .module-grid { grid-template-columns: 1fr; } /* 手机上单列 */
+            .layer-label { display: none; } /* 手机上隐藏侧边标签 */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>🔥 爆文模型 Agent 架构</h1>
+            <p>爆文内容模型 • 架构全景图</p>
+        </div>
+
+        <div class="layer layer-interaction">
+            <div class="layer-label">用户交互</div>
+            <div class="layer-header">
+                <span class="layer-title" style="color: var(--interaction-color)">交互层</span>
+                <span class="layer-desc">Web 界面 · 用户输入</span>
+            </div>
+            
+            <div class="module-grid theme-green">
+                <div class="module-card">
+                    <div class="card-title">
+                        <span>🔍 用户意图</span>
+                    </div>
+                    <div class="card-items">
+                        <span class="tag">关键词输入</span>
+                        <span class="tag">参数配置</span>
+                        <span class="tag">Cookie管理</span>
+                        <span class="tag">历史回溯</span>
+                    </div>
+                </div>
+                <div class="module-card">
+                    <div class="card-title">
+                        <span>📊 结果可视化</span>
+                    </div>
+                    <div class="card-items">
+                        <span class="tag">Excel 报告</span>
+                        <span class="tag">爆文预测分</span>
+                        <span class="tag">AI 洞察面板</span>
+                        <span class="tag">实时进度</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow-container">
+            <svg class="flow-svg" viewBox="0 0 24 24">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
+        </div>
+
+        <div class="layer layer-process">
+            <div class="layer-label">核心处理</div>
+            <div class="layer-header">
+                <span class="layer-title" style="color: var(--process-color)">处理层</span>
+                <span class="layer-desc">特征提取 · 知识库增强 · 逻辑推理</span>
+            </div>
+
+            <div class="module-grid theme-purple">
+                <div class="module-card">
+                    <div class="card-title"><span>🔬 特征工程</span></div>
+                    <div class="card-items">
+                        <span class="tag">标题夸张度</span>
+                        <span class="tag">内容情绪值</span>
+                        <span class="tag">互动数据归因</span>
+                        <span class="tag">封面视觉分析</span>
+                    </div>
+                </div>
+                <div class="module-card">
+                    <div class="card-title"><span>📚 知识增强 (RAG)</span></div>
+                    <div class="card-items">
+                        <span class="tag">爆文规则库</span>
+                        <span class="tag">行业SOP文档</span>
+                        <span class="tag">向量检索 (FAISS)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="process-flow">
+                <div class="flow-line"></div>
+                <div class="flow-text">融合 & 推理</div>
+                <div class="flow-line"></div>
+            </div>
+
+            <div class="module-grid theme-orange" style="grid-template-columns: 1fr;">
+                <div class="module-card">
+                    <div class="card-title"><span>🧠 核心推理引擎</span></div>
+                    <div class="card-items">
+                        <span class="tag">深度文本语义理解</span>
+                        <span class="tag">多模态 (图文) 对齐</span>
+                        <span class="tag">视频时间轴关键帧提取</span>
+                        <span class="tag">爆文生成策略输出</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow-container">
+            <svg class="flow-svg" viewBox="0 0 24 24">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
+        </div>
+
+        <div class="layer layer-tech">
+            <div class="layer-label">基础设施</div>
+            <div class="layer-header">
+                <span class="layer-title" style="color: var(--tech-color)">技术层</span>
+                <span class="layer-desc">模型调用 · 数据采集 · 存储设施</span>
+            </div>
+
+            <div class="module-grid theme-blue" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+                <div class="module-card">
+                    <div class="card-title"><span>🤖 模型基座</span></div>
+                    <div class="card-items">
+                        <span class="tag">DeepSeek-V3</span>
+                        <span class="tag">Qwen-VL</span>
+                        <span class="tag">OpenAI Embeddings</span>
+                    </div>
+                </div>
+                <div class="module-card">
+                    <div class="card-title"><span>🕷️ 数据采集网</span></div>
+                    <div class="card-items">
+                        <span class="tag">逆向 API</span>
+                        <span class="tag">JS 签名解密</span>
+                        <span class="tag">高并发爬虫</span>
+                    </div>
+                </div>
+                <div class="module-card">
+                    <div class="card-title"><span>💾 持久化存储</span></div>
+                    <div class="card-items">
+                        <span class="tag">ChromaDB</span>
+                        <span class="tag">JSON Lake</span>
+                        <span class="tag">S3 Object</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px;">
+                系统数据流：用户输入 → 采集清洗 → 特征增强 → 逻辑推理 → 结果输出
+            </div>
+            <div class="tech-stack">
+                <span class="stack-badge">Python 3.11</span>
+                <span class="stack-badge">FastAPI</span>
+                <span class="stack-badge">LangChain</span>
+                <span class="stack-badge">Playwright</span>
+                <span class="stack-badge">Pandas</span>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

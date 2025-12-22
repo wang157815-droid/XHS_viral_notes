@@ -1,0 +1,1860 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小红书爆文笔记生成Agent</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <!-- 新设计系统样式（覆盖旧样式） -->
+    <link rel="stylesheet" href="/static/css/main.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        }
+        .container-main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            color: white;
+            padding: 20px 0;
+            /* Sticky效果：滚动时固定在顶部 */
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: -20px -20px 20px -20px;
+            padding: 20px;
+        }
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        /* Cookie折叠图标旋转动画 */
+        #cookieCollapseIcon {
+            transition: transform 0.3s ease;
+        }
+        #cookieCollapse.show + .card-header #cookieCollapseIcon,
+        .card-header[aria-expanded="true"] #cookieCollapseIcon {
+            transform: rotate(180deg);
+        }
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            border: none;
+            margin-bottom: 20px;
+        }
+        .card-header {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: bold;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 15px 20px;
+        }
+        .progress {
+            height: 25px;
+            border-radius: 15px;
+            background-color: #f0f0f0;
+        }
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border-radius: 15px;
+            transition: width 0.3s ease-in-out;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.9;
+            }
+        }
+        .btn-primary {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 25px;
+            padding: 10px 30px;
+            font-weight: bold;
+            transition: transform 0.3s;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        .status-running {
+            background-color: #ffc107;
+            color: #000;
+        }
+        .status-completed {
+            background-color: #28a745;
+            color: white;
+        }
+        .status-failed {
+            background-color: #dc3545;
+            color: white;
+        }
+        .stats-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .stats-card .stats-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stats-card .stats-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+        #resultsSection {
+            display: none;
+        }
+        .feature-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 10px 0;
+        }
+        .feature-title {
+            color: #764ba2;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        .keyword-tag {
+            display: inline-block;
+            background: #f0f0f0;
+            padding: 5px 10px;
+            border-radius: 15px;
+            margin: 3px;
+            font-size: 0.9em;
+        }
+        .template-item {
+            background: #f8f9fa;
+            padding: 10px;
+            border-left: 3px solid #667eea;
+            margin: 5px 0;
+        }
+        /* Tab页样式 */
+        .nav-tabs {
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+            margin-bottom: 30px;
+        }
+        .nav-tabs .nav-link {
+            color: rgba(255,255,255,0.8);
+            border: none;
+            font-size: 1.1em;
+            padding: 12px 25px;
+            margin-right: 10px;
+            transition: all 0.3s;
+        }
+        .nav-tabs .nav-link:hover {
+            color: white;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px 10px 0 0;
+        }
+        .nav-tabs .nav-link.active {
+            color: white;
+            background: rgba(255,255,255,0.2);
+            border-radius: 10px 10px 0 0;
+            font-weight: bold;
+        }
+        /* 知识库管理样式 */
+        .domain-list {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .domain-item {
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .domain-item:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102,126,234,0.3);
+        }
+        .domain-item.active {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+        .keyword-badge {
+            display: inline-block;
+            background: #e7e9fc;
+            color: #667eea;
+            padding: 5px 12px;
+            border-radius: 15px;
+            margin: 3px;
+            font-size: 0.85em;
+        }
+        .keyword-badge .remove-btn {
+            margin-left: 5px;
+            cursor: pointer;
+            color: #dc3545;
+        }
+        /* 侧边栏历史记录样式 */
+        .history-item {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+        .history-item:hover {
+            background: #e7e9fc;
+            border-color: #667eea;
+        }
+        .history-item.active {
+            background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+            border-color: #667eea;
+        }
+        .history-item .keyword {
+            font-weight: 600;
+            color: #333;
+            font-size: 0.9em;
+            margin-bottom: 4px;
+        }
+        .history-item .meta {
+            font-size: 0.75em;
+            color: #888;
+        }
+        .history-item .note-count {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7em;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-main">
+        <!-- 头部 -->
+        <div class="header">
+            <h1>🔥爆文模型 Agent</h1>
+            <p>智能分析爆款笔记，生成爆文创作模型</p>
+        </div>
+
+        <!-- Tab导航 -->
+        <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="analysis-tab" data-bs-toggle="tab" data-bs-target="#analysis" type="button" role="tab">
+                    <i class="fas fa-chart-line"></i> 爆文分析
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="knowledge-tab" data-bs-toggle="tab" data-bs-target="#knowledge" type="button" role="tab">
+                    <i class="fas fa-database"></i> 知识库管理
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab内容区 -->
+        <div class="tab-content" id="mainTabContent">
+            <!-- 爆文分析Tab -->
+            <div class="tab-pane fade show active" id="analysis" role="tabpanel">
+                <div class="row">
+                    <!-- 左侧：历史记录侧边栏 -->
+                    <div class="col-lg-3 col-md-4 mb-3">
+                        <div class="card sticky-top" style="top: 20px;">
+                            <div class="card-header py-2">
+                                <i class="fas fa-history"></i> 历史记录
+                                <button class="btn btn-sm btn-link float-end p-0" onclick="loadHistory()" title="刷新">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
+                            </div>
+                            <div class="card-body p-2" style="max-height: 70vh; overflow-y: auto;">
+                                <div id="historyList" class="history-list">
+                                    <div class="text-center text-muted small py-3">加载中...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：主内容区 -->
+                    <div class="col-lg-9 col-md-8">
+
+        <!-- Cookie配置卡片（默认折叠） -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center"
+                 style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#cookieCollapse">
+                <span><i class="fas fa-key"></i> Cookie配置</span>
+                <i class="fas fa-chevron-down" id="cookieCollapseIcon"></i>
+            </div>
+            <div class="collapse" id="cookieCollapse">
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="cookieInput" class="form-label">小红书Cookie</label>
+                        <textarea class="form-control" id="cookieInput" rows="3"
+                                  placeholder="请输入小红书Cookie，可从浏览器F12开发者工具的网络请求中获取"></textarea>
+                        <small class="text-muted">提示：Cookie包含a1、web_session等字段，确保登录后获取</small>
+                    </div>
+                    <button type="button" class="btn btn-success" onclick="saveCookie()">
+                        <i class="fas fa-save"></i> 保存Cookie
+                    </button>
+                    <button type="button" class="btn btn-info ms-2" onclick="checkCookie()">
+                        <i class="fas fa-check"></i> 检查Cookie状态
+                    </button>
+                    <span id="cookieStatus" class="ms-3"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 搜索配置卡片 -->
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-search"></i> 搜索配置
+            </div>
+            <div class="card-body">
+                <form id="searchForm">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">搜索关键词</label>
+                                <input type="text" class="form-control" id="keyword" value="防脱精华" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">目标数量（三维度总和）</label>
+                                <input type="number" class="form-control" id="targetCount" value="100" min="30" max="500">
+                                <small class="text-muted">将从点赞/评论/收藏三个维度并行爬取</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label class="form-label">爆款筛选比例</label>
+                                <select class="form-select" id="viralRatio">
+                                    <option value="0.5" selected>前 1/2（推荐）</option>
+                                    <option value="0.33">前 1/3</option>
+                                    <option value="0.25">前 1/4</option>
+                                </select>
+                                <small class="text-muted">按互动总分排序后取前N</small>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label class="form-label">笔记类型</label>
+                                <select class="form-select" id="noteType">
+                                    <option value="0">不限</option>
+                                    <option value="1">视频</option>
+                                    <option value="2">图文</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label class="form-label">时间范围</label>
+                                <select class="form-select" id="timeRange">
+                                    <option value="0">不限</option>
+                                    <option value="1">一天内</option>
+                                    <option value="2">一周内</option>
+                                    <option value="3">半年内</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="fas fa-rocket"></i> 开始采集分析
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 进度显示卡片 -->
+        <div class="card" id="progressCard" style="display: none;">
+            <div class="card-header">
+                <i class="fas fa-tasks"></i> 执行进度
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span id="statusMessage">正在初始化...</span>
+                        <span class="status-badge status-running" id="statusBadge">运行中</span>
+                    </div>
+                    <div class="progress">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             id="progressBar" style="width: 0%">
+                            <span id="progressText">0%</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <div class="stats-card">
+                            <div class="stats-value" id="collectedCount">0</div>
+                            <div class="stats-label">已采集</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="stats-card">
+                            <div class="stats-value" id="targetCountDisplay">100</div>
+                            <div class="stats-label">目标数量</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="stats-card">
+                            <div class="stats-value" id="avgInteraction">-</div>
+                            <div class="stats-label">平均互动</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="stats-card">
+                            <div class="stats-value" id="elapsedTime">00:00</div>
+                            <div class="stats-label">用时</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分析结果卡片 -->
+        <div id="resultsSection">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fas fa-chart-bar"></i> 分析结果
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="feature-card h-100">
+                                <h6 class="feature-title mb-2"><i class="fas fa-heading"></i> 标题特征</h6>
+                                <div id="titleFeatures" class="small">
+                                    <div class="d-flex justify-content-between mb-2">
+                                        <span class="text-muted">平均长度</span>
+                                        <span class="fw-bold text-primary"><span id="avgTitleLength">-</span> 字</span>
+                                    </div>
+                                    <div class="mb-1 text-muted">高频关键词：</div>
+                                    <div id="titleKeywords" class="d-flex flex-wrap gap-1"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="feature-card h-100">
+                                <h6 class="feature-title mb-2"><i class="fas fa-file-alt"></i> 内容特征</h6>
+                                <div id="contentFeatures" class="small">
+                                    <div class="d-flex justify-content-between mb-2">
+                                        <span class="text-muted">平均长度</span>
+                                        <span class="fw-bold text-primary"><span id="avgContentLength">-</span> 字</span>
+                                    </div>
+                                    <div class="mb-1 text-muted">内容结构：</div>
+                                    <ul id="contentStructure" class="mb-0 ps-3"></ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="feature-card h-100">
+                                <h6 class="feature-title mb-2"><i class="fas fa-heart"></i> 互动特征</h6>
+                                <div id="interactionFeatures" class="small">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="text-muted">平均点赞</span>
+                                        <span class="fw-bold text-danger"><span id="avgLikes">-</span></span>
+                                    </div>
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="text-muted">平均收藏</span>
+                                        <span class="fw-bold text-warning"><span id="avgCollects">-</span></span>
+                                    </div>
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">收藏率</span>
+                                        <span class="fw-bold text-success"><span id="collectionRate">-</span></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-center mt-3">
+                        <div class="form-check form-check-inline mb-3">
+                            <input class="form-check-input" type="checkbox" id="useAiCheckbox" checked>
+                            <label class="form-check-label" for="useAiCheckbox">
+                                启用AI深度分析（使用DeepSeek API，成本极低）
+                            </label>
+                        </div>
+                        <br>
+                        <!-- 分析类型选择器 -->
+                        <div class="mb-3">
+                            <label class="form-label"><i class="fas fa-filter"></i> 分析类型：</label>
+                            <div class="btn-group" role="group" aria-label="分析类型选择">
+                                <input type="radio" class="btn-check" name="analysisType" id="analysisTypeAll" value="all" checked>
+                                <label class="btn btn-outline-primary" for="analysisTypeAll">
+                                    <i class="fas fa-layer-group"></i> 全部
+                                </label>
+                                <input type="radio" class="btn-check" name="analysisType" id="analysisTypeImage" value="image">
+                                <label class="btn btn-outline-success" for="analysisTypeImage">
+                                    <i class="fas fa-image"></i> 仅图文
+                                </label>
+                                <input type="radio" class="btn-check" name="analysisType" id="analysisTypeVideo" value="video">
+                                <label class="btn btn-outline-danger" for="analysisTypeVideo">
+                                    <i class="fas fa-video"></i> 仅视频
+                                </label>
+                            </div>
+                            <small class="text-muted d-block mt-1">选择要分析的笔记类型，生成对应的爆文模型</small>
+                        </div>
+                        <button class="btn btn-primary" onclick="startAnalysis()">
+                            <i class="fas fa-chart-line"></i> 开始分析
+                        </button>
+                        <button class="btn btn-success" onclick="exportResults('excel')">
+                            <i class="fas fa-file-excel"></i> 导出Excel
+                        </button>
+                        <button class="btn btn-info" onclick="exportResults('json')">
+                            <i class="fas fa-file-code"></i> 导出JSON
+                        </button>
+                        <button class="btn btn-warning" onclick="exportLatest('excel')">
+                            <i class="fas fa-download"></i> 导出最新数据
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+                    </div>
+                    <!-- 结束右侧主内容区 -->
+                </div>
+                <!-- 结束row -->
+            </div>
+            <!-- 结束爆文分析Tab -->
+
+            <!-- 知识库管理Tab -->
+            <div class="tab-pane fade" id="knowledge" role="tabpanel">
+                <!-- 知识库子Tab导航 -->
+                <ul class="nav nav-pills mb-3" id="knowledge-sub-tabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="json-config-tab" data-bs-toggle="pill"
+                                data-bs-target="#json-config" type="button" role="tab">
+                            <i class="fas fa-cog"></i> JSON配置
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="rag-docs-tab" data-bs-toggle="pill"
+                                data-bs-target="#rag-docs" type="button" role="tab">
+                            <i class="fas fa-file-upload"></i> RAG文档库
+                        </button>
+                    </li>
+                </ul>
+
+                <!-- 知识库子Tab内容 -->
+                <div class="tab-content" id="knowledge-sub-content">
+                    <!-- JSON配置Tab（原有内容） -->
+                    <div class="tab-pane fade show active" id="json-config" role="tabpanel">
+                        <div class="row">
+                            <!-- 左侧：领域列表 -->
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-list"></i> 领域列表</span>
+                                        <button class="btn btn-sm btn-light" onclick="showAddDomainModal()">
+                                            <i class="fas fa-plus"></i> 添加
+                                        </button>
+                                    </div>
+                                    <div class="card-body domain-list" id="domainList">
+                                        <div class="text-center text-muted">加载中...</div>
+                                    </div>
+                                </div>
+
+                                <!-- 测试工具 -->
+                                <div class="card mt-3">
+                                    <div class="card-header">
+                                        <i class="fas fa-flask"></i> 测试检测
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-2">
+                                            <input type="text" class="form-control" id="testTitle"
+                                                   placeholder="输入测试标题" value="眼部按摩手法｜淡化黑眼圈">
+                                        </div>
+                                        <button class="btn btn-primary btn-sm w-100" onclick="testDetection()">
+                                            <i class="fas fa-play"></i> 测试检测
+                                        </button>
+                                        <div id="testResult" class="mt-2"></div>
+                                    </div>
+                                </div>
+
+                                <!-- 操作按钮 -->
+                                <div class="card mt-3">
+                                    <div class="card-body">
+                                        <button class="btn btn-success w-100 mb-2" onclick="exportConfig()">
+                                            <i class="fas fa-download"></i> 导出配置
+                                        </button>
+                                        <button class="btn btn-info w-100 mb-2" onclick="importConfig()">
+                                            <i class="fas fa-upload"></i> 导入配置
+                                        </button>
+                                        <button class="btn btn-warning w-100" onclick="reloadConfig()">
+                                            <i class="fas fa-sync"></i> 重新加载
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 右侧：领域详情编辑 -->
+                            <div class="col-md-8">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <i class="fas fa-edit"></i> 领域详情
+                                    </div>
+                                    <div class="card-body" id="domainDetail">
+                                        <div class="text-center text-muted">
+                                            请从左侧选择一个领域
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- RAG文档库Tab（新增） -->
+                    <div class="tab-pane fade" id="rag-docs" role="tabpanel">
+                        <div class="row">
+                            <!-- 左侧：文档上传 -->
+                            <div class="col-md-5">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <i class="fas fa-cloud-upload-alt"></i> 上传文档
+                                    </div>
+                                    <div class="card-body">
+                                        <!-- 拖拽上传区域 -->
+                                        <div id="dropZone" class="border border-2 border-dashed rounded p-4 text-center mb-3"
+                                             style="min-height: 150px; cursor: pointer; transition: all 0.3s;"
+                                             ondrop="handleDrop(event)"
+                                             ondragover="handleDragOver(event)"
+                                             ondragleave="handleDragLeave(event)"
+                                             onclick="document.getElementById('fileInput').click()">
+                                            <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
+                                            <p class="mb-0">拖拽文件到这里，或点击选择文件</p>
+                                            <small class="text-muted">支持 PDF、Word、Markdown、TXT</small>
+                                        </div>
+                                        <input type="file" id="fileInput" accept=".pdf,.docx,.doc,.md,.txt"
+                                               style="display: none;" onchange="handleFileSelect(event)">
+
+                                        <!-- 文档信息表单 -->
+                                        <div id="docInfoForm" style="display: none;">
+                                            <div class="mb-3">
+                                                <label class="form-label">文件名</label>
+                                                <input type="text" class="form-control" id="docFilename" readonly>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">文档标题 *</label>
+                                                <input type="text" class="form-control" id="docTitle"
+                                                       placeholder="例如：防脱精华使用技巧">
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">文档描述</label>
+                                                <textarea class="form-control" id="docDescription" rows="2"
+                                                          placeholder="简要描述文档内容（可选）"></textarea>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">关联领域 *</label>
+                                                <select multiple class="form-select" id="docDomains" size="5">
+                                                    <!-- 动态加载 -->
+                                                </select>
+                                                <small class="text-muted">按住Ctrl/Cmd可多选</small>
+                                            </div>
+                                            <div class="d-grid gap-2">
+                                                <button class="btn btn-primary" onclick="uploadDocument()">
+                                                    <i class="fas fa-upload"></i> 上传文档
+                                                </button>
+                                                <button class="btn btn-secondary" onclick="cancelUpload()">
+                                                    <i class="fas fa-times"></i> 取消
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <!-- 上传进度 -->
+                                        <div id="uploadProgress" style="display: none;">
+                                            <div class="progress">
+                                                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                                     role="progressbar" style="width: 100%"></div>
+                                            </div>
+                                            <p class="text-center mt-2 mb-0">上传中...</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 统计信息 -->
+                                <div class="card mt-3">
+                                    <div class="card-header">
+                                        <i class="fas fa-chart-bar"></i> 统计信息
+                                    </div>
+                                    <div class="card-body" id="docStats">
+                                        <div class="text-center text-muted">加载中...</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 右侧：文档列表 -->
+                            <div class="col-md-7">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-folder-open"></i> 文档列表</span>
+                                        <button class="btn btn-sm btn-light" onclick="loadDocuments()">
+                                            <i class="fas fa-sync"></i> 刷新
+                                        </button>
+                                    </div>
+                                    <div class="card-body">
+                                        <!-- 搜索和过滤 -->
+                                        <div class="row mb-3">
+                                            <div class="col-md-8">
+                                                <input type="text" class="form-control" id="docSearchQuery"
+                                                       placeholder="搜索文档...">
+                                            </div>
+                                            <div class="col-md-4">
+                                                <select class="form-select" id="docDomainFilter" onchange="loadDocuments()">
+                                                    <option value="">全部领域</option>
+                                                    <!-- 动态加载 -->
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <!-- 文档列表 -->
+                                        <div id="docList" style="max-height: 600px; overflow-y: auto;">
+                                            <div class="text-center text-muted">加载中...</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 结束知识库管理Tab -->
+
+        </div>
+        <!-- 结束Tab内容区 -->
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentTaskId = null;
+        let statusTimer = null;
+        let startTime = null;
+
+        // 提交搜索表单
+        document.getElementById('searchForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = {
+                keyword: document.getElementById('keyword').value,
+                target_count: parseInt(document.getElementById('targetCount').value),
+                viral_ratio: parseFloat(document.getElementById('viralRatio').value),
+                note_type: parseInt(document.getElementById('noteType').value),
+                time_range: parseInt(document.getElementById('timeRange').value)
+            };
+
+            // 显示进度卡片
+            document.getElementById('progressCard').style.display = 'block';
+            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('targetCountDisplay').textContent = formData.target_count;
+
+            try {
+                const response = await fetch('/api/viral/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(formData)
+                });
+
+                const data = await response.json();
+                if (data.task_id) {
+                    currentTaskId = data.task_id;
+                    startTime = new Date();
+                    startStatusPolling();
+                }
+            } catch (error) {
+                alert('启动任务失败：' + error.message);
+            }
+        });
+
+        // 轮询任务状态
+        function startStatusPolling() {
+            if (statusTimer) clearInterval(statusTimer);
+
+            // 更频繁的轮询以获得更流畅的进度更新
+            statusTimer = setInterval(async () => {
+                if (!currentTaskId) return;
+
+                try {
+                    const response = await fetch(`/api/viral/status/${currentTaskId}`);
+                    const status = await response.json();
+
+                    updateProgressDisplay(status);
+
+                    if (status.status === 'completed' || status.status === 'failed') {
+                        clearInterval(statusTimer);
+                        if (status.status === 'completed') {
+                            showResults(status);
+                        }
+                    }
+                } catch (error) {
+                    console.error('获取状态失败:', error);
+                }
+            }, 500); // 500ms轮询一次，更流畅
+        }
+
+        // 更新进度显示
+        function updateProgressDisplay(status) {
+            document.getElementById('statusMessage').textContent = status.message || '处理中...';
+            document.getElementById('progressBar').style.width = status.progress + '%';
+            document.getElementById('progressText').textContent = status.progress + '%';
+            document.getElementById('collectedCount').textContent = status.collected || 0;
+
+            // 更新状态标签
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge status-' + status.status;
+            badge.textContent = status.status === 'running' ? '运行中' :
+                              status.status === 'completed' ? '已完成' : '失败';
+
+            // 更新用时
+            if (startTime) {
+                const elapsed = Math.floor((new Date() - startTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                document.getElementById('elapsedTime').textContent =
+                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+
+            // 更新统计信息
+            if (status.statistics && status.statistics.avg_interaction) {
+                const avgInteraction = status.statistics.avg_interaction;
+                document.getElementById('avgInteraction').textContent = avgInteraction.toLocaleString();
+            } else if (status.collected > 0) {
+                // 如果没有统计信息但有采集数量，显示采集数量
+                document.getElementById('avgInteraction').textContent =
+                    status.collected > 0 ? '计算中...' : '-';
+            }
+        }
+
+        // 显示分析结果
+        function showResults(status) {
+            document.getElementById('resultsSection').style.display = 'block';
+
+            // 不再自动分析，等待用户点击按钮
+            // startAnalysis();
+        }
+
+        // 开始分析
+        async function startAnalysis() {
+            if (!currentTaskId) return;
+
+            // 读取用户的AI选择
+            const useAi = document.getElementById('useAiCheckbox').checked;
+
+            // 读取用户的分析类型选择
+            const analysisType = document.querySelector('input[name="analysisType"]:checked')?.value || 'all';
+            const analysisTypeLabels = { 'all': '全部', 'image': '图文', 'video': '视频' };
+            console.log(`分析类型: ${analysisType} (${analysisTypeLabels[analysisType]})`);
+
+            // 显示加载状态
+            const analyzeBtn = document.querySelector('button[onclick="startAnalysis()"]');
+            const originalBtnText = analyzeBtn.innerHTML;
+            analyzeBtn.disabled = true;
+            analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 分析中...';
+
+            // 显示加载提示
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'analysisLoading';
+            loadingDiv.className = 'alert alert-info mt-3';
+            loadingDiv.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm me-2" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <div>
+                        <strong>正在分析中...</strong><br>
+                        <small>
+                            分析类型：${analysisTypeLabels[analysisType]}笔记 |
+                            ${useAi ? '使用AI深度分析，可能需要10分钟' : '进行基础特征分析，请稍候'}
+                        </small>
+                    </div>
+                </div>
+            `;
+            document.getElementById('resultsSection').prepend(loadingDiv);
+
+            try {
+                const response = await fetch('/api/viral/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        task_id: currentTaskId,
+                        use_ai: useAi,
+                        analysis_type: analysisType  // 新增：分析类型参数
+                    })
+                });
+
+                const result = await response.json();
+
+                // 移除加载提示
+                const loading = document.getElementById('analysisLoading');
+                if (loading) loading.remove();
+
+                // 显示成功提示
+                const successDiv = document.createElement('div');
+                successDiv.className = 'alert alert-success mt-3';
+                successDiv.innerHTML = '<i class="fas fa-check-circle"></i> 分析完成！';
+                document.getElementById('resultsSection').prepend(successDiv);
+                setTimeout(() => successDiv.remove(), 3000);
+
+                // 加载并显示分析结果
+                if (result.analysis_file) {
+                    loadAnalysisResults();
+                }
+            } catch (error) {
+                // 移除加载提示
+                const loading = document.getElementById('analysisLoading');
+                if (loading) loading.remove();
+
+                // 显示错误提示
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'alert alert-danger mt-3';
+                errorDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> 分析失败：' + error.message;
+                document.getElementById('resultsSection').prepend(errorDiv);
+                setTimeout(() => errorDiv.remove(), 5000);
+            } finally {
+                // 恢复按钮状态
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = originalBtnText;
+            }
+        }
+
+        // 加载分析结果
+        async function loadAnalysisResults() {
+            try {
+                const response = await fetch(`/api/viral/export/${currentTaskId}?format=json`);
+                const data = await response.json();
+
+                // 显示标题特征
+                if (data.title_patterns) {
+                    document.getElementById('avgTitleLength').textContent =
+                        data.title_patterns.avg_length || '-';
+
+                    const keywordsDiv = document.getElementById('titleKeywords');
+                    keywordsDiv.innerHTML = '';
+                    (data.title_patterns.top_keywords || []).slice(0, 10).forEach(kw => {
+                        keywordsDiv.innerHTML += `<span class="keyword-tag">${kw.word} (${kw.count})</span>`;
+                    });
+                }
+
+                // 显示内容特征
+                if (data.content_patterns) {
+                    document.getElementById('avgContentLength').textContent =
+                        data.content_patterns.avg_length || '-';
+
+                    // 内容结构特征中文映射
+                    const structureLabels = {
+                        'has_list': '含列表编号',
+                        'has_steps': '含步骤说明',
+                        'has_tips': '含小贴士',
+                        'has_warning': '含注意事项',
+                        'has_summary': '含总结',
+                        'has_cta': '含互动引导'
+                    };
+
+                    const structureList = document.getElementById('contentStructure');
+                    structureList.innerHTML = '';
+                    const structures = data.content_patterns.structure_patterns || {};
+
+                    // 按百分比降序排列，只显示占比>20%的
+                    Object.entries(structures)
+                        .filter(([_, value]) => value > 20)
+                        .sort((a, b) => b[1] - a[1])
+                        .forEach(([key, value]) => {
+                            const label = structureLabels[key] || key;
+                            structureList.innerHTML += `<li>${label}: ${value}%</li>`;
+                        });
+
+                    // 如果没有显著特征，显示提示
+                    if (structureList.innerHTML === '') {
+                        structureList.innerHTML = '<li class="text-muted">无显著结构特征</li>';
+                    }
+                }
+
+                // 显示互动特征
+                if (data.interaction_features) {
+                    const avgLiked = data.interaction_features.avg_liked;
+                    const avgCollected = data.interaction_features.avg_collected;
+                    const collectionRate = data.interaction_features.avg_collection_rate;
+
+                    document.getElementById('avgLikes').textContent =
+                        typeof avgLiked === 'number' ? avgLiked.toLocaleString() : '-';
+                    document.getElementById('avgCollects').textContent =
+                        typeof avgCollected === 'number' ? avgCollected.toLocaleString() : '-';
+                    document.getElementById('collectionRate').textContent =
+                        typeof collectionRate === 'number' ? (collectionRate * 100).toFixed(1) + '%' : '-';
+                }
+            } catch (error) {
+                console.error('加载结果失败:', error);
+            }
+        }
+
+        // 导出结果
+        async function exportResults(format) {
+            if (!currentTaskId) {
+                alert('没有当前任务，请使用"导出最新数据"按钮');
+                return;
+            }
+
+            window.open(`/api/viral/export/${currentTaskId}?format=${format}`, '_blank');
+        }
+
+        // 导出最新数据（不需要task_id）
+        async function exportLatest(format) {
+            window.open(`/api/viral/export/latest?format=${format}`, '_blank');
+        }
+
+        // 加载历史记录（侧边栏卡片格式）
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/viral/history');
+                const history = await response.json();
+
+                const container = document.getElementById('historyList');
+                if (history.length === 0) {
+                    container.innerHTML = '<div class="text-center text-muted small py-3">暂无历史记录</div>';
+                } else {
+                    container.innerHTML = history.map(item => `
+                        <div class="history-item" onclick="loadHistoryItem('${item.filename}')"
+                             data-filename="${item.filename}">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div class="keyword">${item.keyword || '未知关键词'}</div>
+                                <span class="note-count">${item.total_notes || 0}篇</span>
+                            </div>
+                            <div class="meta">
+                                <i class="fas fa-clock"></i> ${formatTime(item.time) || '-'}
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('加载历史记录失败:', error);
+                document.getElementById('historyList').innerHTML =
+                    '<div class="text-center text-danger small py-3">加载失败</div>';
+            }
+        }
+
+        // 格式化时间显示
+        function formatTime(timeStr) {
+            if (!timeStr) return '-';
+            // 简化时间显示，只显示日期和时间
+            const parts = timeStr.split(' ');
+            if (parts.length >= 2) {
+                return parts[0].substring(5) + ' ' + parts[1].substring(0, 5);
+            }
+            return timeStr;
+        }
+
+        // 加载历史记录项
+        async function loadHistoryItem(filename) {
+            try {
+                // 从filename提取task_id
+                // filename格式: viral_notes_20251109_141459.json
+                // task_id格式: viral_20251109_141459
+                const match = filename.match(/viral_notes_(\d+_\d+)\.json/);
+                if (!match) {
+                    alert('无效的历史记录文件名: ' + filename);
+                    return;
+                }
+
+                const timestamp = match[1];
+                const taskId = `viral_${timestamp}`;
+
+                // 设置当前任务ID
+                currentTaskId = taskId;
+
+                // 高亮选中的历史记录项
+                document.querySelectorAll('.history-item').forEach(item => {
+                    item.classList.remove('active');
+                    if (item.dataset.filename === filename) {
+                        item.classList.add('active');
+                    }
+                });
+
+                // 显示结果区域
+                const resultsSection = document.getElementById('resultsSection');
+                resultsSection.style.display = 'block';
+
+                // 加载并显示分析结果
+                await loadAnalysisResults();
+
+                // 滚动到结果区域
+                resultsSection.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+
+            } catch (error) {
+                console.error('加载历史记录失败:', error);
+                alert('加载历史记录失败: ' + error.message);
+            }
+        }
+
+        // 保存Cookie
+        async function saveCookie() {
+            const cookie = document.getElementById('cookieInput').value.trim();
+            if (!cookie) {
+                alert('请输入Cookie');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/viral/cookie', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ cookie: cookie })
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    document.getElementById('cookieStatus').innerHTML =
+                        '<span class="text-success"><i class="fas fa-check-circle"></i> Cookie保存成功</span>';
+                    // 3秒后清除提示
+                    setTimeout(() => {
+                        document.getElementById('cookieStatus').innerHTML = '';
+                    }, 3000);
+                } else {
+                    document.getElementById('cookieStatus').innerHTML =
+                        `<span class="text-danger"><i class="fas fa-exclamation-circle"></i> ${result.message}</span>`;
+                }
+            } catch (error) {
+                document.getElementById('cookieStatus').innerHTML =
+                    `<span class="text-danger"><i class="fas fa-exclamation-circle"></i> 保存失败: ${error.message}</span>`;
+            }
+        }
+
+        // 检查Cookie状态
+        async function checkCookie() {
+            try {
+                const response = await fetch('/api/viral/cookie/status');
+                const result = await response.json();
+
+                if (result.has_cookie) {
+                    document.getElementById('cookieStatus').innerHTML =
+                        `<span class="text-success"><i class="fas fa-check-circle"></i> Cookie已配置（${result.cookie_length}字符）</span>`;
+                    // 如果返回了Cookie，显示在输入框（只显示前50字符）
+                    if (result.cookie_preview) {
+                        document.getElementById('cookieInput').value = result.cookie_preview + '...';
+                    }
+                } else {
+                    document.getElementById('cookieStatus').innerHTML =
+                        '<span class="text-warning"><i class="fas fa-exclamation-triangle"></i> Cookie未配置</span>';
+                }
+            } catch (error) {
+                document.getElementById('cookieStatus').innerHTML =
+                    `<span class="text-danger"><i class="fas fa-exclamation-circle"></i> 检查失败: ${error.message}</span>`;
+            }
+        }
+
+        // ==================== 知识库管理相关函数 ====================
+
+        let currentDomainId = null;
+
+        // 加载领域列表
+        async function loadDomains() {
+            try {
+                const response = await fetch('/api/knowledge/domains');
+                const data = await response.json();
+
+                const container = document.getElementById('domainList');
+                if (data.domains && data.domains.length > 0) {
+                    container.innerHTML = data.domains.map(domain => `
+                        <div class="domain-item ${currentDomainId === domain.id ? 'active' : ''}"
+                             onclick="selectDomain('${domain.id}')">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>${domain.name}</strong>
+                                    <span class="badge ${domain.enabled ? 'bg-success' : 'bg-secondary'} ms-2">
+                                        ${domain.enabled ? '已启用' : '已禁用'}
+                                    </span>
+                                    <br>
+                                    <small class="text-muted">关键词: ${domain.keywords.length}个</small>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = '<div class="text-center text-muted">暂无领域</div>';
+                }
+            } catch (error) {
+                console.error('加载领域列表失败:', error);
+                alert('加载失败: ' + error.message);
+            }
+        }
+
+        // 选择领域
+        async function selectDomain(domainId) {
+            currentDomainId = domainId;
+            loadDomains(); // 刷新列表以高亮当前选中项
+
+            try {
+                const response = await fetch(`/api/knowledge/domains/${domainId}`);
+                const data = await response.json();
+                const domain = data.domain;
+
+                document.getElementById('domainDetail').innerHTML = `
+                    <form id="domainForm">
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">领域名称</label>
+                                <input type="text" class="form-control" id="domainName" value="${domain.name}">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">领域ID</label>
+                                <input type="text" class="form-control" value="${domain.id}" disabled>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">优先级</label>
+                                <input type="number" class="form-control" id="domainPriority" value="${domain.priority}" min="0" max="100">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="domainEnabled" ${domain.enabled ? 'checked' : ''}>
+                                <label class="form-check-label" for="domainEnabled">启用此领域</label>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">关键词</label>
+                            <div id="keywordsList" class="mb-2">
+                                ${domain.keywords.map(kw => `
+                                    <span class="keyword-badge">
+                                        ${kw}
+                                        <i class="fas fa-times remove-btn" onclick="removeKeyword('${domain.id}', '${kw}')"></i>
+                                    </span>
+                                `).join('')}
+                            </div>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" id="newKeyword" placeholder="添加新关键词">
+                                <button type="button" class="btn btn-outline-primary" onclick="addKeyword('${domain.id}')">
+                                    <i class="fas fa-plus"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">常见问题（每行一个）</label>
+                            <textarea class="form-control" id="domainProblems" rows="4">${domain.knowledge.problems.join('\n')}</textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">产品引出方式（每行一个）</label>
+                            <textarea class="form-control" id="domainIntroWays" rows="4">${domain.knowledge.intro_ways.join('\n')}</textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">产品植入方式（每行一个）</label>
+                            <textarea class="form-control" id="domainEmbedWays" rows="4">${domain.knowledge.embed_ways.join('\n')}</textarea>
+                        </div>
+
+                        <div class="d-flex justify-content-between">
+                            <button type="button" class="btn btn-danger" onclick="deleteDomain('${domain.id}')">
+                                <i class="fas fa-trash"></i> 删除领域
+                            </button>
+                            <div>
+                                <button type="button" class="btn btn-secondary me-2" onclick="selectDomain('${domain.id}')">
+                                    <i class="fas fa-undo"></i> 重置
+                                </button>
+                                <button type="button" class="btn btn-primary" onclick="saveDomain('${domain.id}')">
+                                    <i class="fas fa-save"></i> 保存修改
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                `;
+            } catch (error) {
+                console.error('加载领域详情失败:', error);
+                alert('加载详情失败: ' + error.message);
+            }
+        }
+
+        // 保存领域
+        async function saveDomain(domainId) {
+            try {
+                const updateData = {
+                    name: document.getElementById('domainName').value,
+                    enabled: document.getElementById('domainEnabled').checked,
+                    priority: parseInt(document.getElementById('domainPriority').value),
+                    problems: document.getElementById('domainProblems').value.split('\n').filter(x => x.trim()),
+                    intro_ways: document.getElementById('domainIntroWays').value.split('\n').filter(x => x.trim()),
+                    embed_ways: document.getElementById('domainEmbedWays').value.split('\n').filter(x => x.trim())
+                };
+
+                const response = await fetch(`/api/knowledge/domains/${domainId}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(updateData)
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('保存成功！');
+                    loadDomains();
+                } else {
+                    alert('保存失败: ' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('保存失败: ' + error.message);
+            }
+        }
+
+        // 添加关键词
+        async function addKeyword(domainId) {
+            const keyword = document.getElementById('newKeyword').value.trim();
+            if (!keyword) return;
+
+            try {
+                const response = await fetch(`/api/knowledge/domains/${domainId}/keywords`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ keyword })
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    document.getElementById('newKeyword').value = '';
+                    selectDomain(domainId); // 刷新显示
+                } else {
+                    alert('添加失败: ' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('添加失败: ' + error.message);
+            }
+        }
+
+        // 删除关键词
+        async function removeKeyword(domainId, keyword) {
+            if (!confirm(`确定删除关键词 "${keyword}"？`)) return;
+
+            try {
+                const response = await fetch(`/api/knowledge/domains/${domainId}/keywords/${encodeURIComponent(keyword)}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    selectDomain(domainId); // 刷新显示
+                } else {
+                    alert('删除失败: ' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+
+        // 删除领域
+        async function deleteDomain(domainId) {
+            if (!confirm('确定删除此领域？此操作不可恢复！')) return;
+
+            try {
+                const response = await fetch(`/api/knowledge/domains/${domainId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('删除成功！');
+                    currentDomainId = null;
+                    loadDomains();
+                    document.getElementById('domainDetail').innerHTML = '<div class="text-center text-muted">请从左侧选择一个领域</div>';
+                } else {
+                    alert('删除失败: ' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+
+        // 添加新领域
+        async function showAddDomainModal() {
+            // 提示用户输入领域信息
+            const domainId = prompt('请输入领域ID（英文+下划线，如 hair_care）:');
+            if (!domainId) return;
+
+            // 验证ID格式
+            if (!/^[a-z_]+$/.test(domainId)) {
+                alert('领域ID格式错误！只能包含小写字母和下划线');
+                return;
+            }
+
+            const domainName = prompt('请输入领域名称（中文，如 头发护理）:');
+            if (!domainName) return;
+
+            const keywords = prompt('请输入关键词（用逗号分隔，如 头发,洗发水,护发）:');
+            if (!keywords) return;
+
+            const keywordList = keywords.split(',').map(k => k.trim()).filter(k => k);
+            if (keywordList.length === 0) {
+                alert('至少需要一个关键词！');
+                return;
+            }
+
+            try {
+                // 创建新领域的默认数据
+                const newDomain = {
+                    id: domainId,
+                    name: domainName,
+                    enabled: true,
+                    priority: 0,
+                    keywords: keywordList,
+                    problems: ['待添加问题1', '待添加问题2'],
+                    intro_ways: ['待添加引出方式1', '待添加引出方式2'],
+                    embed_ways: ['待添加植入方式1', '待添加植入方式2'],
+                    examples: []
+                };
+
+                const response = await fetch('/api/knowledge/domains', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(newDomain)
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('创建成功！请继续编辑完善领域内容');
+                    loadDomains();
+                    // 自动选中新创建的领域
+                    setTimeout(() => selectDomain(domainId), 500);
+                } else {
+                    alert('创建失败: ' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('创建失败: ' + error.message);
+            }
+        }
+
+        // 测试检测
+        async function testDetection() {
+            const title = document.getElementById('testTitle').value.trim();
+            if (!title) {
+                alert('请输入测试标题');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/knowledge/test-detection', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ title })
+                });
+
+                const result = await response.json();
+                const resultDiv = document.getElementById('testResult');
+
+                if (result.detected_domains && result.detected_domains.length > 0) {
+                    resultDiv.innerHTML = `
+                        <div class="alert alert-success small">
+                            <strong>检测到 ${result.count} 个领域：</strong><br>
+                            ${result.detected_domains.map(d => `• ${d.name} (${d.id})`).join('<br>')}
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = '<div class="alert alert-warning small">未检测到匹配的领域</div>';
+                }
+            } catch (error) {
+                alert('测试失败: ' + error.message);
+            }
+        }
+
+        // 导出配置
+        async function exportConfig() {
+            window.open('/api/knowledge/export', '_blank');
+        }
+
+        // 导入配置
+        function importConfig() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                try {
+                    const text = await file.text();
+                    const config = JSON.parse(text);
+
+                    const response = await fetch('/api/knowledge/import', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(config)
+                    });
+
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        alert('导入成功！');
+                        loadDomains();
+                        if (currentDomainId) {
+                            selectDomain(currentDomainId);
+                        }
+                    } else {
+                        alert('导入失败: ' + (result.message || result.detail));
+                    }
+                } catch (error) {
+                    alert('导入失败: ' + error.message);
+                }
+            };
+            input.click();
+        }
+
+        // 重新加载配置
+        async function reloadConfig() {
+            try {
+                const response = await fetch('/api/knowledge/reload', {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('重新加载成功！');
+                    loadDomains();
+                } else {
+                    alert('重新加载失败: ' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('重新加载失败: ' + error.message);
+            }
+        }
+
+        // ==================== RAG文档管理相关函数 ====================
+
+        let selectedFile = null;
+
+        // 处理拖拽相关事件
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.currentTarget.style.borderColor = '#0d6efd';
+            e.currentTarget.style.backgroundColor = '#e7f1ff';
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.style.borderColor = '';
+            e.currentTarget.style.backgroundColor = '';
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.currentTarget.style.borderColor = '';
+            e.currentTarget.style.backgroundColor = '';
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        }
+
+        // 处理选中的文件
+        function handleFile(file) {
+            // 验证文件类型
+            const validExtensions = ['.pdf', '.docx', '.doc', '.md', '.txt'];
+            const fileName = file.name.toLowerCase();
+            const isValid = validExtensions.some(ext => fileName.endsWith(ext));
+
+            if (!isValid) {
+                alert('不支持的文件格式！请上传 PDF、Word、Markdown 或 TXT 文件。');
+                return;
+            }
+
+            // 保存文件
+            selectedFile = file;
+
+            // 显示文档信息表单
+            document.getElementById('dropZone').style.display = 'none';
+            document.getElementById('docInfoForm').style.display = 'block';
+
+            // 填充文件名
+            document.getElementById('docFilename').value = file.name;
+
+            // 加载领域选项
+            loadDomainOptions();
+        }
+
+        // 取消上传
+        function cancelUpload() {
+            selectedFile = null;
+            document.getElementById('dropZone').style.display = 'block';
+            document.getElementById('docInfoForm').style.display = 'none';
+            document.getElementById('fileInput').value = '';
+            document.getElementById('docTitle').value = '';
+            document.getElementById('docDescription').value = '';
+        }
+
+        // 加载领域选项
+        async function loadDomainOptions() {
+            try {
+                const response = await fetch('/api/knowledge/domains');
+                const result = await response.json();
+
+                const select = document.getElementById('docDomains');
+                const filterSelect = document.getElementById('docDomainFilter');
+
+                if (result.status === 'success' && result.domains) {
+                    // 文档上传的多选框
+                    select.innerHTML = result.domains
+                        .filter(d => d.enabled)
+                        .map(d => `<option value="${d.id}">${d.name} (${d.id})</option>`)
+                        .join('');
+
+                    // 文档过滤的下拉框
+                    filterSelect.innerHTML = '<option value="">全部领域</option>' +
+                        result.domains
+                            .filter(d => d.enabled)
+                            .map(d => `<option value="${d.id}">${d.name}</option>`)
+                            .join('');
+                }
+            } catch (error) {
+                console.error('加载领域选项失败:', error);
+            }
+        }
+
+        // 上传文档
+        async function uploadDocument() {
+            if (!selectedFile) {
+                alert('请先选择文件！');
+                return;
+            }
+
+            const title = document.getElementById('docTitle').value.trim();
+            if (!title) {
+                alert('请填写文档标题！');
+                return;
+            }
+
+            const selectedOptions = Array.from(document.getElementById('docDomains').selectedOptions);
+            if (selectedOptions.length === 0) {
+                alert('请至少选择一个关联领域！');
+                return;
+            }
+
+            const description = document.getElementById('docDescription').value.trim();
+            const domains = selectedOptions.map(opt => opt.value);
+
+            // 显示上传进度
+            document.getElementById('docInfoForm').style.display = 'none';
+            document.getElementById('uploadProgress').style.display = 'block';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                formData.append('title', title);
+                formData.append('description', description);
+                formData.append('domains', JSON.stringify(domains));
+
+                const response = await fetch('/api/documents/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert('文档上传成功！');
+                    cancelUpload();
+                    loadDocuments();
+                    loadDocStats();
+                } else {
+                    alert('上传失败：' + (result.message || result.detail));
+                    // 恢复表单显示
+                    document.getElementById('uploadProgress').style.display = 'none';
+                    document.getElementById('docInfoForm').style.display = 'block';
+                }
+            } catch (error) {
+                alert('上传失败：' + error.message);
+                document.getElementById('uploadProgress').style.display = 'none';
+                document.getElementById('docInfoForm').style.display = 'block';
+            }
+        }
+
+        // 加载文档列表
+        async function loadDocuments() {
+            const domainFilter = document.getElementById('docDomainFilter').value;
+            const docListDiv = document.getElementById('docList');
+
+            try {
+                let url = '/api/documents';
+                if (domainFilter) {
+                    url += `?domain=${domainFilter}`;
+                }
+
+                const response = await fetch(url);
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    if (result.documents.length === 0) {
+                        docListDiv.innerHTML = '<div class="text-center text-muted">暂无文档</div>';
+                    } else {
+                        docListDiv.innerHTML = result.documents.map(doc => `
+                            <div class="card mb-2">
+                                <div class="card-body p-3">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div class="flex-grow-1">
+                                            <h6 class="mb-1">
+                                                <i class="fas fa-file-${getFileIcon(doc.metadata.format)}"></i>
+                                                ${escapeHtml(doc.title)}
+                                            </h6>
+                                            ${doc.description ? `<p class="text-muted small mb-1">${escapeHtml(doc.description)}</p>` : ''}
+                                            <div class="small text-muted">
+                                                <span class="me-3"><i class="fas fa-tag"></i> ${doc.domains.join(', ')}</span>
+                                                <span class="me-3"><i class="fas fa-file"></i> ${doc.metadata.format.toUpperCase()}</span>
+                                                <span><i class="fas fa-align-left"></i> ${doc.metadata.word_count || 0} 字</span>
+                                            </div>
+                                        </div>
+                                        <button class="btn btn-sm btn-outline-danger ms-2"
+                                                onclick="deleteDocument('${doc.doc_id}', '${escapeHtml(doc.title)}')">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+                } else {
+                    docListDiv.innerHTML = '<div class="alert alert-danger">加载失败</div>';
+                }
+            } catch (error) {
+                docListDiv.innerHTML = '<div class="alert alert-danger">加载失败：' + error.message + '</div>';
+            }
+        }
+
+        // 删除文档
+        async function deleteDocument(docId, title) {
+            if (!confirm(`确定要删除文档 "${title}" 吗？`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/documents/${docId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    alert('删除成功！');
+                    loadDocuments();
+                    loadDocStats();
+                } else {
+                    alert('删除失败：' + (result.message || result.detail));
+                }
+            } catch (error) {
+                alert('删除失败：' + error.message);
+            }
+        }
+
+        // 加载文档统计
+        async function loadDocStats() {
+            const statsDiv = document.getElementById('docStats');
+
+            try {
+                const response = await fetch('/api/knowledge/summary');
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    const summary = result.summary;
+                    statsDiv.innerHTML = `
+                        <div class="row text-center">
+                            <div class="col-6 mb-2">
+                                <div class="h3 mb-0 text-primary">${summary.json_domains}</div>
+                                <small class="text-muted">JSON领域</small>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <div class="h3 mb-0 text-success">${summary.rag_documents}</div>
+                                <small class="text-muted">RAG文档</small>
+                            </div>
+                            <div class="col-12">
+                                <div class="h4 mb-0 text-info">${summary.total_knowledge}</div>
+                                <small class="text-muted">总知识源</small>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    statsDiv.innerHTML = '<div class="text-muted">加载失败</div>';
+                }
+            } catch (error) {
+                statsDiv.innerHTML = '<div class="text-muted">加载失败</div>';
+            }
+        }
+
+        // 辅助函数：根据文件格式返回图标
+        function getFileIcon(format) {
+            const icons = {
+                'pdf': 'pdf',
+                'docx': 'word',
+                'doc': 'word',
+                'md': 'markdown',
+                'txt': 'alt'
+            };
+            return icons[format.toLowerCase()] || 'file';
+        }
+
+        // 辅助函数：HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ==================== 页面加载完成后 ====================
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadHistory();
+            checkCookie(); // 检查Cookie状态
+
+            // Cookie折叠图标旋转效果
+            const cookieCollapse = document.getElementById('cookieCollapse');
+            const cookieIcon = document.getElementById('cookieCollapseIcon');
+            if (cookieCollapse && cookieIcon) {
+                cookieCollapse.addEventListener('show.bs.collapse', () => {
+                    cookieIcon.style.transform = 'rotate(180deg)';
+                });
+                cookieCollapse.addEventListener('hide.bs.collapse', () => {
+                    cookieIcon.style.transform = 'rotate(0deg)';
+                });
+            }
+
+            // 监听Tab切换事件
+            document.getElementById('knowledge-tab').addEventListener('shown.bs.tab', () => {
+                loadDomains(); // 切换到知识库管理Tab时加载领域列表
+            });
+
+            // 监听RAG文档库Tab切换
+            document.getElementById('rag-docs-tab').addEventListener('shown.bs.tab', () => {
+                loadDomainOptions(); // 加载领域选项
+                loadDocuments(); // 加载文档列表
+                loadDocStats(); // 加载统计信息
+            });
+        });
+    </script>
+</body>
+</html>
