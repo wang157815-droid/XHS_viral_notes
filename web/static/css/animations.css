@@ -1,0 +1,287 @@
+/**
+ * 动画效果文件
+ * 小红书爆文分析工具
+ */
+
+/* ==================== 关键帧定义 ==================== */
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==================== 页面入场动画 ==================== */
+
+.page-enter {
+  animation: fadeInUp 0.5s ease forwards;
+}
+
+/* 卡片交错动画 */
+.card {
+  animation: fadeInUp 0.4s ease forwards;
+  opacity: 0;
+}
+
+.card:nth-child(1) { animation-delay: 0.05s; }
+.card:nth-child(2) { animation-delay: 0.1s; }
+.card:nth-child(3) { animation-delay: 0.15s; }
+.card:nth-child(4) { animation-delay: 0.2s; }
+.card:nth-child(5) { animation-delay: 0.25s; }
+
+/* Tab 内容切换动画 */
+.tab-pane.active {
+  animation: fadeIn 0.3s ease;
+}
+
+/* ==================== 交互动画 ==================== */
+
+/* 按钮点击效果 */
+.btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: width 0.3s ease, height 0.3s ease;
+}
+
+.btn:active::after {
+  width: 200%;
+  height: 200%;
+}
+
+/* 输入框聚焦动画 */
+.form-control,
+.form-select {
+  transition: border-color var(--transition-base),
+              box-shadow var(--transition-base),
+              background-color var(--transition-base) !important;
+}
+
+/* 卡片悬浮效果 */
+.card {
+  transition: transform var(--transition-base),
+              box-shadow var(--transition-base) !important;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+}
+
+/* ==================== 数据更新动画 ==================== */
+
+/* 数字更新弹跳 */
+.stats-value {
+  transition: transform 0.3s ease, color 0.3s ease;
+}
+
+.stats-value.updating {
+  animation: bounce 0.4s ease;
+  color: var(--accent-primary) !important;
+}
+
+/* 进度条脉冲 */
+.progress-bar.active {
+  position: relative;
+}
+
+.progress-bar.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ==================== 加载动画 ==================== */
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-sm {
+  width: 14px;
+  height: 14px;
+}
+
+/* 骨架屏加载 */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    var(--border-light) 50%,
+    var(--bg-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ==================== 状态转换动画 ==================== */
+
+/* 列表项进入 */
+.domain-item,
+.keyword-badge,
+.keyword-tag {
+  animation: fadeInUp 0.3s ease forwards;
+}
+
+/* 提示框弹出 */
+.alert {
+  animation: slideInRight 0.3s ease forwards;
+}
+
+/* Toast 通知 */
+.toast-enter {
+  animation: slideInRight 0.3s ease forwards;
+}
+
+.toast-exit {
+  animation: fadeIn 0.2s ease reverse forwards;
+}
+
+/* ==================== 悬浮效果增强 ==================== */
+
+/* 域名项悬浮 */
+.domain-item {
+  transition: transform var(--transition-fast),
+              border-color var(--transition-base),
+              background-color var(--transition-base),
+              box-shadow var(--transition-base) !important;
+}
+
+.domain-item:hover {
+  transform: translateX(4px);
+}
+
+/* 按钮悬浮 */
+.btn-primary:hover,
+.btn-success:hover {
+  transform: translateY(-2px);
+}
+
+/* 功能卡片悬浮 */
+.feature-card {
+  transition: transform var(--transition-base),
+              box-shadow var(--transition-base);
+}
+
+.feature-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* 统计卡片悬浮 */
+.stats-card {
+  transition: transform var(--transition-base),
+              border-color var(--transition-base),
+              box-shadow var(--transition-base) !important;
+}
+
+.stats-card:hover {
+  transform: translateY(-4px);
+}
+
+/* ==================== 特殊效果 ==================== */
+
+/* 强调色发光 */
+.glow-accent {
+  box-shadow: 0 0 20px rgba(255, 36, 66, 0.3);
+}
+
+/* 选中态脉冲 */
+.active-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* 成功态闪烁 */
+.success-flash {
+  animation: bounce 0.5s ease;
+}

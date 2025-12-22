@@ -1,6 +1,43 @@
-PyExecJS
-requests
-loguru
-python-dotenv
-retry
-openpyxl
+# 基础依赖
+PyExecJS>=1.5.1
+requests>=2.31.0
+loguru>=0.7.2
+python-dotenv>=1.0.0
+retry>=0.9.2
+openpyxl>=3.1.2
+nest-asyncio>=1.5.8
+
+# Web框架
+fastapi>=0.104.1,<0.115.0
+uvicorn[standard]>=0.24.0
+jinja2>=3.1.2
+python-multipart>=0.0.6
+aiofiles>=23.2.1
+
+# 数据分析
+pandas>=2.0.0
+numpy>=1.24.0,<2.0.0
+jieba>=0.42.1
+openai>=1.0.0
+wordcloud>=1.9.3
+Pillow>=10.0.0
+
+# RAG和知识库相关
+# 注意：chromadb与paddlepaddle存在protobuf版本冲突
+# 如果需要同时使用OCR和RAG功能，请参考文档说明
+pypdf>=3.17.0
+python-docx>=1.1.0
+markdown>=3.5.0
+
+# ChromaDB单独安装（可选 - 用于RAG功能）
+# pip install chromadb
+#
+# 或手动安装兼容版本：
+# pip install "protobuf>=3.20.0,<3.21.0" "pyyaml==6.0.2" chromadb
+
+# OCR相关（可选，单独安装）
+# 方案A（推荐）：EasyOCR - 兼容性好，易安装
+# pip install easyocr
+#
+# 方案B：PaddleOCR - 功能强大，但可能有兼容性问题
+# pip install paddlepaddle paddleocr
