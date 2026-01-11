@@ -28,7 +28,7 @@ class XHS_Creator_Apis():
             cookies = trans_cookies(cookies_str)
             xs, xt, _ = generate_xs(cookies['a1'], splice_api, '')
             headers['x-s'], headers['x-t'] = xs, str(xt)
-            response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, verify=False)
+            response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, timeout=10)
             res_json = response.json()
             success = res_json["success"]
         except Exception as e:

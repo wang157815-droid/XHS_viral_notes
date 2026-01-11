@@ -9,22 +9,30 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from loguru import logger
 from dotenv import load_dotenv
+import re
+import uuid
 
-# 导入爆文Agent模块
-from viral_agent.services.viral_collector import ViralNoteCollector
-from viral_agent.services.feature_extractor import ViralFeatureExtractor
-from viral_agent.services.viral_analyzer import ViralAnalyzer
+# 导入认证模块
+from viral_agent.auth import (
+    init_auth, verify_token, verify_token_and_password_changed,
+    verify_password, create_token, check_must_change_password, change_password
+)
+
+# 导入爆文Agent核心模块
+from viral_agent.services.core.viral_collector import ViralNoteCollector
+from viral_agent.services.core.feature_extractor import ViralFeatureExtractor
+from viral_agent.services.core.viral_analyzer import ViralAnalyzer
 from viral_agent.models.viral_note import ViralNote, ViralAnalysisResult
 
 # 导入视频分析模块
-from viral_agent.services.video_enhanced_analyzer import VideoEnhancedAnalyzer
+from viral_agent.services.video.video_enhanced_analyzer import VideoEnhancedAnalyzer
 from viral_agent.models.video_analysis_model import VideoAnalysisResult, VideoAnalysisBatch
 
 # 导入知识库管理模块
@@ -34,10 +42,13 @@ from viral_agent.config.knowledge_loader import (
 )
 
 # 导入RAG和文档管理模块
-from viral_agent.services.rag_service import RAGService
-from viral_agent.services.document_parser import DocumentParser
-from viral_agent.services.knowledge_retriever import UnifiedKnowledgeRetriever
+from viral_agent.services.knowledge.rag_service import RAGService
+from viral_agent.services.knowledge.document_parser import DocumentParser
+from viral_agent.services.knowledge.knowledge_retriever import UnifiedKnowledgeRetriever
 from viral_agent.models.document import KnowledgeDocument, DocumentMetadata
+
+# 导入清理服务
+from viral_agent.services.cleanup_service import CleanupService
 
 # 加载环境变量
 load_dotenv()
@@ -48,6 +59,9 @@ app = FastAPI(
     description="自动采集和分析小红书爆款笔记，生成爆文模型",
     version="1.0.0"
 )
+
+# 初始化认证系统（检查 JWT_SECRET，创建默认用户）
+init_auth()
 
 # 配置静态文件和模板
 app.mount("/static", StaticFiles(directory="web/static", html=True), name="static")
@@ -82,11 +96,30 @@ class AnalysisRequest(BaseModel):
         description="分析类型：image=仅图文 video=仅视频 all=全部",
         pattern="^(image|video|all)$"
     )
+    video_source_mode: Optional[str] = Field(
+        default=None,
+        description="视频源模式：url=URL直传 proxy=本地下载，None表示使用环境变量配置",
+        pattern="^(url|proxy)$"
+    )
 
 
 class CookieRequest(BaseModel):
     """Cookie请求模型"""
     cookie: str = Field(..., description="小红书Cookie字符串")
+
+
+# ==================== 认证请求模型 ====================
+
+class LoginRequest(BaseModel):
+    """登录请求模型"""
+    username: str = Field(..., description="用户名")
+    password: str = Field(..., description="密码")
+
+
+class ChangePasswordRequest(BaseModel):
+    """修改密码请求模型"""
+    old_password: str = Field(..., description="原密码")
+    new_password: str = Field(..., description="新密码", min_length=8)
 
 
 # ==================== 知识库管理请求模型 ====================
@@ -127,6 +160,15 @@ class TestDetectionRequest(BaseModel):
     description: str = Field(default="", description="测试描述")
 
 
+class CleanupRequest(BaseModel):
+    """清理请求模型"""
+    categories: List[str] = Field(
+        default=["cover_cache", "video_cache", "logs", "av_sync_cache"],
+        description="要清理的类别列表"
+    )
+    dry_run: bool = Field(default=True, description="是否仅预览（不实际删除）")
+
+
 # ==================== Cookie管理 ====================
 # 全局Cookie存储（生产环境应该使用数据库或缓存）
 app_cookie = None
@@ -139,10 +181,53 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.post("/api/viral/cookie")
-async def save_cookie(request: CookieRequest):
+# ==================== 认证API ====================
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest):
     """
-    保存Cookie
+    用户登录，返回 JWT Token
+
+    Returns:
+        token: JWT Token
+        must_change_password: 是否需要强制修改密码
+    """
+    if not verify_password(request.username, request.password):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    # 检查是否需要强制修改密码
+    must_change = check_must_change_password(request.username)
+
+    token = create_token(request.username)
+    return {
+        "status": "success",
+        "token": token,
+        "token_type": "bearer",
+        "expires_in": 24 * 3600,
+        "must_change_password": must_change
+    }
+
+
+@app.post("/api/auth/change-password")
+async def api_change_password(
+    request: ChangePasswordRequest,
+    username: str = Depends(verify_token)  # 使用 verify_token 而非 verify_token_and_password_changed，允许需要改密的用户访问
+):
+    """修改密码"""
+    if not verify_password(username, request.old_password):
+        raise HTTPException(status_code=400, detail="原密码错误")
+
+    change_password(username, request.new_password)
+    return {"status": "success", "message": "密码修改成功"}
+
+
+@app.post("/api/viral/cookie")
+async def save_cookie(
+    request: CookieRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    保存Cookie（需要认证）
 
     Returns:
         保存状态
@@ -197,12 +282,12 @@ async def save_cookie(request: CookieRequest):
 
 
 @app.get("/api/viral/cookie/status")
-async def get_cookie_status():
+async def get_cookie_status(username: str = Depends(verify_token_and_password_changed)):
     """
-    获取Cookie状态
+    获取Cookie状态（需要认证）
 
     Returns:
-        Cookie配置状态
+        Cookie配置状态（不返回Cookie内容预览，防止泄露）
     """
     global app_cookie
 
@@ -211,7 +296,7 @@ async def get_cookie_status():
         return {
             "has_cookie": True,
             "cookie_length": len(app_cookie),
-            "cookie_preview": app_cookie[:50] if len(app_cookie) > 50 else app_cookie
+            "source": "memory"
         }
 
     # 尝试从环境变量获取
@@ -223,20 +308,21 @@ async def get_cookie_status():
         return {
             "has_cookie": True,
             "cookie_length": len(env_cookie),
-            "cookie_preview": env_cookie[:50] if len(env_cookie) > 50 else env_cookie
+            "source": "env"
         }
 
     return {
         "has_cookie": False,
         "cookie_length": 0,
-        "cookie_preview": ""
+        "source": None
     }
 
 
 @app.post("/api/viral/search")
 async def start_viral_search(
     request: ViralSearchRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    username: str = Depends(verify_token_and_password_changed)
 ):
     """
     启动爆款笔记搜索任务
@@ -277,9 +363,9 @@ async def start_viral_search(
 
 
 @app.get("/api/viral/status/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str, username: str = Depends(verify_token_and_password_changed)):
     """
-    获取任务状态
+    获取任务状态（需要认证）
 
     Returns:
         任务当前状态信息
@@ -291,9 +377,12 @@ async def get_task_status(task_id: str):
 
 
 @app.post("/api/viral/analyze")
-async def analyze_viral_notes(request: AnalysisRequest):
+async def analyze_viral_notes(
+    request: AnalysisRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
     """
-    分析爆款笔记生成爆文模型
+    分析爆款笔记生成爆文模型（需要认证）
 
     Returns:
         分析结果
@@ -330,7 +419,8 @@ async def analyze_viral_notes(request: AnalysisRequest):
         notes=notes,
         keyword=task_status[task_id]["keyword"],
         threshold=data.get('statistics', {}).get('viral_threshold', 5000),
-        analysis_type=request.analysis_type  # 新增：分析类型参数
+        analysis_type=request.analysis_type,
+        video_source_mode=request.video_source_mode  # 视频源模式（None则使用环境变量配置）
     )
 
     # 将原始笔记数据添加到分析结果中（用于导出Excel原始数据分表）
@@ -356,9 +446,9 @@ async def analyze_viral_notes(request: AnalysisRequest):
 
 
 @app.get("/api/viral/export/latest")
-async def export_latest(format: str = "excel"):
+async def export_latest(format: str = "excel", username: str = Depends(verify_token_and_password_changed)):
     """
-    导出最新的分析结果（不需要task_id）
+    导出最新的分析结果（需要认证）
 
     Args:
         format: 导出格式 (excel/json)
@@ -407,9 +497,9 @@ async def export_latest(format: str = "excel"):
 
 
 @app.get("/api/viral/history")
-async def get_history():
+async def get_history(username: str = Depends(verify_token_and_password_changed)):
     """
-    获取历史分析记录
+    获取历史分析记录（需要认证）
 
     Returns:
         历史记录列表
@@ -478,9 +568,13 @@ async def get_history():
 
 
 @app.get("/api/viral/export/{task_id}")
-async def export_results(task_id: str, format: str = "excel"):
+async def export_results(
+    task_id: str,
+    format: str = "excel",
+    username: str = Depends(verify_token_and_password_changed)
+):
     """
-    导出分析结果
+    导出分析结果（需要认证）
 
     Args:
         format: 导出格式 (excel/json)
@@ -662,8 +756,8 @@ async def collect_viral_notes_task(
 # ==================== 知识库管理API ====================
 
 @app.get("/api/knowledge/domains")
-async def get_domains():
-    """获取所有领域列表"""
+async def get_domains(username: str = Depends(verify_token_and_password_changed)):
+    """获取所有领域列表（需要认证）"""
     try:
         config = get_knowledge_config()
         domains = config.get_all_domains()
@@ -678,8 +772,8 @@ async def get_domains():
 
 
 @app.get("/api/knowledge/domains/{domain_id}")
-async def get_domain(domain_id: str):
-    """获取单个领域详情"""
+async def get_domain(domain_id: str, username: str = Depends(verify_token_and_password_changed)):
+    """获取单个领域详情（需要认证）"""
     try:
         config = get_knowledge_config()
         domain = config.get_domain_by_id(domain_id)
@@ -699,8 +793,8 @@ async def get_domain(domain_id: str):
 
 
 @app.post("/api/knowledge/domains")
-async def create_domain(request: DomainCreateRequest):
-    """创建新领域"""
+async def create_domain(request: DomainCreateRequest, username: str = Depends(verify_token_and_password_changed)):
+    """创建新领域（需要认证）"""
     try:
         config = get_knowledge_config()
 
@@ -735,8 +829,8 @@ async def create_domain(request: DomainCreateRequest):
 
 
 @app.put("/api/knowledge/domains/{domain_id}")
-async def update_domain(domain_id: str, request: DomainUpdateRequest):
-    """更新领域"""
+async def update_domain(domain_id: str, request: DomainUpdateRequest, username: str = Depends(verify_token_and_password_changed)):
+    """更新领域（需要认证）"""
     try:
         config = get_knowledge_config()
 
@@ -785,8 +879,8 @@ async def update_domain(domain_id: str, request: DomainUpdateRequest):
 
 
 @app.delete("/api/knowledge/domains/{domain_id}")
-async def delete_domain(domain_id: str):
-    """删除领域"""
+async def delete_domain(domain_id: str, username: str = Depends(verify_token_and_password_changed)):
+    """删除领域（需要认证）"""
     try:
         config = get_knowledge_config()
 
@@ -805,8 +899,8 @@ async def delete_domain(domain_id: str):
 
 
 @app.post("/api/knowledge/domains/{domain_id}/keywords")
-async def add_keyword(domain_id: str, request: KeywordRequest):
-    """为领域添加关键词"""
+async def add_keyword(domain_id: str, request: KeywordRequest, username: str = Depends(verify_token_and_password_changed)):
+    """为领域添加关键词（需要认证）"""
     try:
         config = get_knowledge_config()
 
@@ -825,8 +919,8 @@ async def add_keyword(domain_id: str, request: KeywordRequest):
 
 
 @app.delete("/api/knowledge/domains/{domain_id}/keywords/{keyword}")
-async def remove_keyword(domain_id: str, keyword: str):
-    """删除领域关键词"""
+async def remove_keyword(domain_id: str, keyword: str, username: str = Depends(verify_token_and_password_changed)):
+    """删除领域关键词（需要认证）"""
     try:
         config = get_knowledge_config()
 
@@ -845,8 +939,8 @@ async def remove_keyword(domain_id: str, keyword: str):
 
 
 @app.post("/api/knowledge/reload")
-async def reload_config():
-    """重新加载知识库配置"""
+async def reload_config(username: str = Depends(verify_token_and_password_changed)):
+    """重新加载知识库配置（需要认证）"""
     try:
         reload_knowledge_config()
         return {
@@ -859,8 +953,8 @@ async def reload_config():
 
 
 @app.post("/api/knowledge/test-detection")
-async def test_detection(request: TestDetectionRequest):
-    """测试领域检测"""
+async def test_detection(request: TestDetectionRequest, username: str = Depends(verify_token_and_password_changed)):
+    """测试领域检测（需要认证）"""
     try:
         config = get_knowledge_config()
         domains = config.detect_domain(request.title, request.description)
@@ -891,8 +985,8 @@ async def test_detection(request: TestDetectionRequest):
 
 
 @app.get("/api/knowledge/export")
-async def export_config():
-    """导出知识库配置"""
+async def export_config(username: str = Depends(verify_token_and_password_changed)):
+    """导出知识库配置（需要认证）"""
     try:
         config = get_knowledge_config()
         config_data = config.export_config()
@@ -909,8 +1003,8 @@ async def export_config():
 
 
 @app.post("/api/knowledge/import")
-async def import_config(config_data: dict):
-    """导入知识库配置"""
+async def import_config(config_data: dict, username: str = Depends(verify_token_and_password_changed)):
+    """导入知识库配置（需要认证）"""
     try:
         config = get_knowledge_config()
         config.import_config(config_data, validate=True)
@@ -928,19 +1022,35 @@ async def import_config(config_data: dict):
 
 # ==================== 文档管理API（RAG） ====================
 
-@app.post("/api/documents/upload")
-async def upload_document(request: Request):
-    """
-    上传知识文档并建立RAG索引
+# 文件上传限制常量
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.md', '.txt'}
 
-    流程:
-    1. 接收文件和元数据
-    2. 解析文档内容
-    3. 向量化并存入ChromaDB
-    4. 返回文档ID
+
+def validate_doc_id(doc_id: str) -> bool:
+    """验证文档 ID 格式：必须是 doc_ + 12位十六进制"""
+    return bool(re.match(r"^doc_[a-f0-9]{12}$", doc_id))
+
+
+def safe_file_path(storage_dir: Path, filename: str) -> Path:
+    """安全地构建文件路径，防止目录遍历"""
+    file_path = (storage_dir / filename).resolve()
+    # 确保解析后的路径仍在 storage_dir 下
+    if not str(file_path).startswith(str(storage_dir.resolve())):
+        raise ValueError("非法文件路径")
+    return file_path
+
+
+@app.post("/api/documents/upload")
+async def upload_document(request: Request, username: str = Depends(verify_token_and_password_changed)):
     """
-    from fastapi import UploadFile, File, Form
-    import uuid
+    上传知识文档并建立RAG索引（需要认证）
+
+    安全特性:
+    - 文件类型白名单验证
+    - 文件大小限制（50MB）
+    - 分块写入避免内存溢出
+    """
     import shutil
 
     try:
@@ -960,20 +1070,50 @@ async def upload_document(request: Request):
         if not file:
             raise HTTPException(status_code=400, detail="未提供文件")
 
-        # 生成文档ID
+        # 1. 检查文件扩展名
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的文件格式，仅支持: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+
+        # 2. 检查文件大小（不读取全部内容到内存）
+        file.file.seek(0, 2)  # 移动到文件末尾
+        file_size = file.file.tell()  # 获取当前位置即文件大小
+        file.file.seek(0)  # 重置到开头
+
+        if file_size > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件过大（{file_size // 1024 // 1024}MB），最大支持 {MAX_UPLOAD_SIZE // 1024 // 1024}MB"
+            )
+
+        # 3. 生成安全的文档 ID
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
 
-        # 保存文件
+        # 4. 安全保存文件（边写边计数，二次验证大小）
         storage_dir = Path("viral_agent/storage/documents")
         storage_dir.mkdir(parents=True, exist_ok=True)
-
-        file_ext = Path(file.filename).suffix
         file_path = storage_dir / f"{doc_id}{file_ext}"
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        written_size = 0
+        chunk_size = 1024 * 1024  # 1MB chunks
 
-        logger.info(f"文件已保存: {file_path}")
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = file.file.read(chunk_size)
+                if not chunk:
+                    break
+                written_size += len(chunk)
+                if written_size > MAX_UPLOAD_SIZE:
+                    # 超出大小，删除已写入的文件
+                    buffer.close()
+                    file_path.unlink()
+                    raise HTTPException(status_code=413, detail="文件过大")
+                buffer.write(chunk)
+
+        logger.info(f"文件已保存: {file_path} ({written_size} bytes)")
 
         # 解析文档
         parser = DocumentParser()
@@ -1029,8 +1169,8 @@ async def upload_document(request: Request):
 
 
 @app.get("/api/documents")
-async def list_documents(domain: Optional[str] = None):
-    """列出所有知识文档"""
+async def list_documents(domain: Optional[str] = None, username: str = Depends(verify_token_and_password_changed)):
+    """列出所有知识文档（需要认证）"""
     try:
         rag_service = RAGService()
         documents = rag_service.list_all_documents(domain_filter=domain)
@@ -1046,20 +1186,41 @@ async def list_documents(domain: Optional[str] = None):
 
 
 @app.delete("/api/documents/{doc_id}")
-async def delete_document(doc_id: str):
-    """删除知识文档"""
+async def delete_document(doc_id: str, username: str = Depends(verify_token_and_password_changed)):
+    """
+    删除知识文档（需要认证）
+
+    安全特性:
+    - doc_id 格式验证（防止通配符攻击）
+    - Path.resolve() 路径校验（防止目录遍历）
+    """
     try:
+        # 1. 验证 doc_id 格式
+        if not validate_doc_id(doc_id):
+            raise HTTPException(status_code=400, detail="无效的文档 ID 格式")
+
+        # 2. 使用精确匹配而非 glob（防止通配符攻击）
+        storage_dir = Path("viral_agent/storage/documents").resolve()
+        deleted = False
+
+        for ext in ALLOWED_EXTENSIONS:
+            try:
+                file_path = safe_file_path(storage_dir, f"{doc_id}{ext}")
+                if file_path.exists():
+                    file_path.unlink()
+                    logger.info(f"已删除文件: {file_path}")
+                    deleted = True
+                    break
+            except ValueError:
+                raise HTTPException(status_code=400, detail="非法文件路径")
+
+        # 3. 删除向量库中的记录
         rag_service = RAGService()
-        success = rag_service.delete_document(doc_id)
+        rag_service.delete_document(doc_id)
 
-        if not success:
-            raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
-
-        # 同时删除原始文件
-        storage_dir = Path("viral_agent/storage/documents")
-        for file_path in storage_dir.glob(f"{doc_id}.*"):
-            file_path.unlink()
-            logger.info(f"已删除文件: {file_path}")
+        if not deleted:
+            # 即使文件不存在，也尝试删除向量库记录（可能只有索引没有文件）
+            logger.warning(f"文档文件不存在，但已尝试清理向量库: {doc_id}")
 
         return {
             "status": "success",
@@ -1073,8 +1234,13 @@ async def delete_document(doc_id: str):
 
 
 @app.post("/api/documents/search")
-async def search_documents(query: str, domains: Optional[List[str]] = None, top_k: int = 5):
-    """搜索知识文档"""
+async def search_documents(
+    query: str,
+    domains: Optional[List[str]] = None,
+    top_k: int = 5,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """搜索知识文档（需要认证）"""
     try:
         retriever = UnifiedKnowledgeRetriever()
         results = retriever.search_documents(query=query, domains=domains, top_k=top_k)
@@ -1091,8 +1257,8 @@ async def search_documents(query: str, domains: Optional[List[str]] = None, top_
 
 
 @app.get("/api/knowledge/summary")
-async def get_knowledge_summary():
-    """获取知识库摘要信息"""
+async def get_knowledge_summary(username: str = Depends(verify_token_and_password_changed)):
+    """获取知识库摘要信息（需要认证）"""
     try:
         retriever = UnifiedKnowledgeRetriever()
         summary = retriever.get_knowledge_summary()
@@ -1104,6 +1270,130 @@ async def get_knowledge_summary():
     except Exception as e:
         logger.error(f"获取知识库摘要失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+# ==================== 系统清理API ====================
+
+@app.get("/api/cleanup/info")
+async def get_cleanup_info(username: str = Depends(verify_token_and_password_changed)):
+    """
+    获取清理类别信息（需要认证）
+
+    Returns:
+        各类别的文件数量和大小
+    """
+    try:
+        service = CleanupService()
+        info = service.get_category_info()
+        total = service.get_total_cache_size()
+
+        return {
+            "status": "success",
+            "categories": info,
+            "total_size_mb": total['total_mb']
+        }
+    except Exception as e:
+        logger.error(f"获取清理信息失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+@app.post("/api/cleanup")
+async def cleanup_history(
+    request: CleanupRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    清理历史数据（需要认证）
+
+    Args:
+        request: 清理请求，包含要清理的类别和是否预览
+
+    Returns:
+        清理结果汇总
+    """
+    try:
+        service = CleanupService()
+
+        # 验证类别
+        valid_categories = set(service.CATEGORIES.keys())
+        invalid = set(request.categories) - valid_categories
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的类别: {', '.join(invalid)}。有效类别: {', '.join(valid_categories)}"
+            )
+
+        # 执行清理
+        summary = service.cleanup_all(
+            categories=request.categories,
+            dry_run=request.dry_run
+        )
+
+        # 转换结果
+        results = []
+        for r in summary.results:
+            results.append({
+                "category": r.category,
+                "name": service.CATEGORIES.get(r.category, {}).get('name', r.category),
+                "files_deleted": r.files_deleted,
+                "size_freed_mb": r.size_freed_mb,
+                "success": r.success,
+                "error": r.error
+            })
+
+        action = "预览" if request.dry_run else "已清理"
+        logger.info(f"{action}: {summary.total_files} 文件, {summary.total_size_mb:.2f} MB")
+
+        return {
+            "status": "success",
+            "dry_run": request.dry_run,
+            "message": f"{action} {summary.total_files} 个文件，共 {summary.total_size_mb:.2f} MB",
+            "results": results,
+            "total_files": summary.total_files,
+            "total_size_mb": summary.total_size_mb,
+            "timestamp": summary.timestamp
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"清理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
+
+
+@app.delete("/api/cleanup/all")
+async def cleanup_all_data(
+    dry_run: bool = True,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    清理全部历史数据（需要认证，危险操作）
+
+    Args:
+        dry_run: 是否仅预览，默认为True（安全模式）
+
+    Returns:
+        清理结果汇总
+    """
+    try:
+        service = CleanupService()
+
+        # 执行清理所有类别
+        summary = service.cleanup_all(dry_run=dry_run)
+
+        action = "预览" if dry_run else "已清理"
+        logger.warning(f"全量清理 {action}: {summary.total_files} 文件, {summary.total_size_mb:.2f} MB")
+
+        return {
+            "status": "success",
+            "dry_run": dry_run,
+            "message": f"{action}全部历史数据: {summary.total_files} 个文件，共 {summary.total_size_mb:.2f} MB",
+            "total_files": summary.total_files,
+            "total_size_mb": summary.total_size_mb,
+            "timestamp": summary.timestamp
+        }
+    except Exception as e:
+        logger.error(f"全量清理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
 
 
 # ==================== 健康检查 ====================

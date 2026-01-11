@@ -393,3 +393,196 @@ print(knowledge['document_knowledge'])     # RAG检索结果
    - "签名错误"：检查 JS 文件是否最新，Cookie 是否有效
    - "笔记不存在"：xsec_token 可能已过期
    - "请求失败"：检查网络连接和代理设置
+
+## 视频分析系统（新功能）
+
+### 系统架构
+
+视频分析采用**统一下载 + 并行分析**架构，实现高效的视频内容分析：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    VideoEnhancedAnalyzer（协调器）                │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 顶层统一下载视频（VideoDownloadManager）                      │
+│  2. 并行执行所有分析任务                                          │
+│  3. 统一释放视频资源                                              │
+├───────────────┬───────────────┬───────────────┬─────────────────┤
+│ 封面分析       │ 标题分析       │ 时间轴分析     │ 音画同步分析     │
+│ (CoverClass)  │ (TitleClass)  │ (TimelineAn)  │ (AVSyncAnal)   │
+└───────────────┴───────────────┴───────────────┴─────────────────┘
+                        ↓ 共享下载 ↓
+┌─────────────────────────────────────────────────────────────────┐
+│              VideoDownloadManager（下载管理器）                   │
+├─────────────────────────────────────────────────────────────────┤
+│ • 下载去重：同一视频只下载一次                                     │
+│ • 引用计数：acquire/release 管理生命周期                          │
+│ • 原子写入：临时文件 + rename 避免读取半成品                       │
+│ • 并发控制：Semaphore 限制同时下载数                              │
+│ • 大小限制：考虑 base64 膨胀（×1.33）                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 视频源模式配置
+
+在 `.env` 文件中配置视频处理方式：
+
+```bash
+# 视频源模式
+VIDEO_SOURCE_MODE="url"      # url: URL直传给AI（默认，依赖AI能访问视频URL）
+VIDEO_SOURCE_MODE="proxy"    # proxy: 本地下载后转base64传给AI（推荐，解决防盗链）
+
+# 视频分析配置
+VIDEO_ANALYSIS_MODE="full"   # full: 完整视频分析 | metadata: 仅元数据分析
+VIDEO_MODEL_NAME="qwen3-vl-plus"  # 支持视频的多模态模型
+
+# 下载配置
+VIDEO_MAX_SIZE_MB=50         # 最大视频大小（MB）
+VIDEO_DOWNLOAD_TIMEOUT=60    # 下载超时（秒）
+VIDEO_MAX_CONCURRENT=2       # 最大并发下载数
+
+# 音画同步分析
+ENABLE_AV_SYNC=false         # 是否启用音画同步分析
+CLEANUP_TEMP_FILES=true      # 是否清理临时文件
+FRAME_INTERVAL=5.0           # 帧抽取间隔（秒）
+MAX_FRAMES_PER_VIDEO=20      # 每视频最大帧数
+```
+
+### 核心组件
+
+#### 1. VideoDownloadManager（下载管理器）
+
+位置：`viral_agent/services/download/video_download_manager.py`
+
+**关键特性**：
+- **下载去重**：使用 `_in_progress` dict + `asyncio.Future` 确保同一 URL 只下载一次
+- **引用计数**：`acquire()` 增加引用，`release()` 减少引用，归零时清理文件
+- **缓存键设计**：优先使用 `note_id`，否则使用 URL path hash
+- **原子写入**：先写临时文件，完成后 `os.rename()` 避免读取半成品
+
+**使用示例**：
+```python
+from viral_agent.services.download import VideoDownloadManager
+
+manager = VideoDownloadManager(
+    cache_dir="datas/video_cache",
+    max_size_mb=50,
+    download_timeout=60
+)
+
+# 获取视频（自动去重）
+handle = await manager.acquire(
+    url=video_url,
+    require_file=True,    # 需要本地文件路径
+    require_bytes=True,   # 需要二进制数据
+    note_id="note_123"
+)
+
+# 使用视频
+print(f"文件路径: {handle.local_path}")
+print(f"大小: {handle.size_bytes / 1024 / 1024:.1f}MB")
+
+# 释放引用
+manager.release(video_url, "note_123")
+```
+
+#### 2. VideoEnhancedAnalyzer（增强分析器）
+
+位置：`viral_agent/services/video_enhanced_analyzer.py`
+
+**工作流程**：
+1. 顶层统一 `acquire` 视频（避免子任务各自下载）
+2. 并发执行所有分析任务（封面、标题、时间轴、音画同步）
+3. 所有任务完成后统一 `release` 释放资源
+
+**使用示例**：
+```python
+from viral_agent.services.video_enhanced_analyzer import VideoEnhancedAnalyzer
+
+analyzer = VideoEnhancedAnalyzer(
+    enable_ai=True,
+    enable_av_sync=True,
+    video_source_mode='proxy'
+)
+
+# 分析单个视频
+result = await analyzer.analyze_single_video(note)
+print(f"状态: {result.analysis_status}")
+print(f"时间轴: {result.timeline_analysis}")
+print(f"音画同步: {result.av_sync_result}")
+
+# 查看下载统计
+stats = analyzer.get_download_stats()
+print(f"缓存数: {stats['cached_count']}, 大小: {stats['total_size_mb']:.1f}MB")
+
+# 清理缓存
+analyzer.cleanup()
+```
+
+#### 3. AVSyncAnalyzer（音画同步分析器）
+
+位置：`viral_agent/services/av_sync/__init__.py`
+
+**功能**：
+- 视频帧抽取（使用 ffmpeg）
+- 音频提取和 ASR 语音识别（使用通义千问 ASR）
+- 音画时间轴对齐
+- 关键事件检测
+
+**依赖**：
+- ffmpeg（用于视频/音频处理）
+- 通义千问 ASR API（用于语音识别）
+
+### 数据流和缓存键一致性
+
+为确保下载共享生效，`note_id` 需要在整个调用链中透传：
+
+```
+VideoEnhancedAnalyzer.analyze_single_video(note)
+  │
+  ├─ 顶层 acquire(url, note_id) ─────────────────────────────┐
+  │                                                          │
+  ├─ timeline_analyzer.analyze_timeline(..., note_id)        │
+  │     └─ ai_analyzer.analyze_video(..., note_id)           │
+  │         └─ _download_via_manager(note_id) ← 缓存键一致！ ─┤
+  │                                                          │
+  ├─ _run_av_sync_analysis(note, video_handle)               │
+  │     └─ av_sync_analyzer.analyze_with_local_video(path)   │
+  │                                                          │
+  └─ 顶层 release(url, note_id) ─────────────────────────────┘
+```
+
+### 测试验证
+
+```bash
+# 启用 proxy 模式和音画同步进行测试
+VIDEO_SOURCE_MODE=proxy ENABLE_AV_SYNC=true python scripts/test_video.sh
+
+# 预期日志：
+# "🎬 顶层统一下载视频: note_xxx"
+# "✅ 视频下载完成: xxMB"
+# "🔗 AVSync 使用预下载的视频: ..."
+# "✅ 通过共享管理器获取视频: xxMB, 缓存=True"  ← 复用缓存
+```
+
+### 故障排查
+
+**问题1：视频下载失败**
+- 检查网络连接和代理配置
+- 确认 `VIDEO_DOWNLOAD_TIMEOUT` 足够长
+- 查看日志中的 HTTP 状态码
+
+**问题2：视频仍被重复下载**
+- 检查 `note_id` 是否在调用链中正确透传
+- 确认 `VIDEO_SOURCE_MODE=proxy` 已设置
+- 查看日志中的缓存命中情况
+
+**问题3：音画同步分析失败**
+- 确认 ffmpeg 已安装：`ffmpeg -version`
+- 检查通义千问 ASR API 配置
+- 查看 `datas/av_sync_cache/` 目录权限
+
+**问题4：内存占用过高**
+- 降低 `VIDEO_MAX_CONCURRENT` 值
+- 减小 `VIDEO_MAX_SIZE_MB` 限制
+- 启用 `CLEANUP_TEMP_FILES=true`

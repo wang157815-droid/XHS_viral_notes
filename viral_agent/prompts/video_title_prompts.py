@@ -60,16 +60,23 @@ VIDEO_TITLE_ANALYSIS_PROMPT = """您是一位资深社交媒体内容分析师�
    - 人设+产品：如"当贵妇空瓶了N瓶眼霜后｜只会买对的🥳"
    - 人设+效果：如"私藏版：美妆博主私下用的5️⃣个变美狠货 🔥"
 
-#分析要求：
-仅输出一个简单的分类结果字符串，格式为：主分类-子分类，没有找到标题测输出N/A
+【输出格式要求 - 极其重要】
+必须严格按以下格式输出，不要输出任何其他内容：
+Result_主分类,子分类
 
-#示例输出：
-问题解决类-眼部问题+干货手法
-热点引流类-主题相关
-产品推广类-好物分享
+示例输出：
+Result_问题解决类,眼部问题+干货手法
+Result_热点引流类,主题相关
+Result_产品推广类,好物分享
+Result_效果展示类,通用
+Result_干货指导类,教程
+
+如果无法判断，输出：
+Result_通用内容类,待细分
 
 #限制
-不要输出任何分析过程或额外解释，只提供上述格式的单行分类结果"""
+- 只输出一行分类结果，格式必须是 Result_主分类,子分类
+- 不要输出任何分析过程或解释"""
 
 
 def get_title_classification_prompt(title: str) -> str:
@@ -87,7 +94,7 @@ def get_title_classification_prompt(title: str) -> str:
 
 def parse_title_classification(result: str) -> dict:
     """
-    解析标题分类结果
+    解析标题分类结果（P1-2：支持新格式 Result_主分类,子分类）
 
     Args:
         result: AI返回的分类结果
@@ -95,6 +102,8 @@ def parse_title_classification(result: str) -> dict:
     Returns:
         结构化的分类信息
     """
+    import re
+
     try:
         # 清理结果字符串
         result = result.strip() if result else ''
@@ -108,7 +117,19 @@ def parse_title_classification(result: str) -> dict:
                 'needs_fallback': True  # 标记需要回退
             }
 
-        # 解析分类格式：主分类-子分类
+        # P1-2: 优先解析新格式 Result_主分类,子分类
+        result_match = re.search(r'Result_([^,，]+)[,，](.+)', result)
+        if result_match:
+            main_cat = result_match.group(1).strip()
+            sub_cat = result_match.group(2).strip()
+            if main_cat:
+                return {
+                    'main_category': main_cat,
+                    'sub_category': sub_cat or '通用',
+                    'raw_result': result
+                }
+
+        # 兼容旧格式：主分类-子分类
         parts = result.split('-')
 
         if len(parts) >= 2:

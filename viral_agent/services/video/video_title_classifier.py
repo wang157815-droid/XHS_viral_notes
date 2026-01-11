@@ -2,6 +2,7 @@
 视频标题分类器
 用于分析小红书视频笔记标题的类型和策略
 """
+import os
 import re
 from typing import Dict, List, Any, Optional
 from loguru import logger
@@ -27,6 +28,14 @@ class VideoTitleClassifier:
         """
         self.ai_analyzer = ai_analyzer
         self.classification_cache = {}
+
+        # P1-1: 标题分类专用模型（避免使用推理模型如deepseek-reasoner）
+        self.title_model = os.getenv(
+            'TITLE_MODEL_NAME',
+            os.getenv('PRODUCT_MODEL_NAME', 'deepseek-chat')
+        )
+        logger.info(f"标题分类模型: {self.title_model}")
+
         self._init_jieba()
 
     def _init_jieba(self):
@@ -72,10 +81,11 @@ class VideoTitleClassifier:
                     # 获取提示词
                     prompt = get_title_classification_prompt(title)
 
-                    # 调用AI分析
+                    # P1-1: 调用AI分析，使用标题分类专用模型
                     result = await self.ai_analyzer.analyze_text(
                         text=title,
-                        prompt=prompt
+                        prompt=prompt,
+                        model=self.title_model
                     )
 
                     # 解析结果

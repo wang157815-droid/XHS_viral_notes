@@ -2,9 +2,13 @@
 视频分析数据模型
 定义视频分析结果的详细结构
 """
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 import json
+
+# 避免循环导入
+if TYPE_CHECKING:
+    from viral_agent.models.av_sync_model import AVSyncResult
 
 
 @dataclass
@@ -66,6 +70,9 @@ class VideoAnalysisResult:
     title_analysis: Optional[VideoTitleAnalysis] = None
     timeline_analysis: Optional[VideoTimelineAnalysis] = None
 
+    # 音画同步分析结果（可选）
+    av_sync_result: Optional[Any] = None  # 实际类型是 AVSyncResult
+
     # 统计数据
     analysis_time: str = ""
     analysis_status: str = "pending"  # pending/success/failed
@@ -85,6 +92,17 @@ class VideoAnalysisResult:
             result['title_analysis'] = asdict(self.title_analysis)
         if self.timeline_analysis:
             result['timeline_analysis'] = asdict(self.timeline_analysis)
+        if self.av_sync_result:
+            # 安全处理 av_sync_result（可能是 dataclass 或 dict）
+            from dataclasses import is_dataclass
+            if is_dataclass(self.av_sync_result):
+                result['av_sync_result'] = asdict(self.av_sync_result)
+            elif hasattr(self.av_sync_result, 'to_dict'):
+                result['av_sync_result'] = self.av_sync_result.to_dict()
+            elif isinstance(self.av_sync_result, dict):
+                result['av_sync_result'] = self.av_sync_result
+            else:
+                result['av_sync_result'] = str(self.av_sync_result)
 
         return result
 
@@ -110,6 +128,20 @@ class VideoAnalysisResult:
             summary['content_type'] = self.timeline_analysis.content_type
             summary['product_timing'] = self.timeline_analysis.product_appear_time
             summary['entry_point'] = self.timeline_analysis.entry_point
+
+        # 音画同步摘要
+        if self.av_sync_result:
+            av = self.av_sync_result
+            summary['av_sync'] = {
+                'status': av.status,
+                'frame_count': av.frame_count,
+                'video_duration': av.video_duration,
+                'asr_provider': av.asr_provider,
+                'full_text': av.full_text[:100] + '...' if len(av.full_text) > 100 else av.full_text
+            }
+            if av.timeline_summary:
+                summary['av_sync']['product_first_mention'] = av.timeline_summary.product_first_mention
+                summary['av_sync']['content_start_time'] = av.timeline_summary.content_start_time
 
         return summary
 

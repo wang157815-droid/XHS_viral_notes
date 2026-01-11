@@ -11,8 +11,8 @@ from datetime import datetime
 from loguru import logger
 
 from viral_agent.models.viral_note import ViralNote
-from viral_agent.services.cover_analyzer import CoverAnalyzer
-from viral_agent.services.video_analyzer import VideoAnalyzer
+from viral_agent.services.image.cover_analyzer import CoverAnalyzer
+from viral_agent.services.video.video_analyzer import VideoAnalyzer
 
 
 class ViralFeatureExtractor:

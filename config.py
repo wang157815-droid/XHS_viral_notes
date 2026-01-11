@@ -15,8 +15,8 @@ SPIDER_MODE = 'search'  # 默认使用搜索模式
 # 'excel' - 只保存Excel文件
 SAVE_CHOICE = 'excel'
 
-# Excel文件名（留空则自动生成）
-EXCEL_NAME = ''
+# Excel文件名（留空则使用默认名称 'xhs_data'）
+EXCEL_NAME = 'xhs_data'
 
 # 代理设置（留空则不使用代理）
 PROXIES = None

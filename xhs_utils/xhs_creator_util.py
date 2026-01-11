@@ -1,4 +1,5 @@
 import json
+import urllib.parse
 
 import execjs
 
@@ -40,9 +41,9 @@ def get_common_headers():
 
 
 def splice_str(api, params):
-    url = api + '?'
-    for key, value in params.items():
-        if value is None:
-            value = ''
-        url += key + '=' + value + '&'
-    return url[:-1]
+    """构建带参数的 URL（自动编码，支持列表参数）"""
+    if not params:
+        return api
+    # doseq=True 确保 list 类型参数被正确编码为多个同名参数
+    query_string = urllib.parse.urlencode(params, doseq=True)
+    return f"{api}?{query_string}"

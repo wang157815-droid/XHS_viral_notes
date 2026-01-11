@@ -14,6 +14,11 @@ jinja2>=3.1.2
 python-multipart>=0.0.6
 aiofiles>=23.2.1
 
+# 认证相关
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
+bcrypt==4.0.1  # 锁定版本，4.1+与passlib不兼容
+
 # 数据分析
 pandas>=2.0.0
 numpy>=1.24.0,<2.0.0
@@ -41,3 +46,7 @@ markdown>=3.5.0
 #
 # 方案B：PaddleOCR - 功能强大，但可能有兼容性问题
 # pip install paddlepaddle paddleocr
+
+# 音画同步分析相关
+aiohttp>=3.9.0
+dashscope>=1.20.0

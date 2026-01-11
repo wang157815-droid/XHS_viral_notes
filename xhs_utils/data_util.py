@@ -8,14 +8,21 @@ from loguru import logger
 from retry import retry
 
 
-def norm_str(str):
-    new_str = re.sub(r"|[\\/:*?\"<>| ]+", "", str).replace('\n', '').replace('\r', '')
+def norm_str(input_str):
+    """清理字符串中的非法文件名字符"""
+    new_str = re.sub(r'[\\/:*?"<>| ]+', "", input_str).replace('\n', '').replace('\r', '')
     return new_str
 
 def norm_text(text):
     ILLEGAL_CHARACTERS_RE = re.compile(r'[\000-\010]|[\013-\014]|[\016-\037]')
     text = ILLEGAL_CHARACTERS_RE.sub(r'', text)
     return text
+
+def sanitize_excel_value(value):
+    """防止 Excel 公式注入"""
+    if isinstance(value, str) and value and value[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + value  # 添加单引号前缀转义公式
+    return value
 
 
 def timestamp_to_str(timestamp):
@@ -272,18 +279,20 @@ def save_to_xlsx(datas, file_path, type='note'):
         headers = ['笔记id', '笔记url', '评论id', '用户id', '用户主页url', '昵称', '头像url', '评论内容', '评论标签', '点赞数量', '上传时间', 'ip归属地', '图片地址url列表']
     ws.append(headers)
     for data in datas:
-        data = {k: norm_text(str(v)) for k, v in data.items()}
+        # 先清理非法字符，再进行公式注入防护
+        data = {k: sanitize_excel_value(norm_text(str(v))) for k, v in data.items()}
         ws.append(list(data.values()))
     wb.save(file_path)
     logger.info(f'数据保存至 {file_path}')
 
 def download_media(path, name, url, type):
+    # timeout=(连接超时, 读取超时)，媒体文件可能较大需要更长读取时间
     if type == 'image':
-        content = requests.get(url).content
+        content = requests.get(url, timeout=(5, 30)).content
         with open(path + '/' + name + '.jpg', mode="wb") as f:
             f.write(content)
     elif type == 'video':
-        res = requests.get(url, stream=True)
+        res = requests.get(url, stream=True, timeout=(5, 60))
         size = 0
         chunk_size = 1024 * 1024
         with open(path + '/' + name + '.mp4', mode="wb") as f:
