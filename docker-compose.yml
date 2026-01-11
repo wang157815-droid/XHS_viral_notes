@@ -5,8 +5,9 @@ services:
   spider-xhs:
     build: .
     container_name: spider-xhs-app
-    ports:
-      - "8000:8000"
+    # 不对外暴露端口，仅通过Nginx访问
+    expose:
+      - "8000"
     volumes:
       # 数据持久化
       - ./datas:/app/datas
@@ -15,6 +16,8 @@ services:
       - ./viral_agent/storage/chromadb:/app/viral_agent/storage/chromadb
     env_file:
       - .env
+    environment:
+      - PRODUCTION=true  # 生产模式：禁用热重载
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -24,16 +27,19 @@ services:
     networks:
       - spider-network
 
-  # Nginx反向代理（HTTPS支持）
+  # Nginx反向代理
+  # 默认仅HTTP模式，HTTPS配置说明见 nginx/nginx.conf
   nginx:
     image: nginx:alpine
     container_name: spider-xhs-nginx
     ports:
       - "80:80"
-      - "443:443"
+      # 启用HTTPS后取消注释下行
+      # - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
+      # 启用HTTPS后取消注释下行，并放入证书文件
+      # - ./nginx/ssl:/etc/nginx/ssl:ro
     depends_on:
       - spider-xhs
     restart: unless-stopped
