@@ -111,7 +111,7 @@ class RAGService:
         try:
             # 文本分块
             if auto_chunk and not doc.chunks:
-                from viral_agent.services.document_parser import DocumentParser
+                from viral_agent.services.knowledge.document_parser import DocumentParser
                 parser = DocumentParser()
                 doc.chunks = parser.split_text(doc.content, chunk_size=500, overlap=50)
 

@@ -982,6 +982,60 @@ MULTIMODAL_MODEL_NAME=glm-4v-plus
 
 ---
 
+### 视频下载共享机制（2025年12月新增）
+
+为优化多任务并行分析时的网络资源使用，新增了 **VideoDownloadManager** 统一下载管理器：
+
+**核心特性**：
+- ✅ **下载去重**：同一视频只下载一次，多个分析任务共享
+- ✅ **引用计数**：`acquire()`/`release()` 模式确保文件生命周期安全
+- ✅ **并行任务**：AVSync 和时间轴分析并行执行，共用预下载视频
+- ✅ **自动清理**：分析完成后自动清理临时文件
+
+**架构设计**：
+
+```
+VideoEnhancedAnalyzer（顶层统一管理）
+    │
+    ├─ acquire() 预下载视频
+    │
+    ├─ asyncio.gather() 并行执行
+    │   ├── AVSyncAnalyzer（音画同步）→ 使用预下载视频
+    │   ├── TimelineAnalyzer（时间轴）→ 使用预下载视频
+    │   └── 其他分析任务...
+    │
+    └─ release() 释放资源
+```
+
+**配置方式**：
+
+```bash
+# .env 配置
+VIDEO_SOURCE_MODE=proxy      # 使用代理模式（需要下载视频）
+ENABLE_AV_SYNC=true          # 启用音画同步分析
+CLEANUP_TEMP_FILES=true      # 分析后清理临时文件
+```
+
+**缓存键一致性**：
+
+关键参数 `note_id` 贯穿整个调用链，确保缓存命中：
+
+```
+VideoEnhancedAnalyzer.analyze_single_video(note_id="xxx")
+    └─→ download_manager.acquire(note_id="xxx")
+    └─→ timeline_analyzer.analyze_timeline(note_id="xxx")
+    └─→ av_sync_analyzer.analyze_with_local_video(note_id="xxx")
+```
+
+**日志验证**：
+
+正确工作时，日志应显示：
+```
+✅ 通过共享管理器获取视频: 12.5MB, 缓存=False  # 只出现一次
+Step 2/5: 帧抽取 + 音频提取（并行）...
+Step 3/5: ASR 语音识别...
+```
+
 ### 分析维度
 
 #### 1. 封面分类（4大类12子类）
@@ -1082,6 +1136,67 @@ Result_30s,60s,45s,干货教程-手法干货,眼部问题,自用分享,干货手
 - 建议添加适当延时，避免请求过于频繁
 - 结果保存在 `download/` 目录下
 - 仅供学习研究使用，请遵守相关法律法规
+
+## 🔐 安全特性（2025年12月新增）
+
+### JWT 认证系统
+
+爆文分析系统现已支持完整的用户认证，保护敏感接口和配置数据。
+
+**核心特性**：
+- ✅ **JWT Token 认证**：所有 `/api/*` 接口需要 Bearer Token
+- ✅ **bcrypt 密码哈希**：使用 passlib 安全存储密码
+- ✅ **强制密码修改**：首次登录必须修改随机生成的初始密码
+- ✅ **Cookie 保护**：移除了 cookie_preview 字段，防止敏感信息泄露
+
+**首次配置步骤**：
+
+1. **生成 JWT 密钥**：
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+2. **配置环境变量**（.env 文件）：
+```bash
+# JWT 认证密钥（必填！）
+JWT_SECRET="your-generated-secret-here"
+```
+
+3. **启动应用**：
+```bash
+bash scripts/start_viral_app.sh
+# 或
+python viral_app.py
+```
+
+4. **首次登录**：
+   - 系统自动创建 `admin` 账户
+   - 随机密码会显示在启动日志中
+   - 登录后必须修改密码才能使用其他功能
+
+**安全增强清单**：
+
+| 类别 | 修复项 | 说明 |
+|------|--------|------|
+| **认证** | JWT Token | 所有 API 需要认证 |
+| **认证** | bcrypt 哈希 | 替代明文/弱哈希存储 |
+| **认证** | 强制改密 | 服务端拦截 must_change_password |
+| **输入验证** | doc_id 校验 | 正则验证 + 路径穿越防护 |
+| **输入验证** | 文件上传限制 | 50MB + 扩展名白名单 |
+| **输入验证** | Cookie 'a1' 校验 | 确保必要字段存在 |
+| **网络安全** | TLS 证书验证 | 移除 verify=False |
+| **网络安全** | 请求超时 | 所有 requests 添加 timeout |
+| **数据安全** | Excel 公式注入防护 | 转义 =+-@ 开头的值 |
+| **编码安全** | URL 编码 | urlencode(doseq=True) |
+
+**测试认证功能**：
+```bash
+# 设置测试密码环境变量
+export TEST_PASSWORD="your-password"
+
+# 运行测试
+python tests/test_viral_app.py
+```
 
 ## 🏗️ 系统架构优化（2025年12月）
 
@@ -1434,6 +1549,9 @@ python tests/test_xxx.py
 | 25/12/11 | - **视频知识库**：8领域新增 video_knowledge 配置，支持领域专属视频分析策略 |
 | 25/12/11 | - **视频爆文模型**：新增 synthesize_video_model() 综合推理，生成可执行的视频创作指南 |
 | 25/12/11 | - **代码质量优化**：修复 Critical Bug（接口不匹配），5个超标文件拆分为10个模块（符合300行限制） |
+| 25/12/31 | - **视频下载共享机制**：新增 VideoDownloadManager 统一下载管理器，避免重复下载 |
+| 25/12/31 | - **AVSync音画同步**：支持使用预下载视频，与时间轴分析并行执行 |
+| 25/12/31 | - **note_id透传优化**：确保缓存键在整个调用链中一致，提升缓存命中率 |
 
 
 ## 🧸额外说明

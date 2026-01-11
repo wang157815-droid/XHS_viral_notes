@@ -59,6 +59,44 @@ def safe_set_cell_value(ws, cell_ref: str, value, **style_kwargs):
         return False
 
 
+def safe_write_merged_cell(ws, row: int, col: int, value, merge_cols: int = 1, **style_kwargs):
+    """
+    P2-2: 安全写入可能需要合并的单元格
+
+    原则：先写入左上角单元格的值，再进行合并（避免MergedCell只读错误）
+
+    Args:
+        ws: 工作表对象
+        row: 行号
+        col: 列号（起始列）
+        value: 要写入的值
+        merge_cols: 要合并的列数（默认1表示不合并）
+        **style_kwargs: 可选的样式属性
+
+    Returns:
+        int: 实际写入的行号（方便链式调用）
+    """
+    try:
+        # 1. 先写入左上角单元格的值
+        cell = ws.cell(row=row, column=col)
+        if not isinstance(cell, MergedCell):
+            cell.value = value
+            # 应用样式
+            for attr, style_value in style_kwargs.items():
+                if hasattr(cell, attr):
+                    setattr(cell, attr, style_value)
+
+        # 2. 如果需要合并多列，再进行合并
+        if merge_cols > 1:
+            end_col = col + merge_cols - 1
+            ws.merge_cells(start_row=row, start_column=col, end_row=row, end_column=end_col)
+
+        return row
+    except Exception as e:
+        logger.debug(f"安全写入合并单元格失败 ({row}, {col}): {e}")
+        return row
+
+
 def export_raw_data_to_excel(data: Dict[str, Any], original_file_path: str) -> str:
     """
     将原始采集数据导出为Excel
@@ -1355,8 +1393,9 @@ def create_product_analysis_sheet(wb, data):
             elif 'optimal_strategy' in timing:
                 # 向后兼容：如果没有top3_strategies，显示单个最佳策略
                 ws[f'A{row}'] = "最佳策略"
-                ws.merge_cells(f'B{row}:F{row}')
+                # P1-fix-2: 先写值再 merge，避免 MergedCell 只读错误
                 ws[f'B{row}'] = timing['optimal_strategy']
+                ws.merge_cells(f'B{row}:F{row}')
                 row += 2
 
         # 营销场景分析
@@ -2824,7 +2863,9 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
             cover = insight.get('cover_analysis', {})
             title_info = insight.get('title_analysis', {})
             status = insight.get('analysis_status', 'pending')
+            # P1-fix-1: 支持 partial 状态
             is_success = status == 'success' and timeline
+            is_partial = status == 'partial'  # 部分成功
 
             # A: 视频标题
             ws[f'A{row}'] = insight.get('note_title', '')
@@ -2908,18 +2949,24 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                 ws[f'K{row}'].font = Font(size=9)
             ws[f'K{row}'].alignment = Alignment(horizontal='center', vertical='center')
 
-            # L: 状态（条件格式）
-            ws[f'L{row}'] = '✅' if is_success else '❌'
-            ws[f'L{row}'].alignment = Alignment(horizontal='center', vertical='center')
+            # L: 状态（条件格式）- P1-fix-1: 支持 partial 状态
             if is_success:
+                ws[f'L{row}'] = '✅'
                 ws[f'L{row}'].font = Font(color='00AA00', bold=True)
+            elif is_partial:
+                ws[f'L{row}'] = '⚠️'
+                ws[f'L{row}'].font = Font(color='FF8800', bold=True)  # 橙色
             else:
+                ws[f'L{row}'] = '❌'
                 ws[f'L{row}'].font = Font(color='FF0000', bold=True)
+            ws[f'L{row}'].alignment = Alignment(horizontal='center', vertical='center')
 
-            # M: 备注
+            # M: 备注（P3：显示失败原因）- P1-fix-1: 支持 partial 状态
             if not is_success:
-                ws[f'M{row}'] = insight.get('error', '视频分析失败')
-                ws[f'M{row}'].font = Font(color='FF0000', size=8)
+                # P3: 优先使用 error_message（模型字段），兼容旧数据的 error
+                error_msg = insight.get('error_message') or insight.get('error', '视频分析失败')
+                ws[f'M{row}'] = error_msg
+                ws[f'M{row}'].font = Font(color='FF8800' if is_partial else 'FF0000', size=8)
             else:
                 # 显示关键词
                 keywords = title_info.get('keywords', []) if title_info else []
@@ -2947,7 +2994,9 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
             timeline = insight.get('timeline_analysis', {})
             cover = insight.get('cover_analysis', {})
             title_info = insight.get('title_analysis', {})
+            # P1-fix-1: 支持 partial 状态
             is_success = status == 'success' and timeline
+            is_partial = status == 'partial'
 
             # 视频序号和标题
             ws[f'A{row}'] = f"视频{i}"
@@ -2961,16 +3010,27 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
             ws.merge_cells(f'B{row}:M{row}')
             row += 1
 
-            # 分析状态检查
-            if not is_success:
+            # 分析状态检查 - P1-fix-1: 支持 partial 状态
+            if not is_success and not is_partial:
                 ws[f'A{row}'] = "分析状态"
                 ws[f'A{row}'].font = Font(bold=True, size=9)
-                error_msg = insight.get('error', '无法读取视频')
+                # P3: 优先使用 error_message（模型字段），兼容旧数据的 error
+                error_msg = insight.get('error_message') or insight.get('error', '无法读取视频')
                 ws[f'B{row}'] = f"❌ 失败: {error_msg}"
                 ws[f'B{row}'].font = Font(color='FF0000', italic=True, size=9)
                 ws.merge_cells(f'B{row}:M{row}')
                 row += 2
                 continue
+
+            # 如果是 partial 状态，显示警告但继续展示已有数据
+            if is_partial:
+                ws[f'A{row}'] = "分析状态"
+                ws[f'A{row}'].font = Font(bold=True, size=9)
+                error_msg = insight.get('error_message') or '部分分析失败'
+                ws[f'B{row}'] = f"⚠️ 部分成功: {error_msg}"
+                ws[f'B{row}'].font = Font(color='FF8800', italic=True, size=9)
+                ws.merge_cells(f'B{row}:M{row}')
+                row += 1
 
             # 【基础信息】
             ws[f'B{row}'] = "【基础信息】"

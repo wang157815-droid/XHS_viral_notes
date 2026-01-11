@@ -37,14 +37,31 @@ class SynthesisService:
         self.model_name = os.getenv("MODEL_NAME", "deepseek-chat")
         self.client = None
 
+        # P2-1: 检测服务类型，用于判断是否支持 response_format
+        self.service_type = self._detect_service_type()
+        self.supports_json_format = self.service_type in ('openai', 'deepseek')
+
         if OpenAI and self.api_key:
             self.client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base
             )
-            logger.info(f"综合推理服务初始化完成，使用模型: {self.model_name}")
+            logger.info(f"综合推理服务初始化完成，模型: {self.model_name}, JSON格式支持: {self.supports_json_format}")
         else:
             logger.warning("未配置AI API，综合推理服务不可用")
+
+    def _detect_service_type(self) -> str:
+        """检测API服务类型"""
+        if 'deepseek' in self.api_base:
+            return 'deepseek'
+        elif 'openai' in self.api_base:
+            return 'openai'
+        elif 'bigmodel' in self.api_base:
+            return 'glm'
+        elif 'dashscope' in self.api_base:
+            return 'qwen'
+        else:
+            return 'unknown'
 
     def synthesize_final_model(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -67,11 +84,23 @@ class SynthesisService:
             # 2. 构建综合推理Prompt
             prompt = self._build_synthesis_prompt(summary_data)
 
+            # P2-1: 如果不支持 response_format，在提示词中强制 JSON
+            if not self.supports_json_format:
+                prompt += """
+
+【关键要求 - 极其重要】
+你必须输出合法的JSON格式，不要输出任何markdown标记或解释文字。
+直接以 { 开头，以 } 结尾。
+确保所有字符串正确转义，所有括号正确闭合。
+"""
+
             # 3. 调用AI进行推理
-            logger.info("开始AI综合推理...")
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
+            logger.info(f"开始AI综合推理... (JSON格式支持: {self.supports_json_format})")
+
+            # 构建API调用参数
+            api_params = {
+                "model": self.model_name,
+                "messages": [
                     {
                         "role": "system",
                         "content": self._get_system_prompt()
@@ -81,9 +110,36 @@ class SynthesisService:
                         "content": prompt
                     }
                 ],
-                temperature=0.7,
-                max_tokens=4000
-            )
+                "temperature": 0.7,
+                "max_tokens": 4000
+            }
+
+            # P2-1 + P2-fix-2: 如果支持 response_format，添加JSON格式约束（带降级）
+            use_json_format = self.supports_json_format
+            if use_json_format:
+                api_params["response_format"] = {"type": "json_object"}
+                logger.debug("使用 response_format=json_object")
+
+            try:
+                response = self.client.chat.completions.create(**api_params)
+            except Exception as format_error:
+                # P2-fix-2: 如果 response_format 导致错误，回退到无格式约束
+                if use_json_format and ('response_format' in str(format_error).lower() or
+                                        'invalid' in str(format_error).lower() or
+                                        '400' in str(format_error)):
+                    logger.warning(f"response_format 不支持，降级为无格式约束: {format_error}")
+                    del api_params["response_format"]
+                    # 确保 prompt 中有 JSON 约束
+                    if '必须输出合法的JSON格式' not in prompt:
+                        api_params["messages"][1]["content"] += """
+
+【关键要求 - 极其重要】
+你必须输出合法的JSON格式，不要输出任何markdown标记或解释文字。
+直接以 { 开头，以 } 结尾。"""
+                    response = self.client.chat.completions.create(**api_params)
+                    self.supports_json_format = False  # 记住此服务不支持
+                else:
+                    raise
 
             result_text = response.choices[0].message.content
             logger.info("AI综合推理完成")
@@ -856,11 +912,22 @@ class SynthesisService:
                 sample_notes=video_data.get('sample_notes', [])[:5]
             )
 
+            # P2-1: 如果不支持 response_format，在提示词中强制 JSON
+            if not self.supports_json_format:
+                prompt += """
+
+【关键要求 - 极其重要】
+你必须输出合法的JSON格式，不要输出任何markdown标记或解释文字。
+直接以 { 开头，以 } 结尾。
+"""
+
             # 调用AI进行视频综合推理
-            logger.info("开始视频爆文模型AI综合推理...")
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
+            logger.info(f"开始视频爆文模型AI综合推理... (JSON格式支持: {self.supports_json_format})")
+
+            # 构建API调用参数
+            api_params = {
+                "model": self.model_name,
+                "messages": [
                     {
                         "role": "system",
                         "content": "你是资深短视频运营专家，专精于小红书爆款视频的规律总结和创作指导。请基于数据分析结果，生成可执行的视频创作策略。"
@@ -870,9 +937,34 @@ class SynthesisService:
                         "content": prompt
                     }
                 ],
-                temperature=0.7,
-                max_tokens=4000
-            )
+                "temperature": 0.7,
+                "max_tokens": 4000
+            }
+
+            # P2-1 + P2-fix-2: 如果支持 response_format，添加JSON格式约束（带降级）
+            use_json_format = self.supports_json_format
+            if use_json_format:
+                api_params["response_format"] = {"type": "json_object"}
+
+            try:
+                response = self.client.chat.completions.create(**api_params)
+            except Exception as format_error:
+                # P2-fix-2: 如果 response_format 导致错误，回退到无格式约束
+                if use_json_format and ('response_format' in str(format_error).lower() or
+                                        'invalid' in str(format_error).lower() or
+                                        '400' in str(format_error)):
+                    logger.warning(f"response_format 不支持，降级为无格式约束: {format_error}")
+                    del api_params["response_format"]
+                    # 在 user message 中追加 JSON 约束
+                    api_params["messages"][1]["content"] += """
+
+【关键要求 - 极其重要】
+你必须输出合法的JSON格式，不要输出任何markdown标记或解释文字。
+直接以 { 开头，以 } 结尾。"""
+                    response = self.client.chat.completions.create(**api_params)
+                    self.supports_json_format = False
+                else:
+                    raise
 
             result_text = response.choices[0].message.content
             logger.info("视频AI综合推理完成")

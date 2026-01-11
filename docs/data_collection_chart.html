@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据采集技术架构</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #f0f2f5;
+            padding: 40px;
+        }
+
+        .chart-container {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0d2137 100%);
+            border-radius: 16px;
+            padding: 40px 50px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .chart-title {
+            color: #fff;
+            font-size: 24px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 30px;
+            letter-spacing: 2px;
+        }
+
+        .tags-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+
+        .tag-item {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 18px 24px;
+            text-align: center;
+            transition: all 0.3s ease;
+            min-width: 140px;
+        }
+
+        .tag-item:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+        }
+
+        .tag-category {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 13px;
+            margin-bottom: 6px;
+            letter-spacing: 1px;
+        }
+
+        .tag-tech {
+            color: #fff;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* 不同颜色主题 */
+        .tag-item.blue {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.4);
+        }
+
+        .tag-item.purple {
+            background: rgba(139, 92, 246, 0.2);
+            border-color: rgba(139, 92, 246, 0.4);
+        }
+
+        .tag-item.cyan {
+            background: rgba(6, 182, 212, 0.2);
+            border-color: rgba(6, 182, 212, 0.4);
+        }
+
+        .tag-item.green {
+            background: rgba(34, 197, 94, 0.2);
+            border-color: rgba(34, 197, 94, 0.4);
+        }
+
+        .tag-item.orange {
+            background: rgba(249, 115, 22, 0.2);
+            border-color: rgba(249, 115, 22, 0.4);
+        }
+
+        .tag-item.pink {
+            background: rgba(236, 72, 153, 0.2);
+            border-color: rgba(236, 72, 153, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="chart-container">
+        <div class="chart-title">数据采集</div>
+        <div class="tags-grid">
+            <div class="tag-item blue">
+                <div class="tag-category">HTTP 请求</div>
+                <div class="tag-tech">Requests</div>
+            </div>
+            <div class="tag-item purple">
+                <div class="tag-category">签名生成</div>
+                <div class="tag-tech">PyExecJS</div>
+            </div>
+            <div class="tag-item cyan">
+                <div class="tag-category">反爬破解</div>
+                <div class="tag-tech">JS 逆向</div>
+            </div>
+            <div class="tag-item green">
+                <div class="tag-category">签名算法</div>
+                <div class="tag-tech">xs / xsc</div>
+            </div>
+            <div class="tag-item orange">
+                <div class="tag-category">数据存储</div>
+                <div class="tag-tech">Excel</div>
+            </div>
+            <div class="tag-item pink">
+                <div class="tag-category">媒体下载</div>
+                <div class="tag-tech">本地文件</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

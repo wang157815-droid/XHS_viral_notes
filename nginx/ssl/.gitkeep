@@ -1,0 +1,11 @@
+# SSL证书目录
+#
+# 部署时需要将以下文件放入此目录：
+# - fullchain.pem  (SSL证书链)
+# - privkey.pem    (SSL私钥)
+#
+# 获取免费证书：
+# 1. Let's Encrypt: https://letsencrypt.org/
+# 2. 阿里云免费证书: 云盾证书服务 -> 免费证书 -> 下载Nginx格式
+#
+# 注意：.pem文件不应提交到git仓库

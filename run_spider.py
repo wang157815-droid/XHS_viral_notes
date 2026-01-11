@@ -110,14 +110,8 @@ def parse_arguments():
 
     # 高级参数
     advanced_group = parser.add_argument_group('高级参数')
-    advanced_group.add_argument('--delay', type=float, default=2.0,
-                               help='请求延时（秒）')
-    advanced_group.add_argument('--retry', type=int, default=3,
-                               help='失败重试次数')
     advanced_group.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                                default='INFO', help='日志级别')
-    advanced_group.add_argument('--output-dir', type=str, default='download',
-                               help='输出目录')
 
     return parser.parse_args()
 
@@ -349,7 +343,7 @@ def main():
     run_spider_with_params(params)
 
     logger.success("爬虫运行完成！")
-    logger.info(f"结果保存在 {args.output_dir} 目录")
+    logger.info(f"结果保存在 {config.OUTPUT_PATH['base']} 目录")
 
 if __name__ == '__main__':
     main()

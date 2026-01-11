@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # 主应用服务
+  spider-xhs:
+    build: .
+    container_name: spider-xhs-app
+    ports:
+      - "8000:8000"
+    volumes:
+      # 数据持久化
+      - ./datas:/app/datas
+      - ./logs:/app/logs
+      # 向量数据库持久化
+      - ./viral_agent/storage/chromadb:/app/viral_agent/storage/chromadb
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - spider-network
+
+  # Nginx反向代理（HTTPS支持）
+  nginx:
+    image: nginx:alpine
+    container_name: spider-xhs-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - spider-xhs
+    restart: unless-stopped
+    networks:
+      - spider-network
+
+networks:
+  spider-network:
+    driver: bridge

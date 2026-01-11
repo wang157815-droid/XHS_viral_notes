@@ -1,6 +1,7 @@
 import json
 import math
 import random
+import urllib.parse
 import execjs
 from xhs_utils.cookie_util import trans_cookies
 
@@ -89,15 +90,17 @@ def generate_headers(a1, api, data=''):
 
 def generate_request_params(cookies_str, api, data=''):
     cookies = trans_cookies(cookies_str)
+    if 'a1' not in cookies:
+        raise ValueError("Cookie 缺少必需的 'a1' 字段，请检查 Cookie 配置")
     a1 = cookies['a1']
     headers, data = generate_headers(a1, api, data)
     return headers, cookies, data
 
 def splice_str(api, params):
-    url = api + '?'
-    for key, value in params.items():
-        if value is None:
-            value = ''
-        url += key + '=' + value + '&'
-    return url[:-1]
+    """构建带参数的 URL（自动编码，支持列表参数）"""
+    if not params:
+        return api
+    # doseq=True 确保 list 类型参数被正确编码为多个同名参数
+    query_string = urllib.parse.urlencode(params, doseq=True)
+    return f"{api}?{query_string}"
 

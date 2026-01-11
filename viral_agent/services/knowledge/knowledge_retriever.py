@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from loguru import logger
 
 from viral_agent.config.knowledge_loader import get_knowledge_config
-from viral_agent.services.rag_service import RAGService
+from viral_agent.services.knowledge.rag_service import RAGService
 
 
 class UnifiedKnowledgeRetriever:

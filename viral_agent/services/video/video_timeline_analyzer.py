@@ -32,7 +32,9 @@ class VideoTimelineAnalyzer:
         self,
         video_url: str,
         title: str = None,
-        description: str = None
+        description: str = None,
+        video_urls: List[Dict[str, Any]] = None,
+        note_id: str = None
     ) -> Dict[str, Any]:
         """
         分析单个视频的时间轴
@@ -41,6 +43,8 @@ class VideoTimelineAnalyzer:
             video_url: 视频URL
             title: 视频标题（可选）
             description: 视频描述（可选）
+            video_urls: 备选视频URL列表（P0-4新增，用于多URL兜底）
+            note_id: 笔记ID（P1-download: 用于下载共享缓存键）
 
         Returns:
             时间轴分析结果
@@ -71,12 +75,14 @@ class VideoTimelineAnalyzer:
             else:
                 prompt = base_prompt
 
-            # 调用AI分析视频
+            # 调用AI分析视频（P0-4：透传video_urls实现多URL兜底，P1-download: 透传note_id实现下载共享）
             result = await self.ai_analyzer.analyze_video(
                 video_url=video_url,
                 prompt=prompt,
                 title=title,
-                description=description
+                description=description,
+                video_urls=video_urls,
+                note_id=note_id
             )
 
             # 解析结果
@@ -118,7 +124,8 @@ class VideoTimelineAnalyzer:
                     'url': note['video_addr'],
                     'title': note.get('title', ''),
                     'description': note.get('desc', ''),
-                    'note_id': note.get('note_id')
+                    'note_id': note.get('note_id'),
+                    'video_urls': note.get('video_urls', [])  # P0-4: 收集备选URL
                 })
 
         if not videos:
@@ -131,7 +138,9 @@ class VideoTimelineAnalyzer:
                 self.analyze_timeline(
                     item['url'],
                     item['title'],
-                    item['description']
+                    item['description'],
+                    video_urls=item.get('video_urls'),  # P0-4: 透传备选URL
+                    note_id=item.get('note_id')  # P1-download: 透传note_id实现下载共享
                 )
                 for item in videos
             ]

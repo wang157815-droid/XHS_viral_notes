@@ -6,7 +6,9 @@ import os
 import json
 import asyncio
 import sys
-from typing import Dict, List, Any, Optional
+import base64
+import tempfile
+from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
 import aiohttp
 from dotenv import load_dotenv
@@ -31,8 +33,19 @@ from viral_agent.prompts import build_video_metadata_prompt
 class VideoAIAnalyzer:
     """视频AI分析器"""
 
-    def __init__(self):
-        """初始化AI分析器"""
+    def __init__(
+        self,
+        video_source_mode: Optional[str] = None,
+        download_manager: Optional['VideoDownloadManager'] = None
+    ):
+        """
+        初始化AI分析器
+
+        Args:
+            video_source_mode: 视频源模式 ("url"=URL直传, "proxy"=本地下载)
+                              None表示使用环境变量 VIDEO_SOURCE_MODE 配置
+            download_manager: 视频下载管理器（可选，用于共享下载避免重复）
+        """
         self.api_base = os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1')
         self.api_key = os.getenv('OPENAI_API_KEY')
         self.model_name = os.getenv('MODEL_NAME', 'gpt-4-vision-preview')
@@ -45,6 +58,24 @@ class VideoAIAnalyzer:
         # 视频分析配置
         self.video_model = os.getenv('VIDEO_MODEL_NAME', self.multimodal_model)
         self.video_analysis_mode = os.getenv('VIDEO_ANALYSIS_MODE', 'metadata')
+
+        # 视频源处理配置（P0-1）
+        # 优先使用运行时传入的参数，否则使用环境变量配置
+        if video_source_mode is not None:
+            self.video_source_mode = video_source_mode
+        else:
+            self.video_source_mode = os.getenv('VIDEO_SOURCE_MODE', 'url')  # url | proxy
+        self.video_download_timeout = int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '60'))
+        # P2-fix-4: 考虑 base64 膨胀（约1.37倍），实际限制为配置值的 75%
+        configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '50'))
+        self.video_max_size_mb = int(configured_max_mb * 0.75)  # 50MB 配置 → 37MB 实际限制
+
+        # 视频下载管理器（共享下载，避免重复）
+        self.download_manager = download_manager
+
+        # 全局并发限制（P0-3）
+        max_concurrent = int(os.getenv('VIDEO_MAX_CONCURRENT', '2'))
+        self.video_semaphore = asyncio.Semaphore(max_concurrent)
 
         # 检测配置的AI服务类型
         self.service_type = self._detect_service_type()
@@ -61,13 +92,15 @@ class VideoAIAnalyzer:
             logger.warning("AI API密钥未配置")
 
         # 输出配置信息
+        mode_source = "运行时参数" if video_source_mode is not None else "环境变量"
         logger.info(f"视频分析模式: {self.video_analysis_mode}")
         logger.info(f"视频模型: {self.video_model}")
+        logger.info(f"视频源处理: {self.video_source_mode} ({mode_source}), 并发限制: {max_concurrent}")
 
     def _init_knowledge_retriever(self):
         """初始化知识检索器"""
         try:
-            from viral_agent.services.knowledge_retriever import UnifiedKnowledgeRetriever
+            from viral_agent.services.knowledge.knowledge_retriever import UnifiedKnowledgeRetriever
             self.knowledge_retriever = UnifiedKnowledgeRetriever(enable_rag=True)
             logger.info("✅ 视频分析知识检索器初始化成功")
         except Exception as e:
@@ -264,7 +297,8 @@ class VideoAIAnalyzer:
         self,
         text: str,
         prompt: str,
-        max_tokens: int = 300
+        max_tokens: int = 300,
+        model: Optional[str] = None
     ) -> str:
         """
         分析文本内容（标题、描述等）
@@ -273,6 +307,7 @@ class VideoAIAnalyzer:
             text: 待分析文本
             prompt: 分析提示词
             max_tokens: 最大输出token数
+            model: 指定模型（可选，默认使用self.model_name）
 
         Returns:
             AI分析结果
@@ -281,9 +316,12 @@ class VideoAIAnalyzer:
             logger.error("API密钥未配置")
             return "API密钥未配置"
 
+        # 使用指定模型或默认模型
+        use_model = model or self.model_name
+
         try:
             # 检查缓存
-            cache_key = f"text_{hash(text)}_{hash(prompt)}"
+            cache_key = f"text_{hash(text)}_{hash(prompt)}_{use_model}"
             if cache_key in self.cache:
                 return self.cache[cache_key]
 
@@ -296,7 +334,7 @@ class VideoAIAnalyzer:
             # 调用AI API
             result = await self._call_ai_api(
                 messages=messages,
-                model=self.model_name,
+                model=use_model,
                 max_tokens=max_tokens
             )
 
@@ -316,7 +354,8 @@ class VideoAIAnalyzer:
         title: str = None,
         description: str = None,
         max_tokens: int = 1000,
-        video_urls: List[Dict[str, Any]] = None
+        video_urls: List[Dict[str, Any]] = None,
+        note_id: str = None
     ) -> str:
         """
         分析视频内容（通过视频URL，支持多源重试）
@@ -328,6 +367,7 @@ class VideoAIAnalyzer:
             description: 视频描述（可选）
             max_tokens: 最大输出token数
             video_urls: 备选视频URL列表（可选）
+            note_id: 笔记ID（用于下载共享和生成稳定缓存键）
 
         Returns:
             AI分析结果
@@ -352,9 +392,10 @@ class VideoAIAnalyzer:
                 # 完整视频分析（需要支持视频的模型）
                 logger.info(f"使用完整视频分析模式（{self.video_model}）")
 
-                # **新增：多源URL重试逻辑**
+                # **新增：多源URL重试逻辑 + 下载共享支持**
                 result = await self._try_analyze_video_with_retry(
-                    video_url, prompt, title, description, max_tokens, video_urls
+                    video_url, prompt, title, description, max_tokens,
+                    video_urls, note_id
                 )
 
             else:
@@ -383,7 +424,8 @@ class VideoAIAnalyzer:
         title: str,
         description: str,
         max_tokens: int,
-        video_urls: List[Dict[str, Any]] = None
+        video_urls: List[Dict[str, Any]] = None,
+        note_id: str = None
     ) -> str:
         """
         尝试分析视频，支持多层URL验证和智能回退
@@ -401,6 +443,7 @@ class VideoAIAnalyzer:
             description: 视频描述
             max_tokens: 最大token数
             video_urls: 备选视频URL列表（可选），多个URL时会触发预验证
+            note_id: 笔记ID（用于生成稳定缓存键）
 
         Returns:
             分析结果（AI分析或元数据分析的结果）
@@ -446,9 +489,10 @@ class VideoAIAnalyzer:
             try:
                 logger.debug(f"🤖 AI分析尝试 {i+1}/{len(urls_to_try)}: {url[:80]}...")
 
-                # 尝试分析
+                # 尝试分析（传入 note_id 和备选URL用于下载共享）
                 result = await self._analyze_video_directly(
-                    url, prompt, title, description, max_tokens
+                    url, prompt, title, description, max_tokens,
+                    note_id=note_id, backup_urls=video_urls
                 )
 
                 # 检查是否成功（没有AI特定错误、API异常、或AI明确表示无法读取）
@@ -509,16 +553,142 @@ class VideoAIAnalyzer:
 
         return is_capable
 
+    async def _download_video_with_referer(
+        self,
+        video_url: str
+    ) -> Tuple[Optional[bytes], Optional[str]]:
+        """
+        使用Referer头下载小红书视频（P0-1 proxy模式核心）
+
+        小红书CDN需要 Referer: https://www.xiaohongshu.com/ 才能访问
+        AI模型API无法携带此header，所以需要本地下载后传递
+
+        Args:
+            video_url: 视频URL
+
+        Returns:
+            (视频二进制数据, 错误信息) - 成功时错误信息为None
+        """
+        headers = {
+            'Referer': 'https://www.xiaohongshu.com/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.video_download_timeout)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(video_url, headers=headers) as response:
+                    if response.status != 200:
+                        return None, f"下载失败: HTTP {response.status}"
+
+                    # 检查文件大小
+                    content_length = response.headers.get('Content-Length')
+                    if content_length:
+                        size_mb = int(content_length) / (1024 * 1024)
+                        if size_mb > self.video_max_size_mb:
+                            return None, f"视频过大: {size_mb:.1f}MB > {self.video_max_size_mb}MB"
+
+                    # 读取视频数据
+                    video_data = await response.read()
+
+                    # 二次检查实际大小
+                    actual_size_mb = len(video_data) / (1024 * 1024)
+                    if actual_size_mb > self.video_max_size_mb:
+                        return None, f"视频过大: {actual_size_mb:.1f}MB > {self.video_max_size_mb}MB"
+
+                    logger.info(f"✅ 视频下载成功: {actual_size_mb:.1f}MB")
+                    return video_data, None
+
+        except asyncio.TimeoutError:
+            return None, f"下载超时: {self.video_download_timeout}s"
+        except aiohttp.ClientError as e:
+            return None, f"网络错误: {type(e).__name__}"
+        except Exception as e:
+            return None, f"下载异常: {type(e).__name__}: {str(e)}"
+
+    def _video_to_base64(self, video_data: bytes) -> str:
+        """将视频数据转为base64编码"""
+        return base64.b64encode(video_data).decode('utf-8')
+
+    def _build_video_messages_with_base64(
+        self,
+        video_base64: str,
+        prompt: str,
+        title: str,
+        description: str
+    ) -> List[Dict[str, Any]]:
+        """
+        构建包含base64视频的消息（proxy模式专用）
+
+        Args:
+            video_base64: base64编码的视频数据
+            prompt: 提示词
+            title: 标题
+            description: 描述
+
+        Returns:
+            消息列表
+        """
+        context = prompt
+        if title:
+            context += f"\n\n视频标题：{title}"
+        if description:
+            context += f"\n视频描述：{description}"
+
+        # P0-fix: 根据模型选择正确的 base64 格式
+        # 智谱GLM：直接传纯 base64 字符串（无前缀）
+        # 通义千问：官方推荐用帧列表，直接 base64 视频不稳定，此处尝试 data URI
+        model_lower = self.video_model.lower()
+
+        if 'glm' in model_lower or 'bigmodel' in self.multimodal_api_base.lower():
+            # 智谱GLM 格式：纯 base64 字符串，无 data URI 前缀
+            user_content = [
+                {"type": "text", "text": context},
+                {
+                    "type": "video_url",
+                    "video_url": {"url": video_base64}  # 直接传 base64，无前缀
+                }
+            ]
+        elif 'qwen' in model_lower:
+            # 通义千问：尝试 data URI 格式（可能不稳定，有降级机制）
+            user_content = [
+                {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video/mp4;base64,{video_base64}"}
+                },
+                {"type": "text", "text": context}
+            ]
+        else:
+            # 其他模型：尝试 data URI 格式
+            user_content = [
+                {"type": "text", "text": context},
+                {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video/mp4;base64,{video_base64}"}
+                }
+            ]
+
+        return [
+            {"role": "system", "content": "你是一个专业的视频内容分析师。"},
+            {"role": "user", "content": user_content}
+        ]
+
     async def _analyze_video_directly(
         self,
         video_url: str,
         prompt: str,
         title: str,
         description: str,
-        max_tokens: int
+        max_tokens: int,
+        note_id: str = None,
+        backup_urls: List[Dict[str, Any]] = None
     ) -> str:
         """
-        直接分析视频内容
+        直接分析视频内容（带并发控制和proxy模式支持）
+
+        P0-1: 支持 url/proxy 两种模式
+        P0-3: 使用 video_semaphore 控制并发
+        P1-download: 支持共享下载管理器（避免重复下载）
 
         Args:
             video_url: 视频URL
@@ -526,19 +696,104 @@ class VideoAIAnalyzer:
             title: 视频标题
             description: 视频描述
             max_tokens: 最大输出token数
+            note_id: 笔记ID（用于生成稳定缓存键）
+            backup_urls: 备选视频URL列表
 
         Returns:
             分析结果
         """
-        # 构建包含视频的消息
-        messages = self._build_video_messages(video_url, prompt, title, description)
+        # P0-3: 使用 semaphore 限制视频分析并发
+        async with self.video_semaphore:
+            logger.debug(f"🔒 获取视频分析锁，当前模式: {self.video_source_mode}")
 
-        # 调用AI API
-        return await self._call_ai_api(
-            messages=messages,
-            model=self.vision_model,
-            max_tokens=max_tokens
-        )
+            # P0-1: 根据 VIDEO_SOURCE_MODE 选择处理方式
+            if self.video_source_mode == 'proxy':
+                # proxy 模式：本地下载（带Referer）→ base64传给模型
+                logger.info(f"📥 proxy模式：下载视频并转base64...")
+
+                # P1-download: 优先使用共享下载管理器（支持与AVSync共享下载）
+                if self.download_manager:
+                    video_data, error = await self._download_via_manager(
+                        video_url, backup_urls, note_id
+                    )
+                else:
+                    # 回退到独立下载方法（向后兼容）
+                    video_data, error = await self._download_video_with_referer(video_url)
+
+                if error:
+                    logger.warning(f"⚠️ proxy下载失败: {error}，回退到URL模式")
+                    # 回退到URL模式
+                    messages = self._build_video_messages(video_url, prompt, title, description)
+                else:
+                    # 转base64并构建消息
+                    video_base64 = self._video_to_base64(video_data)
+                    logger.info(f"✅ base64编码完成，长度: {len(video_base64)//1024}KB")
+                    messages = self._build_video_messages_with_base64(
+                        video_base64, prompt, title, description
+                    )
+                    # 立即释放视频数据内存
+                    del video_data
+                    del video_base64
+
+            else:
+                # url 模式：直接使用原始URL（默认）
+                messages = self._build_video_messages(video_url, prompt, title, description)
+
+            # 调用AI API
+            return await self._call_ai_api(
+                messages=messages,
+                model=self.video_model,
+                max_tokens=max_tokens
+            )
+
+    async def _download_via_manager(
+        self,
+        video_url: str,
+        backup_urls: List[Dict[str, Any]] = None,
+        note_id: str = None
+    ) -> Tuple[Optional[bytes], Optional[str]]:
+        """
+        通过共享下载管理器获取视频数据（P1-download）
+
+        使用 VideoDownloadManager 实现下载共享，避免同一视频被重复下载。
+        当 AVSyncAnalyzer 也在分析同一视频时，两者共用同一份下载文件。
+
+        Args:
+            video_url: 视频URL
+            backup_urls: 备选URL列表
+            note_id: 笔记ID（用于生成稳定缓存键）
+
+        Returns:
+            (视频二进制数据, 错误信息) - 成功时错误信息为None
+        """
+        try:
+            # 通过管理器获取视频（require_bytes=True 表示需要 bytes 数据）
+            handle = await self.download_manager.acquire(
+                url=video_url,
+                backup_urls=backup_urls,
+                require_file=False,   # AI分析不需要本地文件路径
+                require_bytes=True,   # 需要 bytes 用于 base64 编码
+                note_id=note_id
+            )
+
+            if handle.bytes_data:
+                logger.info(f"✅ 通过共享管理器获取视频: {handle.size_bytes/1024/1024:.1f}MB, 缓存={handle.is_cached}")
+                # 立即释放引用（bytes 已拷贝到 handle 中）
+                self.download_manager.release(video_url, note_id)
+                return handle.bytes_data, None
+            else:
+                self.download_manager.release(video_url, note_id)
+                return None, "下载管理器返回空数据"
+
+        except Exception as e:
+            error_msg = f"下载管理器异常: {type(e).__name__}: {str(e)}"
+            logger.warning(error_msg)
+            # 确保释放引用
+            try:
+                self.download_manager.release(video_url, note_id)
+            except Exception:
+                pass
+            return None, error_msg
 
     async def _analyze_video_metadata(
         self,
@@ -741,15 +996,35 @@ class VideoAIAnalyzer:
                             error_text = await response.text()
                             logger.error(f"API调用失败: {response.status} - {error_text}")
                             return f"API调用失败: {response.status}"
+            except asyncio.TimeoutError as e:
+                # P0-2: 超时异常单独处理，可重试
+                timeout_val = 60  # 与 ClientTimeout(total=60) 一致
+                last_error = f"timeout_{timeout_val}s"
+                logger.error(f"API调用超时: {timeout_val}s | {type(e).__name__}")
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3
+                    logger.warning(f"超时重试，第{attempt + 1}次，等待{wait_time}秒...")
+                    await asyncio.sleep(wait_time)
+                continue
+            except aiohttp.ClientError as e:
+                # P0-2: 网络异常单独处理，可重试
+                last_error = f"network_{type(e).__name__}"
+                logger.error(f"API网络异常: {type(e).__name__}: {repr(e)}")
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3
+                    logger.warning(f"网络异常重试，第{attempt + 1}次，等待{wait_time}秒...")
+                    await asyncio.sleep(wait_time)
+                continue
             except Exception as e:
-                last_error = str(e)
+                # P0-2: 其他异常，记录详细信息
+                last_error = f"{type(e).__name__}: {repr(e)}"
                 if '429' in str(e) or '1302' in str(e):
                     wait_time = (2 ** attempt) * 5
                     logger.warning(f"API限流，第{attempt + 1}次重试，等待{wait_time}秒...")
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f"API调用异常: {e}")
-                    return f"API调用异常: {e}"
+                    logger.error(f"API调用异常: {type(e).__name__}: {repr(e)}")
+                    return f"API调用异常: {type(e).__name__}"
 
         # 所有重试都失败
         logger.error(f"API调用失败，已重试{max_retries}次: {last_error}")
@@ -797,7 +1072,8 @@ class VideoAIAnalyzer:
                         item.get('prompt'),
                         item.get('title'),
                         item.get('description'),
-                        video_urls=item.get('video_urls', [])  # 传递备选URL列表
+                        video_urls=item.get('video_urls', []),  # 传递备选URL列表
+                        note_id=item.get('note_id')  # 传递笔记ID用于下载共享
                     )
                 else:
                     continue

@@ -21,9 +21,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 5000
+# 爆文分析Web应用端口
+EXPOSE 8000
 
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
 
-CMD ["python", "main.py"] 
+# 启动爆文分析Web应用
+CMD ["python", "viral_app.py"] 

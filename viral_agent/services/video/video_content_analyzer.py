@@ -1,47 +1,52 @@
 """
-视频产品深度分析器
-扩展版的产品分析服务，支持12个数据点（A-L）
-与原有的video_timeline_analyzer并行工作，提供更细致的产品植入分析
+视频内容质量分析器
+对标图文笔记的4维分析：开场钩子/结构/情感/收尾
+需要AI视觉模型（如qwen-vl、glm-4v）观看视频进行分析
 """
 
 import asyncio
 from typing import Dict, List, Any, Optional
 from loguru import logger
 
-from viral_agent.prompts.video_product_prompts import (
-    get_product_analysis_prompt,
-    parse_product_analysis,
-    extract_product_features
+from viral_agent.prompts.video_content_prompts import (
+    get_content_analysis_prompt,
+    parse_content_analysis,
+    extract_content_features,
+    get_quick_analysis_prompt,
+    parse_quick_analysis
 )
-from viral_agent.services.video_product_stats import (
-    ProductStatsGenerator,
+from viral_agent.services.video.video_content_stats import (
+    ContentStatsGenerator,
     get_default_analysis,
     get_empty_stats
 )
 
 
-class VideoProductAnalyzer:
+class VideoContentAnalyzer:
     """
-    视频产品深度分析器
+    视频内容质量分析器
 
-    支持12个数据点的完整产品分析：
-    - 时间维度 A-C：产品出现时间、使用时间、干货开始时间
-    - 分类维度 D-G：内容类型、切入点、引出方式、植入方式
-    - 营销维度 H-L：营销场景、提及次数、品牌可见性、CTA类型、CTA时间
+    分析4个核心维度：
+    1. 开场钩子：类型、强度、视觉冲击
+    2. 内容结构：结构类型、节奏、转场
+    3. 情感节奏：情感曲线、共鸣点、信任建立
+    4. 收尾引导：CTA类型、时机、记忆点
     """
 
-    def __init__(self, ai_analyzer=None):
+    def __init__(self, ai_analyzer=None, quick_mode: bool = False):
         """
-        初始化产品分析器
+        初始化内容质量分析器
 
         Args:
-            ai_analyzer: AI分析器实例（需要支持视频分析）
+            ai_analyzer: AI视觉分析器实例（需要支持视频分析）
+            quick_mode: 是否使用快速分析模式（降低成本但精度略低）
         """
         self.ai_analyzer = ai_analyzer
+        self.quick_mode = quick_mode
         self.analysis_cache = {}
-        self.stats_generator = ProductStatsGenerator()
+        self.stats_generator = ContentStatsGenerator()
 
-    async def analyze_product(
+    async def analyze_content(
         self,
         video_url: str,
         title: str = None,
@@ -49,7 +54,7 @@ class VideoProductAnalyzer:
         duration: int = None
     ) -> Dict[str, Any]:
         """
-        分析单个视频的产品植入策略
+        分析单个视频的内容质量
 
         Args:
             video_url: 视频URL
@@ -58,26 +63,29 @@ class VideoProductAnalyzer:
             duration: 视频时长（秒）
 
         Returns:
-            产品分析结果（12个数据点）
+            内容质量分析结果
         """
         try:
             # 检查缓存
-            cache_key = f"product_{video_url}_{title}"
+            cache_key = f"content_{video_url}_{title}"
             if cache_key in self.analysis_cache:
                 return self.analysis_cache[cache_key]
 
             # 如果没有AI分析器，返回默认结果
             if not self.ai_analyzer:
-                logger.warning("AI分析器未配置，使用默认产品分析")
+                logger.warning("AI视觉分析器未配置，使用默认分析")
                 return get_default_analysis()
 
-            # 获取基础提示词
-            base_prompt = get_product_analysis_prompt(
-                video_url=video_url,
-                title=title,
-                description=description,
-                duration=duration
-            )
+            # 根据模式选择基础提示词
+            if self.quick_mode:
+                base_prompt = get_quick_analysis_prompt(title)
+            else:
+                base_prompt = get_content_analysis_prompt(
+                    video_url=video_url,
+                    title=title,
+                    description=description,
+                    duration=duration
+                )
 
             # 使用知识库增强提示词（RAG + JSON配置）
             if hasattr(self.ai_analyzer, 'enhance_prompt_with_knowledge'):
@@ -85,9 +93,9 @@ class VideoProductAnalyzer:
                     base_prompt=base_prompt,
                     title=title or "",
                     description=description or "",
-                    query=f"{title} 产品植入方式 产品引出技巧 营销场景 品牌露出"
+                    query=f"{title} 视频开场钩子 内容结构 情感节奏 收尾引导"
                 )
-                logger.debug("产品分析提示词已使用知识库增强")
+                logger.debug("内容分析提示词已使用知识库增强")
             else:
                 prompt = base_prompt
 
@@ -99,12 +107,16 @@ class VideoProductAnalyzer:
                 description=description
             )
 
-            # 解析结果（12个数据点）
-            analysis = parse_product_analysis(result)
+            # 解析结果
+            if self.quick_mode:
+                analysis = parse_quick_analysis(result)
+                analysis = {'success': True, 'data': analysis, 'mode': 'quick'}
+            else:
+                analysis = parse_content_analysis(result)
 
             # 提取特征
             if analysis.get('success'):
-                features = extract_product_features(analysis)
+                features = extract_content_features(analysis)
                 analysis['features'] = features
 
             # 保存原始AI分析结果
@@ -116,7 +128,7 @@ class VideoProductAnalyzer:
             return analysis
 
         except Exception as e:
-            logger.error(f"视频产品分析失败: {e}")
+            logger.error(f"视频内容分析失败: {e}")
             return get_default_analysis(error=str(e))
 
     async def analyze_batch(
@@ -125,7 +137,7 @@ class VideoProductAnalyzer:
         max_concurrent: int = 3
     ) -> Dict[str, Any]:
         """
-        批量分析视频产品植入策略
+        批量分析视频内容质量
 
         Args:
             notes: 视频笔记列表
@@ -134,7 +146,7 @@ class VideoProductAnalyzer:
         Returns:
             批量分析结果和统计
         """
-        logger.info(f"开始批量分析 {len(notes)} 个视频的产品策略...")
+        logger.info(f"开始批量分析 {len(notes)} 个视频的内容质量...")
 
         # 筛选视频笔记
         video_notes = [
@@ -153,7 +165,7 @@ class VideoProductAnalyzer:
 
         async def analyze_with_semaphore(note):
             async with semaphore:
-                return await self.analyze_product(
+                return await self.analyze_content(
                     video_url=note.get('video_addr'),
                     title=note.get('title'),
                     description=note.get('desc'),
@@ -201,7 +213,7 @@ class VideoProductAnalyzer:
             for i in range(len(video_notes))
         ]
 
-        logger.success(f"产品分析完成：成功 {len(valid_analyses)}/{len(video_notes)} 个")
+        logger.success(f"内容分析完成：成功 {len(valid_analyses)}/{len(video_notes)} 个")
 
         return stats
 

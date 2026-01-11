@@ -15,18 +15,18 @@ import nest_asyncio
 nest_asyncio.apply()
 
 from viral_agent.models.viral_note import ViralNote, ViralAnalysisResult
-from viral_agent.services.feature_extractor import ViralFeatureExtractor
-from viral_agent.services.product_analyzer import ProductAnalyzer
-from viral_agent.services.multimodal_analyzer import MultimodalAnalyzer
-from viral_agent.services.synthesis_service import SynthesisService
+from viral_agent.services.core.feature_extractor import ViralFeatureExtractor
+from viral_agent.services.image.product_analyzer import ProductAnalyzer
+from viral_agent.services.image.multimodal_analyzer import MultimodalAnalyzer
+from viral_agent.services.export.synthesis_service import SynthesisService
 
-# 新增视频分析服务（阶段6工作流优化）
-from viral_agent.services.video_content_analyzer import VideoContentAnalyzer
-from viral_agent.services.video_product_analyzer import VideoProductAnalyzer
-from viral_agent.services.video_ai_analyzer import VideoAIAnalyzer
+# 视频分析服务
+from viral_agent.services.video.video_content_analyzer import VideoContentAnalyzer
+from viral_agent.services.video.video_product_analyzer import VideoProductAnalyzer
+from viral_agent.services.video.video_ai_analyzer import VideoAIAnalyzer
 
-# 新增场景方向分析服务
-from viral_agent.services.scene_analyzer import SceneAnalyzer
+# 场景方向分析服务
+from viral_agent.services.image.scene_analyzer import SceneAnalyzer
 
 # 加载环境变量
 load_dotenv()
@@ -194,7 +194,8 @@ class ViralAnalyzer:
         notes: List[ViralNote],
         keyword: str,
         threshold: int = 5000,
-        analysis_type: str = "all"
+        analysis_type: str = "all",
+        video_source_mode: Optional[str] = None
     ) -> ViralAnalysisResult:
         """
         分析爆款笔记并生成爆文模型
@@ -204,10 +205,13 @@ class ViralAnalyzer:
             keyword: 搜索关键词
             threshold: 互动阈值
             analysis_type: 分析类型 ("image"=仅图文, "video"=仅视频, "all"=全部)
+            video_source_mode: 视频源模式 ("url"=URL直传, "proxy"=本地下载)，None使用环境变量
 
         Returns:
             分析结果
         """
+        # 保存视频源模式供后续使用
+        self._video_source_mode = video_source_mode
         logger.info(f"开始分析 {len(notes)} 篇爆款笔记，分析类型: {analysis_type}")
 
         # 根据分析类型筛选笔记
@@ -305,7 +309,10 @@ class ViralAnalyzer:
             if video_notes:
                 logger.info(f"✅ 检测到 {len(video_notes)} 个视频笔记，准备进行AI深度分析...")
                 try:
-                    video_ai_insights = self._analyze_videos_with_ai(video_notes)
+                    video_ai_insights = self._analyze_videos_with_ai(
+                        video_notes,
+                        video_source_mode=self._video_source_mode
+                    )
                     viral_model['video_ai_insights'] = video_ai_insights
                     logger.success(f"视频AI深度分析完成")
                 except Exception as e:
@@ -656,7 +663,7 @@ class ViralAnalyzer:
             知识检索结果
         """
         try:
-            from viral_agent.services.knowledge_retriever import UnifiedKnowledgeRetriever
+            from viral_agent.services.knowledge.knowledge_retriever import UnifiedKnowledgeRetriever
 
             retriever = UnifiedKnowledgeRetriever(enable_rag=True)
 
@@ -964,22 +971,30 @@ class ViralAnalyzer:
 
         return factors[:3]
 
-    def _analyze_videos_with_ai(self, video_notes: List[ViralNote]) -> Dict[str, Any]:
+    def _analyze_videos_with_ai(
+        self,
+        video_notes: List[ViralNote],
+        video_source_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         使用AI深度分析视频笔记（集成VideoEnhancedAnalyzer，包含封面、标题、时间轴分析）
 
         Args:
             video_notes: 视频笔记列表
+            video_source_mode: 视频源模式 ("url"=URL直传, "proxy"=本地下载)
 
         Returns:
             视频AI分析结果（包含细粒度分析）
         """
-        from viral_agent.services.video_enhanced_analyzer import VideoEnhancedAnalyzer
+        from viral_agent.services.video.video_enhanced_analyzer import VideoEnhancedAnalyzer
         import asyncio
 
         try:
             # 使用增强型视频分析器（集成封面、标题、时间轴分析）
-            analyzer = VideoEnhancedAnalyzer(enable_ai=True)
+            analyzer = VideoEnhancedAnalyzer(
+                enable_ai=True,
+                video_source_mode=video_source_mode
+            )
 
             # 检查是否支持视频分析
             if not analyzer.ai_analyzer or not analyzer.ai_analyzer._supports_video():
