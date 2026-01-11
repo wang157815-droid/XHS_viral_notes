@@ -475,7 +475,7 @@ async def export_latest(format: str = "excel", username: str = Depends(verify_to
         return JSONResponse(content=data)
 
     elif format == "excel":
-        from viral_agent.services.export_service import export_to_excel
+        from viral_agent.services.export.export_service import export_to_excel
 
         try:
             excel_file = export_to_excel(str(latest_file))
@@ -628,7 +628,7 @@ async def export_results(
 
     elif format == "excel":
         # 生成Excel报告
-        from viral_agent.services.export_service import export_to_excel
+        from viral_agent.services.export.export_service import export_to_excel
 
         # 优先使用分析文件，如果没有则使用原始数据文件
         analysis_file = task_status[task_id].get("analysis_file")
@@ -1419,11 +1419,15 @@ if __name__ == "__main__":
     os.makedirs("web/templates", exist_ok=True)
 
     # 启动服务
-    logger.info("启动小红书爆文Agent服务...")
+    # 生产环境：设置 PRODUCTION=true 禁用热重载
+    is_production = os.getenv("PRODUCTION", "false").lower() == "true"
+    logger.info(f"启动小红书爆文Agent服务... (生产模式: {is_production})")
+
     uvicorn.run(
         "viral_app:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        log_level="info"
+        reload=not is_production,  # 生产环境禁用热重载
+        log_level="info",
+        workers=1 if not is_production else 2  # 生产环境使用多worker
     )
