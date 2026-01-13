@@ -24,8 +24,8 @@ from viral_agent.services.core.viral_analyzer import ViralAnalyzer
 
 # 导出服务
 from viral_agent.services.export.export_service import (
-    ExportService,
-    export_to_excel
+    export_to_excel,
+    export_raw_data_to_excel
 )
 
 # 视频分析服务
@@ -56,8 +56,8 @@ __all__ = [
     'ViralFeatureExtractor',
     'ViralAnalyzer',
     # 导出服务
-    'ExportService',
     'export_to_excel',
+    'export_raw_data_to_excel',
     # 视频分析
     'VideoEnhancedAnalyzer',
     'VideoAIAnalyzer',
