@@ -1462,7 +1462,7 @@
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    addKeyword(input.value.trim());
+                    addSearchKeyword(input.value.trim());
                     input.value = '';
                 }
             });
@@ -1470,7 +1470,7 @@
             // 失焦时也尝试添加
             input.addEventListener('blur', () => {
                 if (input.value.trim()) {
-                    addKeyword(input.value.trim());
+                    addSearchKeyword(input.value.trim());
                     input.value = '';
                 }
             });
@@ -1481,11 +1481,11 @@
             });
 
             // 初始化时添加一个默认关键词
-            addKeyword('防脱精华');
+            addSearchKeyword('防脱精华');
         }
 
-        // 添加关键词
-        function addKeyword(keyword) {
+        // 添加搜索关键词
+        function addSearchKeyword(keyword) {
             if (!keyword) return;
             if (keywordList.length >= MAX_KEYWORDS) {
                 alert(`最多只能添加 ${MAX_KEYWORDS} 个关键词`);
@@ -2159,7 +2159,7 @@
                             </div>
                             <div class="input-group input-group-sm">
                                 <input type="text" class="form-control" id="newKeyword" placeholder="添加新关键词">
-                                <button type="button" class="btn btn-outline-primary" onclick="addKeyword('${domain.id}')">
+                                <button type="button" class="btn btn-outline-primary" onclick="addDomainKeyword('${domain.id}')">
                                     <i class="fas fa-plus"></i>
                                 </button>
                             </div>
@@ -2229,7 +2229,7 @@
             }
         }
 
-        async function addKeyword(domainId) {
+        async function addDomainKeyword(domainId) {
             const keyword = document.getElementById('newKeyword').value.trim();
             if (!keyword) return;
 
