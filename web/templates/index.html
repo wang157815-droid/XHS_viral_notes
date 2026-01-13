@@ -391,6 +391,150 @@
             color: white;
         }
 
+        /* ==================== 多关键词标签输入样式 ==================== */
+        .keyword-tags-container {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: white;
+            min-height: 50px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .keyword-tags-container:focus-within {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+        }
+
+        .keyword-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .keyword-tag-item {
+            display: inline-flex;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+            animation: tagEnter 0.2s ease;
+        }
+
+        @keyframes tagEnter {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .keyword-tag-item .tag-text {
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .keyword-tag-item .tag-remove {
+            margin-left: 8px;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+            font-size: 0.85em;
+        }
+
+        .keyword-tag-item .tag-remove:hover {
+            opacity: 1;
+        }
+
+        .keyword-input {
+            flex: 1;
+            min-width: 150px;
+            border: none;
+            outline: none;
+            padding: 6px 10px;
+            font-size: 0.95em;
+            background: transparent;
+        }
+
+        .keyword-input::placeholder {
+            color: #aaa;
+        }
+
+        /* 样本量预估条 */
+        .sample-estimate-bar {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 10px 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .sample-warning {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* 关键词进度显示 */
+        .keyword-progress-list {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .keyword-progress-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .keyword-progress-item:last-child {
+            border-bottom: none;
+        }
+
+        .keyword-progress-item .kw-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .keyword-progress-item .kw-status {
+            font-size: 0.85em;
+            padding: 3px 10px;
+            border-radius: 12px;
+        }
+
+        .keyword-progress-item .kw-status.pending {
+            background: #e9ecef;
+            color: #666;
+        }
+
+        .keyword-progress-item .kw-status.running {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .keyword-progress-item .kw-status.done {
+            background: #d4edda;
+            color: #155724;
+        }
+
         /* 结果区域 */
         #resultsSection {
             display: none;
@@ -634,22 +778,34 @@
                 </div>
                 <div class="card-body">
                     <form id="searchForm">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">搜索关键词</label>
-                                    <input type="text" class="form-control" id="keyword" value="防脱精华" required>
+                        <!-- 多关键词输入区域 -->
+                        <div class="mb-3">
+                            <label class="form-label">
+                                搜索关键词 <span class="badge bg-info">支持多个</span>
+                                <small class="text-muted ms-2">（最多5个，多关键词可扩大样本范围）</small>
+                            </label>
+                            <div class="keyword-tags-container" id="keywordTagsContainer">
+                                <div class="keyword-tags" id="keywordTags">
+                                    <!-- 动态添加的关键词标签 -->
                                 </div>
+                                <input type="text" class="keyword-input" id="keywordInput"
+                                       placeholder="输入关键词，按回车添加" maxlength="30">
                             </div>
-                            <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <small class="text-muted">
+                                    <i class="fas fa-lightbulb"></i> 提示：如「巧克力」样本不足，可添加「北欧」「Fazer」扩大范围
+                                </small>
+                                <small class="text-muted" id="keywordCount">已添加: 0/5</small>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4">
                                 <div class="mb-3">
                                     <label class="form-label">目标数量（三维度总和）</label>
                                     <input type="number" class="form-control" id="targetCount" value="100" min="30" max="500">
                                     <small class="text-muted">将从点赞/评论/收藏三个维度并行爬取</small>
                                 </div>
                             </div>
-                        </div>
-                        <div class="row">
                             <div class="col-md-4">
                                 <div class="mb-3">
                                     <label class="form-label">爆款筛选比例</label>
@@ -663,6 +819,15 @@
                             </div>
                             <div class="col-md-4">
                                 <div class="mb-3">
+                                    <label class="form-label">最低分析样本量</label>
+                                    <input type="number" class="form-control" id="minSampleCount" value="50" min="10" max="200">
+                                    <small class="text-muted">低于此数量将显示警告</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
                                     <label class="form-label">笔记类型</label>
                                     <select class="form-select" id="noteType">
                                         <option value="0">不限</option>
@@ -671,7 +836,7 @@
                                     </select>
                                 </div>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">时间范围</label>
                                     <select class="form-select" id="timeRange">
@@ -683,8 +848,20 @@
                                 </div>
                             </div>
                         </div>
+                        <!-- 样本量预估显示 -->
+                        <div class="sample-estimate-bar mb-3" id="sampleEstimateBar" style="display: none;">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-calculator me-2"></i>
+                                <span>预估筛选后样本量：</span>
+                                <span class="fw-bold ms-1" id="estimatedSample">--</span>
+                                <span class="sample-warning ms-3" id="sampleWarning" style="display: none;">
+                                    <i class="fas fa-exclamation-triangle text-warning"></i>
+                                    <span class="text-warning">建议增加关键词</span>
+                                </span>
+                            </div>
+                        </div>
                         <div class="text-center">
-                            <button type="submit" class="btn btn-primary btn-lg">
+                            <button type="submit" class="btn btn-primary btn-lg" id="startSearchBtn">
                                 <i class="fas fa-rocket"></i> 开始采集分析
                             </button>
                         </div>
@@ -1271,22 +1448,162 @@
             loadDomains();
         }
 
+        // ==================== 多关键词管理 ====================
+
+        const keywordList = [];  // 存储关键词列表
+        const MAX_KEYWORDS = 5;
+
+        // 初始化多关键词输入
+        function initKeywordInput() {
+            const input = document.getElementById('keywordInput');
+            const tagsContainer = document.getElementById('keywordTags');
+
+            // 回车添加关键词
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addKeyword(input.value.trim());
+                    input.value = '';
+                }
+            });
+
+            // 失焦时也尝试添加
+            input.addEventListener('blur', () => {
+                if (input.value.trim()) {
+                    addKeyword(input.value.trim());
+                    input.value = '';
+                }
+            });
+
+            // 点击容器聚焦输入框
+            document.getElementById('keywordTagsContainer').addEventListener('click', () => {
+                input.focus();
+            });
+
+            // 初始化时添加一个默认关键词
+            addKeyword('防脱精华');
+        }
+
+        // 添加关键词
+        function addKeyword(keyword) {
+            if (!keyword) return;
+            if (keywordList.length >= MAX_KEYWORDS) {
+                alert(`最多只能添加 ${MAX_KEYWORDS} 个关键词`);
+                return;
+            }
+            if (keywordList.includes(keyword)) {
+                alert('该关键词已存在');
+                return;
+            }
+
+            keywordList.push(keyword);
+            renderKeywordTags();
+            updateKeywordCount();
+            updateSampleEstimate();
+        }
+
+        // 渲染关键词标签（使用 data-keyword 避免 inline onclick 的安全问题）
+        function renderKeywordTags() {
+            const container = document.getElementById('keywordTags');
+            container.innerHTML = keywordList.map((kw, index) => `
+                <span class="keyword-tag-item">
+                    <span class="tag-text">${escapeHtml(kw)}</span>
+                    <span class="tag-remove" data-keyword-index="${index}">&times;</span>
+                </span>
+            `).join('');
+        }
+
+        // 使用事件委托处理删除关键词（避免 inline onclick 的 XSS 和语法问题）
+        document.getElementById('keywordTags')?.addEventListener('click', (e) => {
+            const removeBtn = e.target.closest('.tag-remove');
+            if (removeBtn) {
+                const index = parseInt(removeBtn.dataset.keywordIndex, 10);
+                if (!isNaN(index) && index >= 0 && index < keywordList.length) {
+                    keywordList.splice(index, 1);
+                    renderKeywordTags();
+                    updateKeywordCount();
+                    updateSampleEstimate();
+                }
+            }
+        });
+
+        // 更新关键词计数
+        function updateKeywordCount() {
+            document.getElementById('keywordCount').textContent = `已添加: ${keywordList.length}/${MAX_KEYWORDS}`;
+        }
+
+        // 更新样本量预估
+        function updateSampleEstimate() {
+            const targetCount = parseInt(document.getElementById('targetCount').value) || 100;
+            const viralRatio = parseFloat(document.getElementById('viralRatio').value) || 0.5;
+            const minSampleCount = parseInt(document.getElementById('minSampleCount').value) || 50;
+
+            // 预估筛选后样本量
+            const estimatedAfterFilter = Math.floor(targetCount * viralRatio);
+
+            // 显示预估条
+            const estimateBar = document.getElementById('sampleEstimateBar');
+            const estimatedSpan = document.getElementById('estimatedSample');
+            const warningSpan = document.getElementById('sampleWarning');
+
+            if (keywordList.length > 0) {
+                estimateBar.style.display = 'block';
+                estimatedSpan.textContent = `约 ${estimatedAfterFilter} 篇`;
+
+                // 显示警告
+                if (estimatedAfterFilter < minSampleCount) {
+                    warningSpan.style.display = 'inline';
+                } else {
+                    warningSpan.style.display = 'none';
+                }
+            } else {
+                estimateBar.style.display = 'none';
+            }
+        }
+
+        // HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 监听相关表单变化
+        document.getElementById('targetCount')?.addEventListener('change', updateSampleEstimate);
+        document.getElementById('viralRatio')?.addEventListener('change', updateSampleEstimate);
+        document.getElementById('minSampleCount')?.addEventListener('change', updateSampleEstimate);
+
+        // 页面加载后初始化
+        setTimeout(initKeywordInput, 100);
+
         // ==================== 表单提交 ====================
 
         document.getElementById('searchForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
+            // 验证至少有一个关键词
+            if (keywordList.length === 0) {
+                alert('请至少输入一个搜索关键词');
+                return;
+            }
+
             const formData = {
-                keyword: document.getElementById('keyword').value,
+                keywords: keywordList,  // 使用关键词列表
                 target_count: parseInt(document.getElementById('targetCount').value),
                 viral_ratio: parseFloat(document.getElementById('viralRatio').value),
                 note_type: parseInt(document.getElementById('noteType').value),
-                time_range: parseInt(document.getElementById('timeRange').value)
+                time_range: parseInt(document.getElementById('timeRange').value),
+                min_sample_count: parseInt(document.getElementById('minSampleCount').value) || 50
             };
 
             document.getElementById('progressCard').style.display = 'block';
             document.getElementById('resultsSection').style.display = 'none';
             document.getElementById('targetCountDisplay').textContent = formData.target_count;
+
+            // 显示多关键词进度列表
+            if (keywordList.length > 1) {
+                showKeywordProgressList(keywordList);
+            }
 
             try {
                 const response = await authFetch('/api/viral/search', {
@@ -1305,6 +1622,33 @@
                 alert('启动任务失败：' + error.message);
             }
         });
+
+        // 显示多关键词进度列表
+        function showKeywordProgressList(keywords) {
+            const progressCard = document.getElementById('progressCard');
+            let listHtml = `
+                <div class="keyword-progress-list" id="keywordProgressList">
+                    <div class="mb-2 text-muted small">
+                        <i class="fas fa-tags"></i> 多关键词采集进度
+                    </div>
+            `;
+            keywords.forEach(kw => {
+                listHtml += `
+                    <div class="keyword-progress-item" data-keyword="${escapeHtml(kw)}">
+                        <span class="kw-name">${escapeHtml(kw)}</span>
+                        <span class="kw-status pending">等待中</span>
+                    </div>
+                `;
+            });
+            listHtml += '</div>';
+
+            // 添加到进度卡片
+            const existingList = document.getElementById('keywordProgressList');
+            if (existingList) {
+                existingList.remove();
+            }
+            progressCard.querySelector('.card-body').insertAdjacentHTML('beforeend', listHtml);
+        }
 
         // ==================== 状态轮询 ====================
 
@@ -1355,6 +1699,74 @@
                 document.getElementById('avgInteraction').textContent =
                     status.statistics.avg_interaction.toLocaleString();
             }
+
+            // 更新多关键词进度
+            if (status.status === 'completed') {
+                // 任务完成，标记所有关键词为已完成
+                markAllKeywordsCompleted();
+            } else if (status.current_keyword) {
+                updateKeywordProgress(status.current_keyword);
+            }
+
+            // 显示样本量警告
+            if (status.sample_warning && status.status === 'completed') {
+                showSampleWarning(status.sample_warning);
+            }
+        }
+
+        // 标记所有关键词为已完成
+        function markAllKeywordsCompleted() {
+            const list = document.getElementById('keywordProgressList');
+            if (!list) return;
+
+            const items = list.querySelectorAll('.keyword-progress-item');
+            items.forEach(item => {
+                const statusSpan = item.querySelector('.kw-status');
+                statusSpan.className = 'kw-status done';
+                statusSpan.textContent = '已完成';
+            });
+        }
+
+        // 更新关键词进度状态
+        function updateKeywordProgress(currentKeyword) {
+            const list = document.getElementById('keywordProgressList');
+            if (!list) return;
+
+            const items = list.querySelectorAll('.keyword-progress-item');
+            let foundCurrent = false;
+
+            items.forEach(item => {
+                const kwName = item.dataset.keyword;
+                const statusSpan = item.querySelector('.kw-status');
+
+                if (kwName === currentKeyword) {
+                    statusSpan.className = 'kw-status running';
+                    statusSpan.textContent = '采集中...';
+                    foundCurrent = true;
+                } else if (!foundCurrent) {
+                    // 在当前关键词之前的都已完成
+                    statusSpan.className = 'kw-status done';
+                    statusSpan.textContent = '已完成';
+                }
+            });
+        }
+
+        // 显示样本量警告
+        function showSampleWarning(warning) {
+            const existingWarning = document.getElementById('sampleWarningAlert');
+            if (existingWarning) existingWarning.remove();
+
+            const warningDiv = document.createElement('div');
+            warningDiv.id = 'sampleWarningAlert';
+            warningDiv.className = 'alert alert-warning mt-3';
+            warningDiv.innerHTML = `
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>样本量提醒</strong><br>
+                ${warning}
+            `;
+
+            const progressCard = document.getElementById('progressCard');
+            progressCard.querySelector('.card-body').appendChild(warningDiv);
         }
 
         function showResults(status) {

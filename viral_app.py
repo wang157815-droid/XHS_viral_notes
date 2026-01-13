@@ -74,8 +74,19 @@ task_status = {}
 # ==================== 请求模型定义 ====================
 
 class ViralSearchRequest(BaseModel):
-    """爆款搜索请求模型（并行多维度爬取）"""
-    keyword: str = Field(..., description="搜索关键词", json_schema_extra={"example": "防脱精华"})
+    """爆款搜索请求模型（支持多关键词并行采集）"""
+    # 多关键词支持（优先使用）
+    keywords: Optional[List[str]] = Field(
+        default=None,
+        description="搜索关键词列表（最多5个）",
+        json_schema_extra={"example": ["巧克力", "北欧", "Fazer"]}
+    )
+    # 单关键词（向后兼容）
+    keyword: Optional[str] = Field(
+        default=None,
+        description="搜索关键词（向后兼容，优先使用keywords）",
+        json_schema_extra={"example": "防脱精华"}
+    )
     target_count: int = Field(default=100, description="目标爬取数量（三维度总和）", ge=30, le=500)
     viral_ratio: float = Field(
         default=0.5,
@@ -85,6 +96,27 @@ class ViralSearchRequest(BaseModel):
     )
     note_type: int = Field(default=0, description="笔记类型：0不限 1视频 2图文")
     time_range: int = Field(default=0, description="时间范围：0不限 1一天内 2一周内 3半年内")
+    min_sample_count: int = Field(
+        default=50,
+        description="最低分析样本量（低于此数量将显示警告）",
+        ge=10,
+        le=200
+    )
+
+    def get_keywords(self) -> List[str]:
+        """获取关键词列表（兼容单关键词和多关键词模式）"""
+        if self.keywords:
+            # 限制最多5个关键词
+            return self.keywords[:5]
+        elif self.keyword:
+            return [self.keyword]
+        else:
+            return []
+
+    def model_post_init(self, __context) -> None:
+        """验证至少提供一个关键词"""
+        if not self.keywords and not self.keyword:
+            raise ValueError("必须提供至少一个关键词（keywords 或 keyword）")
 
 
 class AnalysisRequest(BaseModel):
@@ -325,21 +357,30 @@ async def start_viral_search(
     username: str = Depends(verify_token_and_password_changed)
 ):
     """
-    启动爆款笔记搜索任务
+    启动爆款笔记搜索任务（支持多关键词）
 
     Returns:
         任务ID和初始状态
     """
+    # 获取关键词列表
+    keywords = request.get_keywords()
+    if not keywords:
+        raise HTTPException(status_code=400, detail="必须提供至少一个关键词")
+
     # 生成任务ID
     task_id = f"viral_{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-    # 初始化任务状态
+    # 初始化任务状态（支持多关键词）
     task_status[task_id] = {
         "status": "running",
         "progress": 0,
         "collected": 0,
         "target": request.target_count,
-        "keyword": request.keyword,
+        "keywords": keywords,  # 关键词列表
+        "keyword": ", ".join(keywords),  # 兼容旧格式
+        "current_keyword": "",  # 当前正在采集的关键词
+        "keyword_progress": {kw: {"collected": 0, "status": "pending"} for kw in keywords},
+        "min_sample_count": request.min_sample_count,
         "message": "正在初始化...",
         "start_time": datetime.now().isoformat()
     }
@@ -348,17 +389,20 @@ async def start_viral_search(
     background_tasks.add_task(
         collect_viral_notes_task,
         task_id,
-        request.keyword,
+        keywords,
         request.target_count,
         request.viral_ratio,
         request.note_type,
-        request.time_range
+        request.time_range,
+        request.min_sample_count
     )
 
+    keyword_display = "、".join(keywords)
     return {
         "task_id": task_id,
         "status": "started",
-        "message": f"开始搜索'{request.keyword}'相关爆款笔记"
+        "keywords": keywords,
+        "message": f"开始搜索「{keyword_display}」相关爆款笔记"
     }
 
 
@@ -667,22 +711,24 @@ async def export_results(
 
 async def collect_viral_notes_task(
     task_id: str,
-    keyword: str,
+    keywords: List[str],
     target_count: int,
     viral_ratio: float,
     note_type: int,
-    time_range: int
+    time_range: int,
+    min_sample_count: int = 50
 ):
     """
-    后台任务：采集爆款笔记（并行多维度爬取）
+    后台任务：采集爆款笔记（支持多关键词）
 
     Args:
         task_id: 任务ID
-        keyword: 搜索关键词
+        keywords: 搜索关键词列表
         target_count: 目标爬取数量
         viral_ratio: 爆款比例
         note_type: 笔记类型
         time_range: 时间范围
+        min_sample_count: 最低样本量要求
     """
     try:
         # 更新状态
@@ -699,10 +745,18 @@ async def collect_viral_notes_task(
         # 创建采集器
         collector = ViralNoteCollector(cookies_str)
 
-        # 更新状态回调
-        def update_progress(collected, message=""):
-            task_status[task_id]["collected"] = collected
-            task_status[task_id]["progress"] = min(100, int(collected / target_count * 100))
+        # 更新状态回调（支持解析当前关键词）
+        def update_progress(progress_or_collected, message=""):
+            # 解析当前关键词
+            if message and "关键词" in message:
+                import re
+                match = re.search(r'关键词.*?:\s*(.+?)(?:\s|$)', message)
+                if match:
+                    task_status[task_id]["current_keyword"] = match.group(1)
+
+            # 更新进度
+            if isinstance(progress_or_collected, int) and progress_or_collected <= 100:
+                task_status[task_id]["progress"] = progress_or_collected
             if message:
                 task_status[task_id]["message"] = message
 
@@ -714,34 +768,66 @@ async def collect_viral_notes_task(
                     task_status[task_id]["statistics"] = {}
                 task_status[task_id]["statistics"]["avg_interaction"] = avg_interaction
 
-        # 开始采集（并行多维度爬取）
-        task_status[task_id]["message"] = f"开始并行爬取'{keyword}'相关笔记..."
+        keyword_display = "、".join(keywords)
 
-        notes = await collector.search_viral_notes(
-            query=keyword,
-            target_count=target_count,
-            viral_ratio=viral_ratio,
-            note_type=note_type,
-            time_range=time_range,
-            progress_callback=update_progress  # 传入进度回调
-        )
+        # 判断使用单关键词还是多关键词采集
+        if len(keywords) == 1:
+            # 单关键词模式（向后兼容）
+            task_status[task_id]["message"] = f"开始采集「{keywords[0]}」相关笔记..."
+            notes = await collector.search_viral_notes(
+                query=keywords[0],
+                target_count=target_count,
+                viral_ratio=viral_ratio,
+                note_type=note_type,
+                time_range=time_range,
+                progress_callback=update_progress
+            )
+        else:
+            # 多关键词模式
+            task_status[task_id]["message"] = f"开始多关键词采集「{keyword_display}」..."
+            notes = await collector.search_viral_notes_multi_keywords(
+                keywords=keywords,
+                target_count=target_count,
+                viral_ratio=viral_ratio,
+                note_type=note_type,
+                time_range=time_range,
+                min_sample_count=min_sample_count,
+                progress_callback=update_progress
+            )
 
         # 保存数据
         task_status[task_id]["message"] = "正在保存数据..."
         data_file = collector.save_collected_notes()
 
-        # 更新最终状态
+        # 获取统计信息
+        statistics = collector.get_statistics()
+
+        # 添加多关键词统计
+        if hasattr(collector, 'keyword_stats'):
+            statistics['keyword_distribution'] = collector.keyword_stats
+            statistics['multi_match_count'] = getattr(collector, 'multi_match_count', 0)
+
+        # 检查样本量是否充足
+        sample_warning = None
+        if len(notes) < min_sample_count:
+            sample_warning = f"⚠️ 样本量不足！当前 {len(notes)} 篇，最低要求 {min_sample_count} 篇。建议增加更多关键词。"
+
+        # 更新最终状态（清空 current_keyword 表示全部完成）
         task_status[task_id].update({
             "status": "completed",
             "progress": 100,
             "collected": len(notes),
-            "message": f"成功采集{len(notes)}篇爆款笔记",
+            "current_keyword": "",  # 清空，表示全部关键词采集完成
+            "message": f"成功采集 {len(notes)} 篇爆款笔记",
             "data_file": data_file,
             "end_time": datetime.now().isoformat(),
-            "statistics": collector.get_statistics()
+            "statistics": statistics,
+            "sample_warning": sample_warning
         })
 
-        logger.success(f"任务 {task_id} 完成，采集{len(notes)}篇爆款笔记")
+        logger.success(f"任务 {task_id} 完成，采集 {len(notes)} 篇爆款笔记")
+        if sample_warning:
+            logger.warning(sample_warning)
 
     except Exception as e:
         logger.error(f"任务 {task_id} 失败: {e}")
