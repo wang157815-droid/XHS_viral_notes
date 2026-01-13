@@ -15,9 +15,9 @@ from viral_agent.services.video.video_analyzer import VideoAnalyzer
 from viral_agent.services.video.video_cover_classifier import VideoCoverClassifier
 from viral_agent.services.video.video_title_classifier import VideoTitleClassifier
 from viral_agent.services.video.video_content_analyzer import VideoContentAnalyzer
-from viral_agent.services.video.video_content_stats import VideoContentStats
+from viral_agent.services.video.video_content_stats import ContentStatsGenerator as VideoContentStats
 from viral_agent.services.video.video_product_analyzer import VideoProductAnalyzer
-from viral_agent.services.video.video_product_stats import VideoProductStats
+from viral_agent.services.video.video_product_stats import ProductStatsGenerator as VideoProductStats
 
 __all__ = [
     'VideoEnhancedAnalyzer',
