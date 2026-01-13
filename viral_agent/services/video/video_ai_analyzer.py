@@ -66,9 +66,12 @@ class VideoAIAnalyzer:
         else:
             self.video_source_mode = os.getenv('VIDEO_SOURCE_MODE', 'url')  # url | proxy
         self.video_download_timeout = int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '60'))
-        # P2-fix-4: 考虑 base64 膨胀（约1.37倍），实际限制为配置值的 75%
+        # P2-fix-4: 考虑 base64 膨胀（约1.33倍）和 API 请求体限制（20MB）
+        # 通义千问等 API 有 20MB 字符串限制，15MB 视频 × 1.33 ≈ 20MB base64
         configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '50'))
-        self.video_max_size_mb = int(configured_max_mb * 0.75)  # 50MB 配置 → 37MB 实际限制
+        self._configured_limit = int(configured_max_mb * 0.75)  # 配置值的 75%
+        self._api_limit_mb = 15  # API 20MB 限制 / 1.33 base64膨胀 ≈ 15MB
+        self.video_max_size_mb = min(self._configured_limit, self._api_limit_mb)  # 取更严格的限制
 
         # 视频下载管理器（共享下载，避免重复）
         self.download_manager = download_manager
@@ -96,6 +99,7 @@ class VideoAIAnalyzer:
         logger.info(f"视频分析模式: {self.video_analysis_mode}")
         logger.info(f"视频模型: {self.video_model}")
         logger.info(f"视频源处理: {self.video_source_mode} ({mode_source}), 并发限制: {max_concurrent}")
+        logger.info(f"视频大小限制: {self.video_max_size_mb}MB (配置={self._configured_limit}MB, API限制={self._api_limit_mb}MB)")
 
     def _init_knowledge_retriever(self):
         """初始化知识检索器"""
@@ -553,6 +557,38 @@ class VideoAIAnalyzer:
 
         return is_capable
 
+    async def _estimate_video_size(self, url: str) -> Optional[float]:
+        """
+        HEAD 请求预估视频大小（MB）
+
+        用于在下载前快速判断视频是否过大，避免浪费带宽和时间
+
+        Args:
+            url: 视频URL
+
+        Returns:
+            视频大小（MB），预估失败返回 None
+        """
+        headers = {
+            'Referer': 'https://www.xiaohongshu.com/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)  # 快速超时
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.head(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        content_length = resp.headers.get('Content-Length')
+                        if content_length:
+                            size_mb = int(content_length) / 1024 / 1024
+                            return size_mb
+                    # 某些 CDN 不支持 HEAD，尝试 GET 但只读取少量数据
+                    return None
+        except Exception as e:
+            logger.debug(f"视频大小预估失败: {e}")
+            return None  # 预估失败不影响后续流程
+
     async def _download_video_with_referer(
         self,
         video_url: str
@@ -710,6 +746,21 @@ class VideoAIAnalyzer:
             if self.video_source_mode == 'proxy':
                 # proxy 模式：本地下载（带Referer）→ base64传给模型
                 logger.info(f"📥 proxy模式：下载视频并转base64...")
+
+                # P2-fix: 智能降级 - 预检视频大小，超过阈值自动降级到 URL 模式
+                estimated_size = await self._estimate_video_size(video_url)
+                if estimated_size and estimated_size > self.video_max_size_mb:
+                    logger.warning(
+                        f"⚠️ 视频预估 {estimated_size:.1f}MB > {self.video_max_size_mb}MB，"
+                        f"自动降级到 URL 模式（避免下载失败和 API 超限）"
+                    )
+                    # 直接使用 URL 模式，跳过下载
+                    messages = self._build_video_messages(video_url, prompt, title, description)
+                    return await self._call_ai_api(
+                        messages=messages,
+                        model=self.video_model,
+                        max_tokens=max_tokens
+                    )
 
                 # P1-download: 优先使用共享下载管理器（支持与AVSync共享下载）
                 if self.download_manager:

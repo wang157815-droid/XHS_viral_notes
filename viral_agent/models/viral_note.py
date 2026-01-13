@@ -46,6 +46,9 @@ class ViralNote:
     video_cover: Optional[str] = None
     video_urls: List[Dict[str, Any]] = field(default_factory=list)  # 新增：多源视频URL列表
 
+    # 来源追踪（多关键词检索）
+    source_keywords: List[str] = field(default_factory=list)  # 匹配到该笔记的关键词列表
+
     # 计算属性（有默认值）
     interaction_score: int = 0
 
@@ -166,7 +169,8 @@ class ViralNote:
             image_list=image_list,
             video_addr=note_data.get('video_addr'),
             video_cover=video_cover,
-            video_urls=note_data.get('video_urls', []),  # 新增：多源视频URL列表
+            video_urls=note_data.get('video_urls', []),  # 多源视频URL列表
+            source_keywords=note_data.get('source_keywords', []),  # 来源关键词列表
             upload_time=note_data.get('upload_time', ''),
             ip_location=note_data.get('ip_location', '')
         )

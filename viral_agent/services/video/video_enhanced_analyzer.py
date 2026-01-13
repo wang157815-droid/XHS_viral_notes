@@ -74,13 +74,19 @@ class VideoEnhancedAnalyzer:
 
         if need_download and DOWNLOAD_MANAGER_AVAILABLE:
             try:
+                # P2-fix: 统一大小限制计算，考虑 API 20MB 请求体限制
+                # base64 膨胀约 1.33 倍，所以原始视频不能超过 15MB
+                configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '50'))
+                api_limit_mb = 15  # 20MB API 限制 / 1.33 base64 膨胀
+                effective_max_mb = min(int(configured_max_mb * 0.75), api_limit_mb)
+
                 self.download_manager = VideoDownloadManager(
                     cache_dir=os.path.join("datas", "video_cache"),
-                    max_size_mb=int(os.getenv('VIDEO_MAX_SIZE_MB', '50')),
+                    max_size_mb=effective_max_mb,  # 使用统一的限制值
                     download_timeout=int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '60')),
                     max_concurrent=int(os.getenv('VIDEO_MAX_CONCURRENT', '2'))
                 )
-                logger.info("✅ 视频下载管理器已创建（共享下载模式）")
+                logger.info(f"✅ 视频下载管理器已创建（共享下载模式，限制={effective_max_mb}MB）")
             except Exception as e:
                 logger.warning(f"视频下载管理器创建失败，将使用独立下载: {e}")
                 self.download_manager = None

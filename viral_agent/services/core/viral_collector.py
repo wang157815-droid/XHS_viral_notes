@@ -111,6 +111,230 @@ class ViralNoteCollector:
     #     """判断是否为爆款笔记（已废弃，保留供参考）"""
     #     pass
 
+    async def search_viral_notes_multi_keywords(
+        self,
+        keywords: List[str],
+        target_count: int = 100,
+        viral_ratio: float = 0.5,
+        note_type: int = 0,
+        time_range: int = 0,
+        min_sample_count: int = 50,
+        progress_callback: Optional[Callable[[int, str], None]] = None
+    ) -> List[ViralNote]:
+        """
+        多关键词并行采集爆款笔记
+
+        策略：
+        1. 遍历每个关键词，执行三维度采集
+        2. 所有关键词的结果合并去重（记录来源关键词）
+        3. 按互动分数排序
+        4. 应用爆款比例筛选
+        5. 校验最终样本量
+
+        Args:
+            keywords: 搜索关键词列表（最多5个）
+            target_count: 目标爬取总数量
+            viral_ratio: 爆款比例
+            note_type: 笔记类型
+            time_range: 时间范围
+            min_sample_count: 最低样本量要求
+            progress_callback: 进度回调函数
+
+        Returns:
+            按互动分数排序并截取的爆款笔记列表
+        """
+        # 限制关键词数量
+        keywords = keywords[:5]
+        self.search_keywords = keywords  # 保存多关键词列表
+
+        logger.info(f"开始多关键词采集: {keywords}")
+        logger.info(f"目标数量: {target_count}, 爆款比例: {viral_ratio}, 最低样本量: {min_sample_count}")
+
+        # 计算每个关键词的目标数量
+        target_per_keyword = self._calculate_target_per_keyword(
+            len(keywords), target_count, viral_ratio, min_sample_count
+        )
+
+        # 存储所有笔记（按 note_id 去重，记录来源关键词）
+        all_notes: Dict[str, Dict[str, Any]] = {}
+        keyword_stats: Dict[str, int] = {}  # 每个关键词的采集数量
+
+        total_keywords = len(keywords)
+        for i, keyword in enumerate(keywords):
+            if progress_callback:
+                progress_callback(
+                    int((i / total_keywords) * 80),
+                    f"正在采集关键词 [{i+1}/{total_keywords}]: {keyword}"
+                )
+
+            logger.info(f"[关键词 {i+1}/{total_keywords}] 开始采集: {keyword}")
+
+            # 调用单关键词采集（内部执行三维度爬取）
+            notes = await self._search_single_keyword(
+                query=keyword,
+                target_per_keyword=target_per_keyword,
+                note_type=note_type,
+                time_range=time_range
+            )
+
+            keyword_stats[keyword] = len(notes)
+
+            # 合并去重，记录来源关键词
+            for note in notes:
+                note_id = note.get('note_id')
+                if not note_id:
+                    continue
+
+                if note_id not in all_notes:
+                    # 新笔记，添加来源关键词
+                    note['source_keywords'] = [keyword]
+                    all_notes[note_id] = note
+                else:
+                    # 已存在的笔记，追加来源关键词
+                    existing_keywords = all_notes[note_id].get('source_keywords', [])
+                    if keyword not in existing_keywords:
+                        existing_keywords.append(keyword)
+                        all_notes[note_id]['source_keywords'] = existing_keywords
+
+            logger.info(f"[关键词 {i+1}/{total_keywords}] 采集完成: {len(notes)} 条")
+
+            # 关键词之间等待，避免请求过快
+            if i < total_keywords - 1:
+                logger.info("等待 5 秒后采集下一个关键词...")
+                await asyncio.sleep(5)
+
+        # 统计多关键词匹配数量
+        multi_match_count = sum(
+            1 for note in all_notes.values()
+            if len(note.get('source_keywords', [])) > 1
+        )
+
+        logger.info(f"多关键词采集完成: 共 {len(all_notes)} 篇去重后笔记")
+        logger.info(f"各关键词采集数量: {keyword_stats}")
+        logger.info(f"多关键词匹配笔记: {multi_match_count} 篇")
+
+        if progress_callback:
+            progress_callback(85, f"采集完成，去重后 {len(all_notes)} 篇，正在排序筛选...")
+
+        # 转换为 ViralNote 对象
+        viral_notes = [ViralNote.from_spider_data(note) for note in all_notes.values()]
+
+        # 按互动分数降序排序
+        viral_notes.sort(key=lambda x: x.interaction_score, reverse=True)
+
+        # 应用爆款比例筛选
+        viral_count = max(1, int(len(viral_notes) * viral_ratio))
+        result = viral_notes[:viral_count]
+
+        # 校验样本量
+        if len(result) < min_sample_count:
+            logger.warning(
+                f"⚠️ 样本量不足！当前 {len(result)} 篇，最低要求 {min_sample_count} 篇。"
+                f"建议增加更多关键词。"
+            )
+
+        if progress_callback:
+            progress_callback(100, f"完成！共 {len(viral_notes)} 篇，筛选出 {len(result)} 篇爆款")
+
+        # 保存统计信息
+        self.keyword_stats = keyword_stats
+        self.multi_match_count = multi_match_count
+        self.collected_notes = result
+
+        return result
+
+    def _calculate_target_per_keyword(
+        self,
+        keyword_count: int,
+        total_target: int,
+        viral_ratio: float,
+        min_sample_count: int
+    ) -> int:
+        """
+        计算每个关键词应采集的目标数量
+
+        策略：
+        1. 优先保证不超过用户设定的 total_target
+        2. 在此基础上尽量满足 min_sample_count 需求
+        3. 如果 target_count 不足以满足 min_sample_count，记录警告但不强制超出
+        """
+        # 基础分配：总目标 / 关键词数
+        base_per_keyword = total_target // keyword_count
+
+        # 需要的原始数量（考虑筛选比例和去重损耗）
+        raw_needed = min_sample_count / viral_ratio
+        safety_factor = 1.3  # 考虑30%去重损耗
+        ideal_per_keyword = int((raw_needed * safety_factor) / keyword_count)
+
+        # 计算上限（不超过用户设定总目标的1.5倍分摊）
+        upper_limit = max(int(base_per_keyword * 1.5), base_per_keyword)
+
+        # 取两者较大值，但不超过上限
+        result = min(max(base_per_keyword, ideal_per_keyword), upper_limit)
+
+        # 确保至少有意义的数量，但最小值也不能突破上限
+        result = max(result, min(10, upper_limit))
+
+        # 如果计算结果仍不足以满足样本量需求，记录警告
+        estimated_total = result * keyword_count
+        estimated_after_filter = int(estimated_total * viral_ratio * 0.7)  # 考虑去重
+        if estimated_after_filter < min_sample_count:
+            logger.warning(
+                f"⚠️ 当前配置预估样本量({estimated_after_filter})不足{min_sample_count}，"
+                f"建议增加目标数量或减少关键词数量"
+            )
+
+        return result
+
+    async def _search_single_keyword(
+        self,
+        query: str,
+        target_per_keyword: int,
+        note_type: int,
+        time_range: int
+    ) -> List[Dict[str, Any]]:
+        """
+        单关键词三维度采集
+
+        Args:
+            query: 搜索关键词
+            target_per_keyword: 该关键词目标数量
+            note_type: 笔记类型
+            time_range: 时间范围
+
+        Returns:
+            该关键词采集到的笔记列表（原始字典格式）
+        """
+        dimensions = [
+            (SortType.LIKES, "点赞"),
+            (SortType.COMMENTS, "评论"),
+            (SortType.COLLECTS, "收藏")
+        ]
+
+        target_per_dimension = math.ceil(target_per_keyword / len(dimensions))
+        all_notes: Dict[str, Dict[str, Any]] = {}
+
+        for sort_type, name in dimensions:
+            result = await self._fetch_dimension(
+                query=query,
+                sort_type=sort_type,
+                dimension_name=name,
+                target_per_dimension=target_per_dimension,
+                note_type=note_type,
+                time_range=time_range
+            )
+
+            if result.success:
+                for note in result.notes:
+                    note_id = note.get('note_id')
+                    if note_id and note_id not in all_notes:
+                        all_notes[note_id] = note
+
+            # 维度间等待
+            await asyncio.sleep(2)
+
+        return list(all_notes.values())
+
     async def search_viral_notes(
         self,
         query: str,
@@ -471,7 +695,7 @@ class ViralNoteCollector:
 
     def save_collected_notes(self, output_dir: str = "datas/viral_analysis"):
         """
-        保存采集的笔记数据
+        保存采集的笔记数据（支持多关键词统计）
 
         Args:
             output_dir: 输出目录
@@ -486,14 +710,27 @@ class ViralNoteCollector:
         filename = f"viral_notes_{timestamp}.json"
         filepath = os.path.join(output_dir, filename)
 
-        # 保存数据
+        # 构建保存数据
         data = {
             'collection_time': timestamp,
-            'search_keyword': self.search_keyword,  # 保存搜索关键词
             'total_notes': len(self.collected_notes),
             'statistics': self.get_statistics(),
             'notes': [note.to_dict() for note in self.collected_notes]
         }
+
+        # 支持多关键词模式
+        if hasattr(self, 'search_keywords') and self.search_keywords:
+            data['search_keywords'] = self.search_keywords
+            data['search_keyword'] = ', '.join(self.search_keywords)  # 兼容旧格式
+            data['keyword_statistics'] = {
+                'keyword_count': len(self.search_keywords),
+                'by_keyword': getattr(self, 'keyword_stats', {}),
+                'multi_match_count': getattr(self, 'multi_match_count', 0)
+            }
+        else:
+            # 单关键词模式（向后兼容）
+            data['search_keyword'] = self.search_keyword
+            data['search_keywords'] = [self.search_keyword] if self.search_keyword else []
 
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
