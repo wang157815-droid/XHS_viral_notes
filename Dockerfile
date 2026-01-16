@@ -24,8 +24,11 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 安装 chromadb（RAG知识库依赖，单独安装避免版本冲突）
-RUN pip install --no-cache-dir chromadb
+# 安装额外依赖（requirements.txt 中被注释或遗漏的）
+# - chromadb: RAG知识库向量检索
+# - opencv-python-headless: 视频帧提取分析（headless版无GUI依赖）
+# - easyocr: OCR文字识别（可选，用于封面文字提取）
+RUN pip install --no-cache-dir chromadb opencv-python-headless easyocr
 
 COPY . .
 
