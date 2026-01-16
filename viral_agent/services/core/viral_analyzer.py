@@ -9,6 +9,7 @@ from datetime import datetime
 from loguru import logger
 from openai import OpenAI
 from dotenv import load_dotenv
+import asyncio
 import nest_asyncio
 
 # 允许嵌套事件循环（解决FastAPI等异步框架中的冲突）
@@ -30,6 +31,12 @@ from viral_agent.services.image.scene_analyzer import SceneAnalyzer
 
 # 加载环境变量
 load_dotenv()
+
+# 统一的并发限流参数，可通过环境变量配置
+# - 云端CPU弱：设为2
+# - 普通配置：设为3（默认）
+# - 高配置：设为4-5
+VIDEO_AI_MAX_CONCURRENT = int(os.getenv('VIDEO_AI_MAX_CONCURRENT', '3'))
 
 
 class ViralAnalyzer:
@@ -1143,45 +1150,66 @@ class ViralAnalyzer:
             product_analysis = None
             video_viral_model = None
 
-            # 内容质量分析（4维：开场钩子/结构/情感/收尾）
-            if self.video_content_analyzer:
-                try:
-                    logger.info("执行视频内容质量深度分析...")
-                    # 使用新的事件循环执行异步分析
-                    content_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(content_loop)
-                    try:
-                        content_analysis = content_loop.run_until_complete(
-                            self.video_content_analyzer.analyze_batch(
-                                notes=notes_data,
-                                max_concurrent=2
-                            )
-                        )
-                    finally:
-                        content_loop.close()
-                    logger.success(f"✅ 内容质量分析完成")
-                except Exception as e:
-                    logger.warning(f"内容质量分析失败: {e}")
+            # 并行执行内容分析和产品分析（性能优化：从串行改为并行）
+            async def _run_parallel_video_analysis():
+                """并行执行视频内容分析和产品分析"""
+                tasks = []
+                task_names = []
 
-            # 产品深度分析（12数据点）
-            if self.video_product_analyzer:
+                if self.video_content_analyzer:
+                    tasks.append(
+                        self.video_content_analyzer.analyze_batch(
+                            notes=notes_data,
+                            max_concurrent=VIDEO_AI_MAX_CONCURRENT
+                        )
+                    )
+                    task_names.append('content')
+
+                if self.video_product_analyzer:
+                    tasks.append(
+                        self.video_product_analyzer.analyze_batch(
+                            notes=notes_data,
+                            max_concurrent=VIDEO_AI_MAX_CONCURRENT
+                        )
+                    )
+                    task_names.append('product')
+
+                if not tasks:
+                    return None, None
+
+                # 并行执行，捕获异常不影响其他任务
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # 解析结果
+                content_result = None
+                product_result = None
+
+                for i, (name, result) in enumerate(zip(task_names, results)):
+                    if isinstance(result, Exception):
+                        logger.warning(f"{name}分析失败: {result}")
+                    elif name == 'content':
+                        content_result = result
+                        logger.success("✅ 内容质量分析完成")
+                    elif name == 'product':
+                        product_result = result
+                        logger.success("✅ 产品深度分析完成")
+
+                return content_result, product_result
+
+            # 执行并行视频分析
+            if self.video_content_analyzer or self.video_product_analyzer:
                 try:
-                    logger.info("执行视频产品深度分析（12数据点）...")
-                    # 使用新的事件循环执行异步分析
-                    product_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(product_loop)
+                    logger.info(f"执行视频深度分析（并行模式，并发数={VIDEO_AI_MAX_CONCURRENT}）...")
+                    analysis_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(analysis_loop)
                     try:
-                        product_analysis = product_loop.run_until_complete(
-                            self.video_product_analyzer.analyze_batch(
-                                notes=notes_data,
-                                max_concurrent=2
-                            )
+                        content_analysis, product_analysis = analysis_loop.run_until_complete(
+                            _run_parallel_video_analysis()
                         )
                     finally:
-                        product_loop.close()
-                    logger.success(f"✅ 产品深度分析完成")
+                        analysis_loop.close()
                 except Exception as e:
-                    logger.warning(f"产品深度分析失败: {e}")
+                    logger.warning(f"视频深度分析失败: {e}")
 
             # 视频爆文模型综合推理
             if self.synthesis_service:

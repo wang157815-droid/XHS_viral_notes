@@ -2705,6 +2705,7 @@
                     isAnalyzing = false;  // 重置分析状态
                     analysisStartTime = null;
                     analysisStarted = false;  // 重置分析启动标志，允许新任务触发分析
+                    analysisCompletedHandled = false;  // 重置分析完成标志
                     collectedNoteCount = 0;
                     logCursor = 0;  // 重置日志游标
                     startGlobalTimer();  // 启动全局计时器
@@ -2808,8 +2809,15 @@
             badge.textContent = '分析中';
         }
 
-        // 分析完成回调
+        // 分析完成回调（只执行一次）
         function onAnalysisCompleted(status) {
+            // 防止重复执行
+            if (analysisCompletedHandled) {
+                console.log('分析完成回调已执行过，跳过重复调用');
+                return;
+            }
+            analysisCompletedHandled = true;
+
             isAnalyzing = false;
             stopGlobalTimer();
             document.getElementById('estimatedRemaining').textContent = '已完成';
@@ -3055,6 +3063,8 @@
 
         // 标志：是否已尝试启动分析（防止重复调用）
         let analysisStarted = false;
+        // 标志：分析完成回调是否已执行（防止重复执行）
+        let analysisCompletedHandled = false;
 
         function showResults(status) {
             loadHistory(); // 刷新历史记录
@@ -3129,10 +3139,11 @@
                     }
                 }
             } catch (error) {
-                // 启动分析失败：重置状态，避免UI卡住
+                // 启动分析失败：重置状态，允许重试
                 console.error('启动分析任务失败:', error);
                 isAnalyzing = false;
                 analysisStartTime = null;
+                analysisStarted = false;  // 重置标志，允许重试
 
                 // 隐藏分析进度提示
                 const analysisHint = document.getElementById('analysisProgressHint');
@@ -3143,7 +3154,12 @@
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'alert alert-warning mt-3';
                 errorDiv.id = 'analysisErrorAlert';
-                errorDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 启动分析失败：' + error.message;
+                errorDiv.innerHTML = `
+                    <i class="fas fa-exclamation-triangle"></i> 启动分析失败：${escapeHtml(error.message)}
+                    <button class="btn btn-sm btn-primary ms-2" onclick="retryAnalysis()">
+                        <i class="fas fa-redo"></i> 重试
+                    </button>
+                `;
                 const leftCol = document.getElementById('progressResultCard').querySelector('.col-md-6.border-end');
                 // 移除旧的错误提示
                 const oldAlert = document.getElementById('analysisErrorAlert');
@@ -3151,8 +3167,17 @@
                 if (leftCol) {
                     leftCol.appendChild(errorDiv);
                 }
-                setTimeout(() => errorDiv.remove(), 10000);
+                // 不再自动移除，让用户手动重试
             }
+        }
+
+        // 重试分析
+        function retryAnalysis() {
+            // 移除错误提示
+            const oldAlert = document.getElementById('analysisErrorAlert');
+            if (oldAlert) oldAlert.remove();
+            // 重新触发分析
+            autoStartAnalysis();
         }
 
         async function loadAnalysisResults() {
