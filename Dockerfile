@@ -20,6 +20,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 
 RUN python --version && node --version && npm --version
 
+# 配置国内 pip 镜像源（阿里云）
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    pip config set global.trusted-host mirrors.aliyun.com
+
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
