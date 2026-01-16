@@ -24,7 +24,13 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 安装 chromadb（RAG知识库依赖，单独安装避免版本冲突）
+RUN pip install --no-cache-dir chromadb
+
 COPY . .
+
+# 安装 Node.js 依赖（crypto-js 等，用于请求签名生成）
+RUN npm install
 
 # 爆文分析Web应用端口
 EXPOSE 8000
