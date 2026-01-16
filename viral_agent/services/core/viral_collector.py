@@ -222,6 +222,9 @@ class ViralNoteCollector:
         # 按互动分数降序排序
         viral_notes.sort(key=lambda x: x.interaction_score, reverse=True)
 
+        # 保留筛选前的全部笔记（供自动补采阶段1使用）
+        self._all_notes_before_filter = viral_notes.copy()
+
         # 应用爆款比例筛选
         viral_count = max(1, int(len(viral_notes) * viral_ratio))
         result = viral_notes[:viral_count]
@@ -434,6 +437,9 @@ class ViralNoteCollector:
 
         # 按互动分数降序排序
         viral_notes.sort(key=lambda x: x.interaction_score, reverse=True)
+
+        # 保留筛选前的全部笔记（供自动补采阶段1使用）
+        self._all_notes_before_filter = viral_notes.copy()
 
         # 按比例截取爆款
         viral_count = max(1, int(len(viral_notes) * viral_ratio))

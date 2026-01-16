@@ -221,16 +221,30 @@ def export_raw_data_to_excel(data: Dict[str, Any], original_file_path: str) -> s
     return output_path
 
 
-def export_to_excel(analysis_file_path: str) -> str:
+def export_to_excel(
+    analysis_file_path: str,
+    export_mode: str = "combined"
+) -> str:
     """
     将分析结果导出为Excel报告
 
     Args:
         analysis_file_path: 分析结果JSON文件路径（或原始数据文件路径）
+        export_mode: 导出模式
+            - "combined": 单文件导出（默认，保持现有行为）
+            - "separate": 图文+视频两个独立Excel
+            - "image_only": 仅导出图文报告
+            - "video_only": 仅导出视频报告
 
     Returns:
-        生成的Excel文件路径
+        生成的Excel文件路径（combined/image_only/video_only）
+        或文件路径字典（separate模式）
     """
+    # 如果不是combined模式，使用多模式导出服务
+    if export_mode != "combined":
+        from viral_agent.services.export.multi_export_service import export_with_mode
+        return export_with_mode(analysis_file_path, export_mode)
+
     try:
         # 读取数据文件
         with open(analysis_file_path, 'r', encoding='utf-8') as f:

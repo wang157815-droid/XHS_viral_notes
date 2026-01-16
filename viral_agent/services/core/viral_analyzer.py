@@ -214,6 +214,10 @@ class ViralAnalyzer:
         self._video_source_mode = video_source_mode
         logger.info(f"开始分析 {len(notes)} 篇爆款笔记，分析类型: {analysis_type}")
 
+        # ========== 新增：保存原始笔记用于类型分离特征计算 ==========
+        # 无论analysis_type是什么，都保存全量数据用于后续填充image/video分离字段
+        all_notes_for_type_separation = notes.copy()
+
         # 根据分析类型筛选笔记
         original_count = len(notes)
         if analysis_type == "image":
@@ -371,7 +375,17 @@ class ViralAnalyzer:
                 'message': str(e)
             }
 
-        # 10. 创建分析结果
+        # 10. 计算图文/视频分离特征（无论analysis_type是什么，都填充这些字段）
+        logger.info("📊 计算图文/视频分离特征...")
+        image_notes_all = [n for n in all_notes_for_type_separation if n.note_type != '视频']
+        video_notes_all = [n for n in all_notes_for_type_separation if n.note_type == '视频']
+        logger.info(f"类型分布: 图文 {len(image_notes_all)} 篇, 视频 {len(video_notes_all)} 篇")
+
+        image_note_features = self._extract_type_features(image_notes_all, '图文')
+        video_note_features = self._extract_type_features(video_notes_all, '视频')
+        type_summary = self._generate_type_summary(image_notes_all, video_notes_all)
+
+        # 11. 创建分析结果
         result = ViralAnalysisResult(
             keyword=keyword,
             analysis_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -386,11 +400,15 @@ class ViralAnalyzer:
             all_images_ocr=features.get('all_images_ocr', {}),
             product_features=features.get('product_features', {}),
             video_analysis=features.get('video_features', {}),
-            scene_features=features.get('scene_features', {}),  # 新增：场景方向分析
-            viral_model=viral_model
+            scene_features=features.get('scene_features', {}),
+            viral_model=viral_model,
+            # 新增：图文/视频分离特征
+            image_note_features=image_note_features,
+            video_note_features=video_note_features,
+            type_summary=type_summary
         )
 
-        logger.success("爆文分析完成")
+        logger.success(f"爆文分析完成 | 类型摘要: {type_summary.get('recommendation', '')}")
         return result
 
     def _generate_viral_model(
@@ -1368,3 +1386,175 @@ class ViralAnalyzer:
         except Exception as e:
             logger.error(f"视频AI洞察汇总失败: {e}")
             return f"洞察汇总失败: {str(e)}"
+
+    # ========== 图文/视频分离特征提取方法 ==========
+
+    def _extract_type_features(
+        self,
+        notes: List[ViralNote],
+        type_name: str
+    ) -> Dict[str, Any]:
+        """
+        提取特定类型笔记的专属特征
+
+        Args:
+            notes: 特定类型的笔记列表
+            type_name: 类型名称（'图文' 或 '视频'）
+
+        Returns:
+            该类型的特征字典
+        """
+        if not notes:
+            return {
+                'count': 0,
+                'status': 'no_data',
+                'message': f'没有{type_name}类型笔记'
+            }
+
+        # 基础统计
+        count = len(notes)
+        interactions = [n.interaction_score for n in notes]
+        avg_interaction = sum(interactions) / count if count > 0 else 0
+        max_interaction = max(interactions) if interactions else 0
+        min_interaction = min(interactions) if interactions else 0
+
+        # 标题特征
+        titles = [n.title for n in notes if n.title]
+        avg_title_length = sum(len(t) for t in titles) / len(titles) if titles else 0
+
+        # 提取高频词（简单实现）
+        all_title_text = ' '.join(titles)
+        # 使用jieba分词提取关键词
+        try:
+            import jieba.analyse
+            top_keywords = jieba.analyse.extract_tags(all_title_text, topK=10)
+        except Exception:
+            top_keywords = []
+
+        # 发布时间分布
+        hour_distribution = {}
+        for note in notes:
+            if note.upload_time:
+                try:
+                    hour = int(note.upload_time.split(' ')[1].split(':')[0])
+                    hour_distribution[hour] = hour_distribution.get(hour, 0) + 1
+                except Exception:
+                    pass
+
+        # 找出最佳发布时间段
+        best_hour = max(hour_distribution, key=hour_distribution.get) if hour_distribution else None
+        best_publish_time = f"{best_hour}:00-{best_hour + 2}:00" if best_hour is not None else "未知"
+
+        # TOP笔记（取互动量前5）
+        sorted_notes = sorted(notes, key=lambda x: x.interaction_score, reverse=True)[:5]
+        top_notes = [
+            {
+                'note_id': n.note_id,
+                'title': n.title,
+                'interaction_score': n.interaction_score,
+                'liked_count': n.liked_count,
+                'collected_count': n.collected_count,
+                'comment_count': n.comment_count
+            }
+            for n in sorted_notes
+        ]
+
+        return {
+            'count': count,
+            'status': 'success',
+            'interaction_stats': {
+                'avg': round(avg_interaction, 1),
+                'max': max_interaction,
+                'min': min_interaction,
+                'total': sum(interactions)
+            },
+            'title_features': {
+                'avg_length': round(avg_title_length, 1),
+                'top_keywords': top_keywords
+            },
+            'time_features': {
+                'hour_distribution': hour_distribution,
+                'best_publish_time': best_publish_time
+            },
+            'top_notes': top_notes
+        }
+
+    def _generate_type_summary(
+        self,
+        image_notes: List[ViralNote],
+        video_notes: List[ViralNote]
+    ) -> Dict[str, Any]:
+        """
+        生成图文/视频类型对比统计摘要
+
+        Args:
+            image_notes: 图文笔记列表
+            video_notes: 视频笔记列表
+
+        Returns:
+            类型统计摘要，包含数量、占比、对比结论
+        """
+        total_count = len(image_notes) + len(video_notes)
+        image_count = len(image_notes)
+        video_count = len(video_notes)
+
+        # 计算占比
+        image_percentage = round(image_count / total_count * 100, 1) if total_count > 0 else 0
+        video_percentage = round(video_count / total_count * 100, 1) if total_count > 0 else 0
+
+        # 计算各类型平均互动
+        image_interactions = [n.interaction_score for n in image_notes]
+        video_interactions = [n.interaction_score for n in video_notes]
+
+        image_avg = sum(image_interactions) / len(image_interactions) if image_interactions else 0
+        video_avg = sum(video_interactions) / len(video_interactions) if video_interactions else 0
+
+        image_max = max(image_interactions) if image_interactions else 0
+        video_max = max(video_interactions) if video_interactions else 0
+
+        # 对比分析
+        if image_avg > 0 and video_avg > 0:
+            if video_avg > image_avg:
+                higher_interaction = 'video'
+                interaction_diff_percent = round((video_avg - image_avg) / image_avg * 100, 1)
+            else:
+                higher_interaction = 'image'
+                interaction_diff_percent = round((image_avg - video_avg) / video_avg * 100, 1)
+        else:
+            higher_interaction = 'unknown'
+            interaction_diff_percent = 0
+
+        # 生成建议
+        if total_count == 0:
+            recommendation = '暂无数据，无法生成建议'
+        elif video_count == 0:
+            recommendation = '当前无视频笔记，建议尝试视频形式扩大覆盖'
+        elif image_count == 0:
+            recommendation = '当前无图文笔记，建议结合图文形式补充内容深度'
+        elif higher_interaction == 'video' and interaction_diff_percent > 20:
+            recommendation = f'视频互动率高出{interaction_diff_percent}%，建议以视频为主、图文为辅'
+        elif higher_interaction == 'image' and interaction_diff_percent > 20:
+            recommendation = f'图文互动率高出{interaction_diff_percent}%，建议以图文为主、视频为辅'
+        else:
+            recommendation = '图文与视频表现相当，建议均衡发展，根据内容特点选择形式'
+
+        return {
+            'total_count': total_count,
+            'image_count': image_count,
+            'video_count': video_count,
+            'image_percentage': image_percentage,
+            'video_percentage': video_percentage,
+            'image_stats': {
+                'avg_interaction': round(image_avg, 1),
+                'max_interaction': image_max
+            },
+            'video_stats': {
+                'avg_interaction': round(video_avg, 1),
+                'max_interaction': video_max
+            },
+            'comparison': {
+                'higher_interaction': higher_interaction,
+                'interaction_diff_percent': interaction_diff_percent,
+                'recommendation': recommendation
+            }
+        }
