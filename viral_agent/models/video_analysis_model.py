@@ -9,6 +9,7 @@ import json
 # 避免循环导入
 if TYPE_CHECKING:
     from viral_agent.models.av_sync_model import AVSyncResult
+    from viral_agent.models.frame_asr_model import FrameASRAnalysisResult
 
 
 @dataclass
@@ -73,6 +74,9 @@ class VideoAnalysisResult:
     # 音画同步分析结果（可选）
     av_sync_result: Optional[Any] = None  # 实际类型是 AVSyncResult
 
+    # 帧+ASR联合分析结果（可选）
+    frame_asr_analysis: Optional[Any] = None  # 实际类型是 FrameASRAnalysisResult
+
     # 统计数据
     analysis_time: str = ""
     analysis_status: str = "pending"  # pending/success/failed
@@ -103,6 +107,18 @@ class VideoAnalysisResult:
                 result['av_sync_result'] = self.av_sync_result
             else:
                 result['av_sync_result'] = str(self.av_sync_result)
+
+        # 处理 frame_asr_analysis
+        if self.frame_asr_analysis:
+            from dataclasses import is_dataclass
+            if is_dataclass(self.frame_asr_analysis):
+                result['frame_asr_analysis'] = asdict(self.frame_asr_analysis)
+            elif hasattr(self.frame_asr_analysis, 'to_dict'):
+                result['frame_asr_analysis'] = self.frame_asr_analysis.to_dict()
+            elif isinstance(self.frame_asr_analysis, dict):
+                result['frame_asr_analysis'] = self.frame_asr_analysis
+            else:
+                result['frame_asr_analysis'] = str(self.frame_asr_analysis)
 
         return result
 
@@ -142,6 +158,41 @@ class VideoAnalysisResult:
             if av.timeline_summary:
                 summary['av_sync']['product_first_mention'] = av.timeline_summary.product_first_mention
                 summary['av_sync']['content_start_time'] = av.timeline_summary.content_start_time
+
+        # 帧+ASR联合分析摘要
+        if self.frame_asr_analysis:
+            fa = self.frame_asr_analysis
+            # 兼容 dataclass 和 dict 两种情况
+            if isinstance(fa, dict):
+                vs_summary = fa.get('visual_speech_summary', '')
+                summary['frame_asr'] = {
+                    'status': fa.get('status', ''),
+                    'frame_count': fa.get('frame_count', 0),
+                    'content_structure': fa.get('content_structure', ''),
+                    'visual_speech_summary': (
+                        vs_summary[:100] + '...' if vs_summary and len(vs_summary) > 100
+                        else vs_summary
+                    )
+                }
+                pp = fa.get('product_placement')
+                if pp:
+                    summary['frame_asr']['product_naturalness'] = (
+                        pp.get('naturalness_score') if isinstance(pp, dict)
+                        else pp.naturalness_score
+                    )
+            else:
+                summary['frame_asr'] = {
+                    'status': fa.status,
+                    'frame_count': fa.frame_count,
+                    'content_structure': fa.content_structure,
+                    'visual_speech_summary': (
+                        fa.visual_speech_summary[:100] + '...'
+                        if fa.visual_speech_summary and len(fa.visual_speech_summary) > 100
+                        else fa.visual_speech_summary
+                    )
+                }
+                if fa.product_placement:
+                    summary['frame_asr']['product_naturalness'] = fa.product_placement.naturalness_score
 
         return summary
 

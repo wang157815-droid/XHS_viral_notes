@@ -9,9 +9,64 @@
     <link rel="stylesheet" href="/static/css/main.css">
     <style>
         :root {
-            --sidebar-width: 320px;
+            --sidebar-width: 340px;
             --header-height: 70px;
+
+            /* ========== Google AI 风格配色系统 ========== */
+            /* 主色调（保持与页面协调的紫蓝色系） */
             --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gemini-gradient: linear-gradient(135deg, #4285f4 0%, #667eea 35%, #9c6ade 70%, #d96570 100%);
+            --gemini-gradient-soft: linear-gradient(135deg, rgba(66,133,244,0.08) 0%, rgba(156,106,222,0.08) 100%);
+
+            /* 表面色系 (Material Design 3) */
+            --color-background: #fefbff;
+            --color-surface: #ffffff;
+            --color-surface-dim: #ded8e1;
+            --color-surface-variant: #e8e0eb;
+            --color-surface-container: #f3edf7;
+            --color-surface-container-high: #ece6f0;
+            --color-surface-container-highest: #e6e0e9;
+
+            /* 文字色系 */
+            --color-on-surface: #1d1b20;
+            --color-on-surface-variant: #49454f;
+            --color-on-primary: #ffffff;
+            --color-primary: #6750a4;
+            --color-primary-container: #eaddff;
+
+            /* 边框和分隔线 */
+            --color-outline: #79747e;
+            --color-outline-variant: #cac4d0;
+
+            /* 圆角系统 (M3 Shape Scale) */
+            --radius-xs: 4px;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
+            --radius-2xl: 28px;
+            --radius-full: 9999px;
+
+            /* 阴影系统 (M3 Elevation) */
+            --shadow-1: 0px 1px 3px 1px rgba(0,0,0,0.15), 0px 1px 2px 0px rgba(0,0,0,0.30);
+            --shadow-2: 0px 2px 6px 2px rgba(0,0,0,0.15), 0px 1px 2px 0px rgba(0,0,0,0.30);
+            --shadow-3: 0px 4px 8px 3px rgba(0,0,0,0.15), 0px 1px 3px 0px rgba(0,0,0,0.30);
+            --shadow-sidebar: 0 8px 32px rgba(103, 80, 164, 0.12), 0 2px 8px rgba(0,0,0,0.08);
+
+            /* 动画缓动 (M3 Motion) */
+            --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+            --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+            --duration-short: 150ms;
+            --duration-medium: 300ms;
+            --duration-long: 500ms;
+
+            /* 间距系统 */
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 12px;
+            --space-4: 16px;
+            --space-5: 20px;
+            --space-6: 24px;
         }
 
         * {
@@ -25,98 +80,408 @@
             overflow-x: hidden;
         }
 
-        /* ==================== 侧边栏样式 ==================== */
+        /* ==================== 侧边栏样式 (Google AI 风格) ==================== */
         .sidebar {
             position: fixed;
             top: 0;
             left: 0;
             width: var(--sidebar-width);
             height: 100vh;
-            background: white;
-            box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+            background: var(--color-background);
+            box-shadow: var(--shadow-sidebar);
             transform: translateX(-100%);
-            transition: transform 0.3s ease;
+            transition: transform var(--duration-medium) var(--ease-standard);
             z-index: 1050;
             display: flex;
             flex-direction: column;
+            border-right: 1px solid var(--color-outline-variant);
         }
 
         .sidebar.open {
             transform: translateX(0);
         }
 
+        /* 侧边栏头部 - Gemini 渐变风格 */
         .sidebar-header {
-            background: var(--primary-gradient);
-            color: white;
-            padding: 15px 20px;
+            background: var(--gemini-gradient);
+            background-size: 200% 200%;
+            color: var(--color-on-primary);
+            padding: var(--space-5) var(--space-6);
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-shrink: 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Gemini 风格闪烁动画 */
+        .sidebar-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(
+                45deg,
+                transparent 30%,
+                rgba(255,255,255,0.1) 50%,
+                transparent 70%
+            );
+            transform: rotate(45deg);
+            animation: geminiShimmer 3s ease-in-out infinite;
+        }
+
+        @keyframes geminiShimmer {
+            0% { transform: translateX(-100%) rotate(45deg); }
+            100% { transform: translateX(100%) rotate(45deg); }
         }
 
         .sidebar-header h5 {
             margin: 0;
-            font-weight: bold;
+            font-weight: 600;
+            font-size: 1.1rem;
+            letter-spacing: 0.3px;
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+        }
+
+        .sidebar-header h5::before {
+            content: '✨';
+            font-size: 1.2rem;
         }
 
         .sidebar-close {
-            background: none;
+            background: rgba(255,255,255,0.15);
             border: none;
-            color: white;
-            font-size: 1.5rem;
+            color: var(--color-on-primary);
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-full);
+            font-size: 1.1rem;
             cursor: pointer;
-            opacity: 0.8;
-            transition: opacity 0.2s;
+            transition: all var(--duration-short) var(--ease-standard);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            z-index: 1;
         }
 
         .sidebar-close:hover {
-            opacity: 1;
+            background: rgba(255,255,255,0.25);
+            transform: scale(1.05);
         }
 
+        .sidebar-close:active {
+            transform: scale(0.95);
+        }
+
+        /* 侧边栏内容区 */
         .sidebar-content {
             flex: 1;
             overflow-y: auto;
-            padding: 0;
+            padding: var(--space-3);
+            background: var(--color-background);
         }
 
-        /* 侧边栏手风琴样式 */
+        /* 自定义滚动条 */
+        .sidebar-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .sidebar-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .sidebar-content::-webkit-scrollbar-thumb {
+            background: var(--color-outline-variant);
+            border-radius: var(--radius-full);
+        }
+
+        .sidebar-content::-webkit-scrollbar-thumb:hover {
+            background: var(--color-outline);
+        }
+
+        /* ========== 侧边栏分组卡片 (Material Design 3) ========== */
         .sidebar-section {
-            border-bottom: 1px solid #eee;
+            background: var(--color-surface);
+            border-radius: var(--radius-lg);
+            margin-bottom: var(--space-3);
+            overflow: hidden;
+            box-shadow: var(--shadow-1);
+            border: 1px solid var(--color-outline-variant);
+            transition: all var(--duration-short) var(--ease-standard);
+        }
+
+        .sidebar-section:hover {
+            box-shadow: var(--shadow-2);
+            border-color: rgba(103, 80, 164, 0.3);
         }
 
         .sidebar-section-header {
-            padding: 15px 20px;
-            background: #f8f9fa;
+            padding: var(--space-4) var(--space-5);
+            background: var(--color-surface-container);
             cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-weight: 600;
-            color: #333;
-            transition: background 0.2s;
+            font-weight: 500;
+            font-size: 0.9rem;
+            color: var(--color-on-surface);
+            transition: background var(--duration-short) var(--ease-standard);
+            position: relative;
+            overflow: hidden;
         }
 
-        .sidebar-section-header:hover {
-            background: #e9ecef;
+        /* 悬停状态层 (M3 State Layer) */
+        .sidebar-section-header::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: var(--color-primary);
+            opacity: 0;
+            transition: opacity var(--duration-short) var(--ease-standard);
+            pointer-events: none;
+        }
+
+        .sidebar-section-header:hover::after {
+            opacity: 0.08;
+        }
+
+        .sidebar-section-header:active::after {
+            opacity: 0.12;
+        }
+
+        .sidebar-section-header span {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            position: relative;
+            z-index: 1;
+        }
+
+        .sidebar-section-header span i:first-child {
+            color: var(--color-primary);
+            font-size: 1.1rem;
         }
 
         .sidebar-section-header i.fa-chevron-down {
-            transition: transform 0.3s;
+            transition: transform var(--duration-medium) var(--ease-emphasized);
+            color: var(--color-on-surface-variant);
+            font-size: 0.8rem;
+            position: relative;
+            z-index: 1;
         }
 
         .sidebar-section.expanded .sidebar-section-header i.fa-chevron-down {
             transform: rotate(180deg);
         }
 
+        .sidebar-section.expanded .sidebar-section-header {
+            background: var(--gemini-gradient-soft);
+            border-bottom: 1px solid var(--color-outline-variant);
+        }
+
         .sidebar-section-content {
             display: none;
-            padding: 15px 20px;
-            background: white;
+            padding: var(--space-5);
+            background: var(--color-surface);
+            animation: slideDown var(--duration-medium) var(--ease-emphasized);
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .sidebar-section.expanded .sidebar-section-content {
             display: block;
+        }
+
+        /* ========== 侧边栏内部组件样式优化 ========== */
+        /* 表单输入框 */
+        .sidebar-section-content .form-control,
+        .sidebar-section-content .form-select {
+            border-radius: var(--radius-md);
+            border: 1px solid var(--color-outline-variant);
+            padding: var(--space-3) var(--space-4);
+            font-size: 0.9rem;
+            transition: all var(--duration-short) var(--ease-standard);
+            background: var(--color-surface-container);
+        }
+
+        .sidebar-section-content .form-control:focus,
+        .sidebar-section-content .form-select:focus {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(103, 80, 164, 0.15);
+            background: var(--color-surface);
+        }
+
+        /* 按钮样式 */
+        .sidebar-section-content .btn {
+            border-radius: var(--radius-full);
+            padding: var(--space-3) var(--space-5);
+            font-weight: 500;
+            font-size: 0.85rem;
+            transition: all var(--duration-short) var(--ease-standard);
+        }
+
+        .sidebar-section-content .btn-primary {
+            background: var(--gemini-gradient);
+            background-size: 200% 200%;
+            border: none;
+            box-shadow: var(--shadow-1);
+        }
+
+        .sidebar-section-content .btn-primary:hover {
+            background-position: 100% 100%;
+            box-shadow: var(--shadow-2);
+            transform: translateY(-1px);
+        }
+
+        .sidebar-section-content .btn-outline-secondary {
+            border: 1px solid var(--color-outline-variant);
+            color: var(--color-on-surface-variant);
+            background: transparent;
+        }
+
+        .sidebar-section-content .btn-outline-secondary:hover {
+            background: var(--color-surface-container);
+            border-color: var(--color-outline);
+        }
+
+        .sidebar-section-content .btn-outline-danger {
+            border: 1px solid #f9dedc;
+            color: #ba1a1a;
+            background: transparent;
+        }
+
+        .sidebar-section-content .btn-outline-danger:hover {
+            background: #f9dedc;
+            border-color: #ba1a1a;
+        }
+
+        /* 历史记录项 */
+        .history-item {
+            padding: var(--space-3) var(--space-4);
+            background: var(--color-surface-container);
+            border-radius: var(--radius-md);
+            margin-bottom: var(--space-2);
+            cursor: pointer;
+            transition: all var(--duration-short) var(--ease-standard);
+            border: 1px solid transparent;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .history-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: var(--gemini-gradient);
+            opacity: 0;
+            transition: opacity var(--duration-short) var(--ease-standard);
+        }
+
+        .history-item:hover {
+            background: var(--gemini-gradient-soft);
+            border-color: rgba(103, 80, 164, 0.2);
+            transform: translateX(2px);
+        }
+
+        .history-item:hover::before {
+            opacity: 1;
+        }
+
+        .history-item.active {
+            background: var(--gemini-gradient-soft);
+            border-color: var(--color-primary);
+        }
+
+        .history-item.active::before {
+            opacity: 1;
+        }
+
+        .history-item .keyword {
+            font-weight: 500;
+            color: var(--color-on-surface);
+            font-size: 0.9rem;
+            margin-bottom: var(--space-1);
+        }
+
+        .history-item .meta {
+            font-size: 0.75rem;
+            color: var(--color-on-surface-variant);
+        }
+
+        .history-item .note-count {
+            background: var(--gemini-gradient);
+            color: white;
+            padding: 2px 10px;
+            border-radius: var(--radius-full);
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        /* 知识库按钮 */
+        .knowledge-btn {
+            display: block;
+            width: 100%;
+            padding: var(--space-3) var(--space-4);
+            background: var(--color-surface-container);
+            color: var(--color-on-surface);
+            border: 1px solid var(--color-outline-variant);
+            border-radius: var(--radius-md);
+            font-weight: 500;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all var(--duration-short) var(--ease-standard);
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+        }
+
+        .knowledge-btn:hover {
+            background: var(--gemini-gradient-soft);
+            border-color: var(--color-primary);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-1);
+        }
+
+        .knowledge-btn i {
+            color: var(--color-primary);
+        }
+
+        /* 清理选项复选框 */
+        .sidebar-section-content .form-check {
+            padding: var(--space-3);
+            margin-bottom: var(--space-2);
+            border-radius: var(--radius-sm);
+            transition: background var(--duration-short) var(--ease-standard);
+        }
+
+        .sidebar-section-content .form-check:hover {
+            background: var(--color-surface-container);
+        }
+
+        .sidebar-section-content .form-check-input:checked {
+            background-color: var(--color-primary);
+            border-color: var(--color-primary);
         }
 
         /* 遮罩层 */
@@ -126,11 +491,14 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
             opacity: 0;
             visibility: hidden;
-            transition: opacity 0.3s, visibility 0.3s;
+            transition: all var(--duration-medium) var(--ease-standard);
             z-index: 1040;
+            display: none;
         }
 
         .sidebar-overlay.show {
@@ -141,7 +509,22 @@
         /* ==================== 主内容区样式 ==================== */
         .main-wrapper {
             min-height: 100vh;
-            transition: margin-left 0.3s ease;
+            transition: margin-left 0.3s ease, width 0.3s ease;
+        }
+
+        /* 侧边栏打开时，主内容区被推挤 */
+        .main-wrapper.sidebar-open {
+            margin-left: var(--sidebar-width);
+        }
+
+        /* 移动端：侧边栏覆盖而非推挤 */
+        @media (max-width: 768px) {
+            .main-wrapper.sidebar-open {
+                margin-left: 0;  /* 移动端不推挤 */
+            }
+            .sidebar-overlay {
+                display: block;  /* 移动端显示遮罩 */
+            }
         }
 
         .container-main {
@@ -152,7 +535,7 @@
 
         /* 头部 */
         .header {
-            text-align: center;
+            text-align: left;
             color: white;
             padding: 20px 0;
             position: sticky;
@@ -165,33 +548,57 @@
 
         .header-content {
             display: flex;
-            justify-content: center;
+            justify-content: flex-start;
             align-items: center;
-            position: relative;
+            gap: 15px;
         }
 
         .menu-toggle {
-            position: absolute;
-            left: 0;
-            background: white;
+            position: relative;
+            flex-shrink: 0;
+            background: rgba(255,255,255,0.95);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border: none;
-            color: #667eea;
-            width: 45px;
-            height: 45px;
-            border-radius: 10px;
-            font-size: 1.3rem;
+            color: var(--color-primary);
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-lg);
+            font-size: 1.25rem;
             cursor: pointer;
-            transition: all 0.3s;
+            transition: all var(--duration-short) var(--ease-standard);
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+            box-shadow: var(--shadow-2);
+            overflow: hidden;
+        }
+
+        .menu-toggle::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: var(--gemini-gradient);
+            opacity: 0;
+            transition: opacity var(--duration-short) var(--ease-standard);
         }
 
         .menu-toggle:hover {
-            background: #f0f0f0;
-            transform: scale(1.08);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transform: scale(1.05);
+            box-shadow: var(--shadow-3);
+        }
+
+        .menu-toggle:hover::before {
+            opacity: 0.1;
+        }
+
+        .menu-toggle:active {
+            transform: scale(0.95);
+        }
+
+        .menu-toggle i {
+            position: relative;
+            z-index: 1;
         }
 
         .header h1 {
@@ -349,28 +756,39 @@
             font-weight: bold;
         }
 
-        /* Cookie状态指示器 */
+        /* Cookie状态指示器 (M3 风格) */
         .cookie-status-indicator {
             display: inline-flex;
             align-items: center;
-            padding: 3px 10px;
-            border-radius: 15px;
-            font-size: 0.8em;
-            margin-left: 10px;
+            gap: var(--space-1);
+            padding: 4px 12px;
+            border-radius: var(--radius-full);
+            font-size: 0.75rem;
+            font-weight: 500;
+            margin-left: var(--space-2);
+            transition: all var(--duration-short) var(--ease-standard);
         }
 
         .cookie-status-indicator.configured {
-            background: #d4edda;
-            color: #155724;
+            background: linear-gradient(135deg, #c8f7c5 0%, #a8e6a3 100%);
+            color: #1b5e20;
+            border: 1px solid rgba(27, 94, 32, 0.2);
         }
 
         .cookie-status-indicator.not-configured {
-            background: #fff3cd;
-            color: #856404;
+            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
+            color: #e65100;
+            border: 1px solid rgba(230, 81, 0, 0.2);
+            animation: gentlePulse 2s ease-in-out infinite;
         }
 
-        /* 知识库管理按钮 */
-        .knowledge-btn {
+        @keyframes gentlePulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.85; transform: scale(0.98); }
+        }
+
+        /* 知识库管理按钮 - 已在侧边栏样式中定义 */
+        .knowledge-btn-legacy {
             display: block;
             width: 100%;
             padding: 12px 15px;
@@ -535,11 +953,6 @@
             color: #155724;
         }
 
-        /* 结果区域 */
-        #resultsSection {
-            display: none;
-        }
-
         /* 响应式 */
         @media (max-width: 768px) {
             .header h1 {
@@ -548,6 +961,479 @@
 
             .sidebar {
                 width: 100%;
+            }
+        }
+
+        /* 分析规模选择样式 */
+        .analysis-scale-group {
+            display: flex !important;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .analysis-scale-group .btn-check + .scale-btn {
+            flex: 1;
+            min-width: 100px;
+            padding: 12px 8px;
+            border-radius: 10px !important;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .analysis-scale-group .btn-check:checked + .scale-btn {
+            background: var(--primary-gradient);
+            border-color: transparent;
+            color: white;
+            transform: scale(1.02);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .scale-btn .scale-title {
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 2px;
+        }
+
+        .scale-btn small {
+            opacity: 0.85;
+            font-size: 0.8em;
+        }
+
+        @media (max-width: 576px) {
+            .analysis-scale-group {
+                flex-direction: column;
+            }
+        }
+
+        /* ==================== 侧边栏三段式布局样式 ==================== */
+        .sidebar-top {
+            flex-shrink: 0;
+            padding: 16px;
+            border-bottom: 1px solid var(--color-outline-variant);
+        }
+
+        .sidebar-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .sidebar-logo-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--gemini-gradient);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+
+        .sidebar-logo-text {
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--color-on-surface);
+        }
+
+        .sidebar-logo-text small {
+            display: block;
+            font-weight: 400;
+            font-size: 0.75rem;
+            color: var(--color-on-surface-variant);
+        }
+
+        .sidebar-middle {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+        }
+
+        .sidebar-middle::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .sidebar-middle::-webkit-scrollbar-thumb {
+            background: var(--color-outline-variant);
+            border-radius: 2px;
+        }
+
+        .sidebar-bottom {
+            flex-shrink: 0;
+            padding: 12px 16px;
+            border-top: 1px solid var(--color-outline-variant);
+            background: var(--color-surface-container);
+        }
+
+        .sidebar-user {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .sidebar-user-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sidebar-user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--gemini-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.9rem;
+        }
+
+        .sidebar-user-name {
+            font-size: 0.9rem;
+            color: var(--color-on-surface);
+        }
+
+        .sidebar-settings-btn {
+            padding: 8px 12px;
+            background: var(--color-surface);
+            border: 1px solid var(--color-outline-variant);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: var(--color-on-surface);
+            cursor: pointer;
+            transition: all var(--duration-short) var(--ease-standard);
+        }
+
+        .sidebar-settings-btn:hover {
+            background: var(--color-primary);
+            color: white;
+            border-color: var(--color-primary);
+        }
+
+        /* 简洁历史记录列表样式 */
+        .history-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .history-section-title {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--color-on-surface-variant);
+        }
+
+        .history-refresh-btn {
+            background: none;
+            border: none;
+            color: var(--color-primary);
+            cursor: pointer;
+            padding: 4px;
+            font-size: 0.85rem;
+            transition: transform var(--duration-short) var(--ease-standard);
+        }
+
+        .history-refresh-btn:hover {
+            transform: rotate(180deg);
+        }
+
+        .history-simple-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .history-simple-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background var(--duration-short) var(--ease-standard);
+            margin-bottom: 4px;
+        }
+
+        .history-simple-item:hover {
+            background: var(--color-surface-container);
+        }
+
+        .history-simple-item.active {
+            background: rgba(var(--color-primary-rgb), 0.1);
+        }
+
+        .history-simple-keyword {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--color-on-surface);
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .history-simple-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: var(--color-on-surface-variant);
+        }
+
+        .history-simple-time {
+            color: var(--color-on-surface-variant);
+        }
+
+        .history-simple-count {
+            background: var(--color-surface-container);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .history-empty {
+            text-align: center;
+            padding: 24px 16px;
+            color: var(--color-on-surface-variant);
+            font-size: 0.85rem;
+        }
+
+        /* Cookie配置紧凑样式 */
+        .cookie-compact {
+            background: var(--color-surface-container);
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin-top: 12px;
+        }
+
+        .cookie-compact-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .cookie-compact-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: var(--color-on-surface);
+        }
+
+        .cookie-compact-status {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .cookie-compact-status.configured {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .cookie-compact-status.not-configured {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .cookie-compact-toggle {
+            font-size: 0.75rem;
+            color: var(--color-on-surface-variant);
+            transition: transform var(--duration-short) var(--ease-standard);
+        }
+
+        .cookie-compact.expanded .cookie-compact-toggle {
+            transform: rotate(180deg);
+        }
+
+        .cookie-compact-content {
+            display: none;
+            padding-top: 12px;
+        }
+
+        .cookie-compact.expanded .cookie-compact-content {
+            display: block;
+        }
+
+        /* ==================== 实时日志面板样式 ==================== */
+        .log-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 380px;
+            max-height: 340px;
+            background: var(--color-surface);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-3);
+            z-index: 1030;
+            display: flex;
+            flex-direction: column;
+            transition: all var(--duration-medium) var(--ease-standard);
+            border: 1px solid var(--color-outline-variant);
+            overflow: hidden;
+        }
+
+        .log-panel.collapsed {
+            max-height: 48px;
+            width: 180px;
+        }
+
+        .log-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--gemini-gradient);
+            color: white;
+            cursor: pointer;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .log-panel-header:hover {
+            opacity: 0.95;
+        }
+
+        .log-panel-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .log-panel-title i {
+            font-size: 1rem;
+        }
+
+        .log-panel-badge {
+            background: #ff4757;
+            color: white;
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 10px;
+            min-width: 18px;
+            text-align: center;
+            display: none;
+            animation: badgePulse 1s ease-in-out infinite;
+        }
+
+        @keyframes badgePulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .log-panel.collapsed .log-panel-badge.has-new {
+            display: inline-block;
+        }
+
+        .log-panel-toggle {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            padding: 4px;
+            font-size: 0.9rem;
+            transition: transform var(--duration-short) var(--ease-standard);
+        }
+
+        .log-panel.collapsed .log-panel-toggle {
+            transform: rotate(180deg);
+        }
+
+        .log-panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            max-height: 280px;
+        }
+
+        .log-panel.collapsed .log-panel-content {
+            display: none;
+        }
+
+        .log-panel-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .log-panel-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .log-panel-content::-webkit-scrollbar-thumb {
+            background: var(--color-outline-variant);
+            border-radius: 3px;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 10px;
+            padding: 10px 14px;
+            font-size: 0.82rem;
+            border-bottom: 1px solid var(--color-outline-variant);
+            animation: logSlideIn 0.2s ease;
+        }
+
+        @keyframes logSlideIn {
+            from {
+                opacity: 0;
+                transform: translateX(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-entry .log-time {
+            color: var(--color-on-surface-variant);
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.75rem;
+            flex-shrink: 0;
+        }
+
+        .log-entry .log-message {
+            flex: 1;
+            word-break: break-word;
+            line-height: 1.4;
+        }
+
+        .log-entry.log-info .log-message { color: var(--color-on-surface); }
+        .log-entry.log-success .log-message { color: #2e7d32; }
+        .log-entry.log-warning .log-message { color: #ed6c02; }
+        .log-entry.log-error .log-message { color: #d32f2f; font-weight: 500; }
+
+        .log-empty {
+            text-align: center;
+            padding: 24px;
+            color: var(--color-on-surface-variant);
+            font-size: 0.85rem;
+        }
+
+        .log-empty i {
+            font-size: 2rem;
+            margin-bottom: 8px;
+            opacity: 0.5;
+            display: block;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 576px) {
+            .log-panel {
+                width: calc(100% - 40px);
+                right: 20px;
+                left: 20px;
+            }
+            .log-panel.collapsed {
+                width: 160px;
+                left: auto;
             }
         }
     </style>
@@ -621,135 +1507,151 @@
     <!-- 侧边栏遮罩 -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
-    <!-- 侧边栏 -->
+    <!-- 侧边栏（三段式布局） -->
     <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <h5><i class="fas fa-cog"></i> 设置与管理</h5>
-            <button class="sidebar-close" onclick="closeSidebar()">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-        <div class="sidebar-content">
-            <!-- Cookie配置区域 -->
-            <div class="sidebar-section" id="cookieSection">
-                <div class="sidebar-section-header" onclick="toggleSection('cookieSection')">
-                    <span>
-                        <i class="fas fa-key"></i> Cookie配置
-                        <span class="cookie-status-indicator not-configured" id="cookieIndicator">
-                            <i class="fas fa-exclamation-circle"></i> 未配置
-                        </span>
-                    </span>
-                    <i class="fas fa-chevron-down"></i>
+        <!-- 顶部区域：Logo + Cookie配置 -->
+        <div class="sidebar-top">
+            <div class="sidebar-logo">
+                <div class="sidebar-logo-icon">🔥</div>
+                <div class="sidebar-logo-text">
+                    爆文模型Agent
+                    <small>智能分析爆款笔记</small>
                 </div>
-                <div class="sidebar-section-content">
-                    <div class="mb-3">
-                        <label class="form-label small">小红书Cookie</label>
-                        <textarea class="form-control form-control-sm" id="cookieInput" rows="4"
-                                  placeholder="从浏览器F12开发者工具获取"></textarea>
-                        <small class="text-muted">包含a1、web_session等字段</small>
+                <button class="sidebar-close" onclick="closeSidebar()" title="关闭" style="margin-left: auto;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <!-- Cookie配置（紧凑可展开） -->
+            <div class="cookie-compact" id="cookieCompact">
+                <div class="cookie-compact-header" onclick="toggleCookieConfig()">
+                    <div class="cookie-compact-title">
+                        <i class="fas fa-key"></i>
+                        <span>Cookie配置</span>
+                        <span class="cookie-compact-status not-configured" id="cookieCompactStatus">未配置</span>
                     </div>
-                    <div class="d-grid gap-2">
-                        <button type="button" class="btn btn-success btn-sm" onclick="saveCookie()">
+                    <i class="fas fa-chevron-down cookie-compact-toggle"></i>
+                </div>
+                <div class="cookie-compact-content">
+                    <textarea class="form-control form-control-sm mb-2" id="cookieInput" rows="3"
+                              placeholder="从浏览器F12开发者工具获取"></textarea>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-success btn-sm flex-grow-1" onclick="saveCookie()">
                             <i class="fas fa-save"></i> 保存
                         </button>
                         <button type="button" class="btn btn-outline-secondary btn-sm" onclick="checkCookie()">
-                            <i class="fas fa-check"></i> 检查状态
+                            <i class="fas fa-check"></i>
                         </button>
                     </div>
                     <div id="cookieStatus" class="mt-2 small"></div>
                 </div>
             </div>
+        </div>
 
-            <!-- 历史记录区域 -->
-            <div class="sidebar-section expanded" id="historySection">
-                <div class="sidebar-section-header" onclick="toggleSection('historySection')">
-                    <span><i class="fas fa-history"></i> 历史记录</span>
-                    <i class="fas fa-chevron-down"></i>
-                </div>
-                <div class="sidebar-section-content">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <small class="text-muted">点击加载历史分析</small>
-                        <button class="btn btn-link btn-sm p-0" onclick="loadHistory()" title="刷新">
-                            <i class="fas fa-sync-alt"></i>
-                        </button>
-                    </div>
-                    <div id="historyList" style="max-height: 300px; overflow-y: auto;">
-                        <div class="text-center text-muted small py-3">加载中...</div>
-                    </div>
-                </div>
+        <!-- 中间区域：历史记录（滚动） -->
+        <div class="sidebar-middle">
+            <div class="history-section-header">
+                <span class="history-section-title">
+                    <i class="fas fa-history"></i> 历史记录
+                </span>
+                <button class="history-refresh-btn" onclick="loadHistory()" title="刷新">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
             </div>
-
-            <!-- 知识库管理区域 -->
-            <div class="sidebar-section" id="knowledgeSection">
-                <div class="sidebar-section-header" onclick="toggleSection('knowledgeSection')">
-                    <span><i class="fas fa-database"></i> 知识库管理</span>
-                    <i class="fas fa-chevron-down"></i>
-                </div>
-                <div class="sidebar-section-content">
-                    <p class="small text-muted mb-3">管理领域知识和RAG文档库，提升AI分析质量</p>
-                    <button class="knowledge-btn" onclick="openKnowledgeManager()">
-                        <i class="fas fa-external-link-alt"></i> 打开知识库管理
-                    </button>
-                    <div class="mt-3" id="knowledgeSummary">
-                        <div class="text-center text-muted small">加载中...</div>
-                    </div>
-                </div>
+            <div id="historyList">
+                <div class="history-empty">加载中...</div>
             </div>
+        </div>
 
-            <!-- 系统清理 -->
-            <div class="sidebar-section" id="cleanupSection">
-                <div class="sidebar-section-header" onclick="toggleSection('cleanupSection')">
-                    <span><i class="fas fa-broom"></i> 系统清理</span>
-                    <i class="fas fa-chevron-down"></i>
+        <!-- 底部区域：用户信息 + 设置按钮 -->
+        <div class="sidebar-bottom">
+            <div class="sidebar-user">
+                <div class="sidebar-user-info">
+                    <div class="sidebar-user-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <span class="sidebar-user-name" id="sidebarUsername">用户</span>
                 </div>
-                <div class="sidebar-section-content">
-                    <p class="small text-muted mb-3">清理缓存和历史数据，释放存储空间</p>
-                    <div id="cleanupInfo" class="mb-3">
-                        <div class="text-center text-muted small">
-                            <i class="fas fa-spinner fa-spin"></i> 加载中...
+                <button class="sidebar-settings-btn" onclick="openSettingsModal()">
+                    <i class="fas fa-cog"></i> 设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置与管理模态框 -->
+    <div class="modal fade" id="settingsModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header" style="background: var(--primary-gradient); color: white;">
+                    <h5 class="modal-title"><i class="fas fa-cog"></i> 设置与管理</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- 知识库管理 -->
+                    <div class="mb-4">
+                        <h6 class="mb-3"><i class="fas fa-database text-primary"></i> 知识库管理</h6>
+                        <p class="small text-muted mb-2">管理领域知识和RAG文档库，提升AI分析质量</p>
+                        <div id="knowledgeSummary" class="mb-2">
+                            <div class="text-center text-muted small">加载中...</div>
                         </div>
-                    </div>
-                    <div class="cleanup-categories mb-3" id="cleanupCategories" style="display:none;">
-                        <div class="form-check small">
-                            <input class="form-check-input" type="checkbox" id="clean_cover_cache" checked>
-                            <label class="form-check-label" for="clean_cover_cache">
-                                封面缓存 <span class="text-muted" id="size_cover_cache"></span>
-                            </label>
-                        </div>
-                        <div class="form-check small">
-                            <input class="form-check-input" type="checkbox" id="clean_video_cache" checked>
-                            <label class="form-check-label" for="clean_video_cache">
-                                视频缓存 <span class="text-muted" id="size_video_cache"></span>
-                            </label>
-                        </div>
-                        <div class="form-check small">
-                            <input class="form-check-input" type="checkbox" id="clean_logs" checked>
-                            <label class="form-check-label" for="clean_logs">
-                                日志文件 <span class="text-muted" id="size_logs"></span>
-                            </label>
-                        </div>
-                        <div class="form-check small">
-                            <input class="form-check-input" type="checkbox" id="clean_viral_analysis">
-                            <label class="form-check-label" for="clean_viral_analysis">
-                                分析结果 <span class="text-muted" id="size_viral_analysis"></span>
-                            </label>
-                        </div>
-                        <div class="form-check small">
-                            <input class="form-check-input" type="checkbox" id="clean_excel_datas">
-                            <label class="form-check-label" for="clean_excel_datas">
-                                爬虫数据 <span class="text-muted" id="size_excel_datas"></span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-outline-secondary btn-sm flex-grow-1" onclick="previewCleanup()">
-                            <i class="fas fa-eye"></i> 预览
-                        </button>
-                        <button class="btn btn-danger btn-sm flex-grow-1" onclick="executeCleanup()">
-                            <i class="fas fa-trash-alt"></i> 清理
+                        <button class="btn btn-primary btn-sm w-100" onclick="openKnowledgeManager()">
+                            <i class="fas fa-external-link-alt"></i> 打开知识库管理
                         </button>
                     </div>
-                    <div id="cleanupResult" class="mt-2 small" style="display:none;"></div>
+
+                    <hr>
+
+                    <!-- 系统清理 -->
+                    <div>
+                        <h6 class="mb-3"><i class="fas fa-broom text-warning"></i> 系统清理</h6>
+                        <p class="small text-muted mb-2">清理缓存和历史数据，释放存储空间</p>
+                        <div id="cleanupInfo" class="mb-3">
+                            <div class="text-center text-muted small">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
+                        </div>
+                        <div class="cleanup-categories mb-3" id="cleanupCategories" style="display:none;">
+                            <div class="form-check small">
+                                <input class="form-check-input" type="checkbox" id="clean_cover_cache" checked>
+                                <label class="form-check-label" for="clean_cover_cache">
+                                    封面缓存 <span class="text-muted" id="size_cover_cache"></span>
+                                </label>
+                            </div>
+                            <div class="form-check small">
+                                <input class="form-check-input" type="checkbox" id="clean_video_cache" checked>
+                                <label class="form-check-label" for="clean_video_cache">
+                                    视频缓存 <span class="text-muted" id="size_video_cache"></span>
+                                </label>
+                            </div>
+                            <div class="form-check small">
+                                <input class="form-check-input" type="checkbox" id="clean_logs" checked>
+                                <label class="form-check-label" for="clean_logs">
+                                    日志文件 <span class="text-muted" id="size_logs"></span>
+                                </label>
+                            </div>
+                            <div class="form-check small">
+                                <input class="form-check-input" type="checkbox" id="clean_viral_analysis">
+                                <label class="form-check-label" for="clean_viral_analysis">
+                                    分析结果 <span class="text-muted" id="size_viral_analysis"></span>
+                                </label>
+                            </div>
+                            <div class="form-check small">
+                                <input class="form-check-input" type="checkbox" id="clean_excel_datas">
+                                <label class="form-check-label" for="clean_excel_datas">
+                                    爬虫数据 <span class="text-muted" id="size_excel_datas"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-secondary btn-sm flex-grow-1" onclick="previewCleanup()">
+                                <i class="fas fa-eye"></i> 预览
+                            </button>
+                            <button class="btn btn-danger btn-sm flex-grow-1" onclick="executeCleanup()">
+                                <i class="fas fa-trash-alt"></i> 清理
+                            </button>
+                        </div>
+                        <div id="cleanupResult" class="mt-2 small" style="display:none;"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -798,41 +1700,81 @@
                                 <small class="text-muted" id="keywordCount">已添加: 0/5</small>
                             </div>
                         </div>
-                        <div class="row">
-                            <div class="col-md-4">
-                                <div class="mb-3">
-                                    <label class="form-label">目标数量（三维度总和）</label>
-                                    <input type="number" class="form-control" id="targetCount" value="100" min="30" max="500">
-                                    <small class="text-muted">将从点赞/评论/收藏三个维度并行爬取</small>
+                        <!-- 分析规模选择（目标导向设计） -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="fas fa-bullseye"></i> 期望分析数量
+                            </label>
+                            <div class="btn-group w-100 mb-2 analysis-scale-group" role="group">
+                                <input type="radio" class="btn-check" name="analysisScale" id="scale30" value="30">
+                                <label class="btn btn-outline-primary scale-btn" for="scale30">
+                                    <div class="scale-title">🔍 快速</div>
+                                    <small>~30篇 · 2分钟</small>
+                                </label>
+
+                                <input type="radio" class="btn-check" name="analysisScale" id="scale60" value="60" checked>
+                                <label class="btn btn-outline-primary scale-btn" for="scale60">
+                                    <div class="scale-title">📊 标准</div>
+                                    <small>~60篇 · 5分钟</small>
+                                </label>
+
+                                <input type="radio" class="btn-check" name="analysisScale" id="scale120" value="120">
+                                <label class="btn btn-outline-primary scale-btn" for="scale120">
+                                    <div class="scale-title">🎯 深度</div>
+                                    <small>~120篇 · 15分钟</small>
+                                </label>
+
+                                <input type="radio" class="btn-check" name="analysisScale" id="scaleCustom" value="custom">
+                                <label class="btn btn-outline-primary scale-btn" for="scaleCustom">
+                                    <div class="scale-title">⚙️ 自定义</div>
+                                    <small>5-200篇</small>
+                                </label>
+                            </div>
+
+                            <!-- 自定义输入（默认隐藏） -->
+                            <div id="customScaleInput" class="mb-2" style="display: none;">
+                                <div class="input-group">
+                                    <span class="input-group-text">自定义数量</span>
+                                    <input type="number" class="form-control" id="customAnalysisCount" value="60" min="5" max="200">
+                                    <span class="input-group-text">篇</span>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="mb-3">
-                                    <label class="form-label">爆款筛选比例</label>
-                                    <select class="form-select" id="viralRatio">
-                                        <option value="0.5" selected>前 1/2（推荐）</option>
-                                        <option value="0.33">前 1/3</option>
-                                        <option value="0.25">前 1/4</option>
-                                    </select>
-                                    <small class="text-muted">按互动总分排序后取前N</small>
+
+                            <!-- 简洁预估信息 -->
+                            <div class="estimate-summary p-2 rounded bg-light border" id="estimateFlowCard">
+                                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 small">
+                                    <span>
+                                        <i class="fas fa-robot text-success"></i>
+                                        预计分析 <strong id="estAnalysis" class="text-success">55-65</strong> 篇
+                                    </span>
+                                    <span class="text-muted">
+                                        <i class="fas fa-clock"></i> <span id="estTime">~5分钟</span>
+                                        &nbsp;·&nbsp;
+                                        <i class="fas fa-coins"></i> <span id="estCost">~1.5元</span>
+                                    </span>
+                                    <span class="text-success">
+                                        <i class="fas fa-magic"></i> 自动补采
+                                    </span>
                                 </div>
+                                <!-- 隐藏的中间值（保持JS兼容） -->
+                                <span id="estCollect" style="display:none">~200条</span>
+                                <span id="estDedupe" style="display:none">~140条</span>
+                                <span id="estViral" style="display:none">~70条</span>
                             </div>
-                            <div class="col-md-4">
-                                <div class="mb-3">
-                                    <label class="form-label">最低分析样本量</label>
-                                    <input type="number" class="form-control" id="minSampleCount" value="50" min="10" max="200">
-                                    <small class="text-muted">低于此数量将显示警告</small>
-                                </div>
-                            </div>
+
+                            <!-- 隐藏的原参数（保持后端兼容） -->
+                            <input type="hidden" id="targetCount" value="200">
+                            <input type="hidden" id="viralRatio" value="0.5">
+                            <input type="hidden" id="minSampleCount" value="60">
                         </div>
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">笔记类型</label>
                                     <select class="form-select" id="noteType">
-                                        <option value="0">不限</option>
-                                        <option value="1">视频</option>
                                         <option value="2">图文</option>
+                                        <option value="1">视频</option>
+                                        <option value="0" selected>不限</option>
                                     </select>
                                 </div>
                             </div>
@@ -848,18 +1790,6 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- 样本量预估显示 -->
-                        <div class="sample-estimate-bar mb-3" id="sampleEstimateBar" style="display: none;">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-calculator me-2"></i>
-                                <span>预估筛选后样本量：</span>
-                                <span class="fw-bold ms-1" id="estimatedSample">--</span>
-                                <span class="sample-warning ms-3" id="sampleWarning" style="display: none;">
-                                    <i class="fas fa-exclamation-triangle text-warning"></i>
-                                    <span class="text-warning">建议增加关键词</span>
-                                </span>
-                            </div>
-                        </div>
                         <div class="text-center">
                             <button type="submit" class="btn btn-primary btn-lg" id="startSearchBtn">
                                 <i class="fas fa-rocket"></i> 开始采集分析
@@ -869,167 +1799,136 @@
                 </div>
             </div>
 
-            <!-- 进度显示卡片 -->
-            <div class="card" id="progressCard" style="display: none;">
+            <!-- 执行进度与分析概览（合并卡片） -->
+            <div class="card" id="progressResultCard" style="display: none;">
                 <div class="card-header">
-                    <i class="fas fa-tasks"></i> 执行进度
+                    <i class="fas fa-tasks"></i> 执行进度与分析概览
                 </div>
                 <div class="card-body">
-                    <div class="mb-3">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span id="statusMessage">正在初始化...</span>
-                            <span class="status-badge status-running" id="statusBadge">运行中</span>
+                    <div class="row">
+                        <!-- 左侧：执行进度 -->
+                        <div class="col-md-6 border-end">
+                            <h6 class="text-muted mb-3"><i class="fas fa-spinner fa-spin me-1"></i> 执行进度</h6>
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span id="statusMessage">正在初始化...</span>
+                                    <span class="status-badge status-running" id="statusBadge">运行中</span>
+                                </div>
+                                <div class="progress">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                         id="progressBar" style="width: 0%">
+                                        <span id="progressText">0%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row text-center g-2">
+                                <div class="col-6">
+                                    <div class="stats-card">
+                                        <div class="stats-value" id="collectedCount">0</div>
+                                        <div class="stats-label">已采集</div>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="stats-card">
+                                        <div class="stats-value" id="targetCountDisplay">60</div>
+                                        <div class="stats-label">期望分析</div>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="stats-card">
+                                        <div class="stats-value" id="elapsedTime">00:00</div>
+                                        <div class="stats-label">总用时</div>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="stats-card">
+                                        <div class="stats-value" id="estimatedRemaining">--:--</div>
+                                        <div class="stats-label">预估剩余</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 分析进度提示 -->
+                            <div id="analysisProgressHint" class="alert alert-info mt-3" style="display: none;">
+                                <div class="d-flex align-items-center">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                    <div>
+                                        <strong>正在AI分析中...</strong><br>
+                                        <small id="analysisProgressText">预计需要数分钟</small>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="progress">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated"
-                                 id="progressBar" style="width: 0%">
-                                <span id="progressText">0%</span>
+
+                        <!-- 右侧：分析概览 -->
+                        <div class="col-md-6">
+                            <h6 class="text-muted mb-3"><i class="fas fa-chart-bar me-1"></i> 分析概览</h6>
+                            <div class="row g-2">
+                                <div class="col-12">
+                                    <div class="feature-card">
+                                        <h6 class="feature-title mb-2"><i class="fas fa-heading"></i> 标题特征</h6>
+                                        <div id="titleFeatures" class="small">
+                                            <div class="d-flex justify-content-between mb-2">
+                                                <span class="text-muted">平均长度</span>
+                                                <span class="fw-bold text-primary"><span id="avgTitleLength">-</span> 字</span>
+                                            </div>
+                                            <div class="mb-1 text-muted">高频关键词：</div>
+                                            <div id="titleKeywords" class="d-flex flex-wrap gap-1"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-12">
+                                    <div class="feature-card">
+                                        <h6 class="feature-title mb-2"><i class="fas fa-heart"></i> 互动特征</h6>
+                                        <div id="interactionFeatures" class="small">
+                                            <div class="d-flex justify-content-between mb-1">
+                                                <span class="text-muted">平均点赞</span>
+                                                <span class="fw-bold text-danger"><span id="avgLikes">-</span></span>
+                                            </div>
+                                            <div class="d-flex justify-content-between mb-1">
+                                                <span class="text-muted">平均收藏</span>
+                                                <span class="fw-bold text-warning"><span id="avgCollects">-</span></span>
+                                            </div>
+                                            <div class="d-flex justify-content-between">
+                                                <span class="text-muted">收藏率</span>
+                                                <span class="fw-bold text-success"><span id="collectionRate">-</span></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 导出按钮 -->
+                            <div class="text-center mt-2">
+                                <button class="btn btn-success btn-sm" onclick="exportResults('excel')">
+                                    <i class="fas fa-file-excel"></i> 导出Excel
+                                </button>
+                                <button class="btn btn-info btn-sm" onclick="exportResults('json')">
+                                    <i class="fas fa-file-code"></i> 导出JSON
+                                </button>
                             </div>
                         </div>
                     </div>
-                    <div class="row text-center">
-                        <div class="col-md-3">
-                            <div class="stats-card">
-                                <div class="stats-value" id="collectedCount">0</div>
-                                <div class="stats-label">已采集</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="stats-card">
-                                <div class="stats-value" id="targetCountDisplay">100</div>
-                                <div class="stats-label">目标数量</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="stats-card">
-                                <div class="stats-value" id="avgInteraction">-</div>
-                                <div class="stats-label">平均互动</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="stats-card">
-                                <div class="stats-value" id="elapsedTime">00:00</div>
-                                <div class="stats-label">用时</div>
-                            </div>
-                        </div>
-                    </div>
+                </div>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <!-- 分析结果卡片 -->
-            <div id="resultsSection">
-                <div class="card">
-                    <div class="card-header">
-                        <i class="fas fa-chart-bar"></i> 分析结果
-                    </div>
-                    <div class="card-body">
-                        <div class="row g-3">
-                            <div class="col-md-4">
-                                <div class="feature-card h-100">
-                                    <h6 class="feature-title mb-2"><i class="fas fa-heading"></i> 标题特征</h6>
-                                    <div id="titleFeatures" class="small">
-                                        <div class="d-flex justify-content-between mb-2">
-                                            <span class="text-muted">平均长度</span>
-                                            <span class="fw-bold text-primary"><span id="avgTitleLength">-</span> 字</span>
-                                        </div>
-                                        <div class="mb-1 text-muted">高频关键词：</div>
-                                        <div id="titleKeywords" class="d-flex flex-wrap gap-1"></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="feature-card h-100">
-                                    <h6 class="feature-title mb-2"><i class="fas fa-file-alt"></i> 内容特征</h6>
-                                    <div id="contentFeatures" class="small">
-                                        <div class="d-flex justify-content-between mb-2">
-                                            <span class="text-muted">平均长度</span>
-                                            <span class="fw-bold text-primary"><span id="avgContentLength">-</span> 字</span>
-                                        </div>
-                                        <div class="mb-1 text-muted">内容结构：</div>
-                                        <ul id="contentStructure" class="mb-0 ps-3"></ul>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="feature-card h-100">
-                                    <h6 class="feature-title mb-2"><i class="fas fa-heart"></i> 互动特征</h6>
-                                    <div id="interactionFeatures" class="small">
-                                        <div class="d-flex justify-content-between mb-1">
-                                            <span class="text-muted">平均点赞</span>
-                                            <span class="fw-bold text-danger"><span id="avgLikes">-</span></span>
-                                        </div>
-                                        <div class="d-flex justify-content-between mb-1">
-                                            <span class="text-muted">平均收藏</span>
-                                            <span class="fw-bold text-warning"><span id="avgCollects">-</span></span>
-                                        </div>
-                                        <div class="d-flex justify-content-between">
-                                            <span class="text-muted">收藏率</span>
-                                            <span class="fw-bold text-success"><span id="collectionRate">-</span></span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="text-center mt-3">
-                            <div class="form-check form-check-inline mb-3">
-                                <input class="form-check-input" type="checkbox" id="useAiCheckbox" checked>
-                                <label class="form-check-label" for="useAiCheckbox">
-                                    启用AI深度分析（使用DeepSeek API，成本极低）
-                                </label>
-                            </div>
-                            <br>
-                            <!-- 分析类型选择器 -->
-                            <div class="mb-3">
-                                <label class="form-label"><i class="fas fa-filter"></i> 分析类型：</label>
-                                <div class="btn-group" role="group">
-                                    <input type="radio" class="btn-check" name="analysisType" id="analysisTypeAll" value="all" checked>
-                                    <label class="btn btn-outline-primary" for="analysisTypeAll">
-                                        <i class="fas fa-layer-group"></i> 全部
-                                    </label>
-                                    <input type="radio" class="btn-check" name="analysisType" id="analysisTypeImage" value="image">
-                                    <label class="btn btn-outline-success" for="analysisTypeImage">
-                                        <i class="fas fa-image"></i> 仅图文
-                                    </label>
-                                    <input type="radio" class="btn-check" name="analysisType" id="analysisTypeVideo" value="video">
-                                    <label class="btn btn-outline-danger" for="analysisTypeVideo">
-                                        <i class="fas fa-video"></i> 仅视频
-                                    </label>
-                                </div>
-                                <small class="text-muted d-block mt-1">选择要分析的笔记类型</small>
-                            </div>
-                            <!-- 视频源模式选择器（选择"仅图文"时自动隐藏） -->
-                            <div class="mb-3" id="videoSourceModeGroup">
-                                <label class="form-label"><i class="fas fa-cloud-download-alt"></i> 视频读取方式：</label>
-                                <div class="btn-group" role="group">
-                                    <input type="radio" class="btn-check" name="videoSourceMode" id="videoSourceModeUrl" value="url" checked>
-                                    <label class="btn btn-outline-info btn-sm" for="videoSourceModeUrl">
-                                        <i class="fas fa-link"></i> URL直传
-                                    </label>
-                                    <input type="radio" class="btn-check" name="videoSourceMode" id="videoSourceModeProxy" value="proxy">
-                                    <label class="btn btn-outline-warning btn-sm" for="videoSourceModeProxy">
-                                        <i class="fas fa-download"></i> 本地下载
-                                    </label>
-                                </div>
-                                <small class="text-muted d-block mt-1">
-                                    URL直传：速度快，但部分API可能无法访问视频<br>
-                                    本地下载：先下载视频再分析，解决CDN防盗链问题
-                                </small>
-                            </div>
-                            <button class="btn btn-primary" onclick="startAnalysis()">
-                                <i class="fas fa-chart-line"></i> 开始分析
-                            </button>
-                            <button class="btn btn-success" onclick="exportResults('excel')">
-                                <i class="fas fa-file-excel"></i> 导出Excel
-                            </button>
-                            <button class="btn btn-info" onclick="exportResults('json')">
-                                <i class="fas fa-file-code"></i> 导出JSON
-                            </button>
-                            <button class="btn btn-warning" onclick="exportLatest('excel')">
-                                <i class="fas fa-download"></i> 导出最新数据
-                            </button>
-                        </div>
-                    </div>
-                </div>
+    <!-- 实时日志面板 -->
+    <div class="log-panel collapsed" id="logPanel">
+        <div class="log-panel-header" onclick="toggleLogPanel()">
+            <div class="log-panel-title">
+                <i class="fas fa-terminal"></i>
+                <span>执行日志</span>
+                <span class="log-panel-badge" id="logBadge">0</span>
+            </div>
+            <button class="log-panel-toggle" title="展开/折叠">
+                <i class="fas fa-chevron-up"></i>
+            </button>
+        </div>
+        <div class="log-panel-content" id="logContent">
+            <div class="log-empty">
+                <i class="fas fa-inbox"></i>
+                暂无日志，启动任务后将显示执行进度
             </div>
         </div>
     </div>
@@ -1418,21 +2317,30 @@
         let currentTaskId = null;
         let statusTimer = null;
         let startTime = null;
+        let collectionNoteType = null;  // 保存采集时的笔记类型，用于自动分析
+        let globalTimer = null;  // 全局计时器，贯穿采集和分析阶段
+        let isAnalyzing = false;  // 是否正在分析
+        let analysisStartTime = null;  // 分析开始时间
+        let collectedNoteCount = 0;  // 采集的笔记数量，用于分析时间估算
 
         // ==================== 侧边栏控制 ====================
 
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
+            const mainWrapper = document.getElementById('mainWrapper');
             sidebar.classList.toggle('open');
             overlay.classList.toggle('show');
+            mainWrapper.classList.toggle('sidebar-open');  // 推挤主内容区
         }
 
         function closeSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
+            const mainWrapper = document.getElementById('mainWrapper');
             sidebar.classList.remove('open');
             overlay.classList.remove('show');
+            mainWrapper.classList.remove('sidebar-open');  // 取消推挤
         }
 
         function toggleSection(sectionId) {
@@ -1440,12 +2348,69 @@
             section.classList.toggle('expanded');
         }
 
+        // Cookie配置展开/折叠
+        function toggleCookieConfig() {
+            const cookieCompact = document.getElementById('cookieCompact');
+            cookieCompact.classList.toggle('expanded');
+        }
+
+        // 打开设置与管理模态框
+        function openSettingsModal() {
+            closeSidebar();
+            const settingsModal = new bootstrap.Modal(document.getElementById('settingsModal'));
+            settingsModal.show();
+            loadKnowledgeSummary();
+            loadCleanupInfo();
+        }
+
         // 打开知识库管理模态框
         function openKnowledgeManager() {
+            // 先关闭设置模态框（如果打开的话）
+            const settingsModalEl = document.getElementById('settingsModal');
+            const settingsModal = bootstrap.Modal.getInstance(settingsModalEl);
+            if (settingsModal) {
+                settingsModal.hide();
+            }
             closeSidebar();
+
             const modal = new bootstrap.Modal(document.getElementById('knowledgeModal'));
             modal.show();
             loadDomains();
+        }
+
+        // 格式化时间为简短形式
+        function formatTimeShort(timeStr) {
+            if (!timeStr) return '-';
+            try {
+                // 假设 timeStr 格式为 "2024-01-15 14:30:00"
+                const parts = timeStr.split(' ');
+                if (parts.length < 2) return timeStr;
+
+                const datePart = parts[0];
+                const timePart = parts[1];
+                const dateObj = new Date(datePart + 'T' + timePart);
+                const now = new Date();
+                const diffMs = now - dateObj;
+                const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+                if (diffHours < 1) return '刚刚';
+                if (diffHours < 24) return `${diffHours}h前`;
+                if (diffDays === 1) return '昨天';
+                if (diffDays < 7) return `${diffDays}天前`;
+                // 超过7天显示日期
+                return datePart.substring(5);  // MM-DD
+            } catch (e) {
+                return timeStr;
+            }
+        }
+
+        // 采集完成后自动滚动到进度区域
+        function scrollToProgressCard() {
+            const progressCard = document.getElementById('progressResultCard');
+            if (progressCard) {
+                progressCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
         }
 
         // ==================== 多关键词管理 ====================
@@ -1532,33 +2497,95 @@
             document.getElementById('keywordCount').textContent = `已添加: ${keywordList.length}/${MAX_KEYWORDS}`;
         }
 
-        // 更新样本量预估
-        function updateSampleEstimate() {
-            const targetCount = parseInt(document.getElementById('targetCount').value) || 100;
-            const viralRatio = parseFloat(document.getElementById('viralRatio').value) || 0.5;
-            const minSampleCount = parseInt(document.getElementById('minSampleCount').value) || 50;
+        // ==================== 目标导向参数计算 ====================
 
-            // 预估筛选后样本量
-            const estimatedAfterFilter = Math.floor(targetCount * viralRatio);
+        // 分析规模配置（预设参数映射）
+        const SCALE_CONFIG = {
+            '30':  { label: '快速', time: '~2分钟', cost: '~0.5元', viralRatio: 0.5 },
+            '60':  { label: '标准', time: '~5分钟', cost: '~1.5元', viralRatio: 0.5 },
+            '120': { label: '深度', time: '~15分钟', cost: '~4元', viralRatio: 0.5 }
+        };
 
-            // 显示预估条
-            const estimateBar = document.getElementById('sampleEstimateBar');
-            const estimatedSpan = document.getElementById('estimatedSample');
-            const warningSpan = document.getElementById('sampleWarning');
+        // 核心计算公式常量
+        const DEDUPE_RATE = 0.7;      // 历史平均去重保留率（70%保留，30%重复）
+        const SAFETY_FACTOR = 1.2;    // 安全冗余系数
 
-            if (keywordList.length > 0) {
-                estimateBar.style.display = 'block';
-                estimatedSpan.textContent = `约 ${estimatedAfterFilter} 篇`;
+        // 获取当前期望分析数量
+        function getExpectedAnalysisCount() {
+            const selected = document.querySelector('input[name="analysisScale"]:checked');
+            if (!selected) return 60;
 
-                // 显示警告
-                if (estimatedAfterFilter < minSampleCount) {
-                    warningSpan.style.display = 'inline';
-                } else {
-                    warningSpan.style.display = 'none';
-                }
-            } else {
-                estimateBar.style.display = 'none';
+            if (selected.value === 'custom') {
+                return parseInt(document.getElementById('customAnalysisCount').value) || 60;
             }
+            return parseInt(selected.value);
+        }
+
+        // 根据期望分析数量反推采集参数
+        function calculateCollectionParams(expectedCount) {
+            const viralRatio = 0.5;  // 固定取前50%
+
+            // 反推公式：采集目标 = 期望数量 ÷ 筛选比例 ÷ 去重率 × 安全冗余
+            const rawTarget = expectedCount / viralRatio / DEDUPE_RATE * SAFETY_FACTOR;
+            // 后端限制 target_count >= 30，此处 clamp 防止 422 错误
+            const targetCount = Math.max(30, Math.ceil(rawTarget));
+            const wasClamped = Math.ceil(rawTarget) < 30;
+
+            // 计算中间值用于显示
+            const estDedupe = Math.round(targetCount * DEDUPE_RATE);
+            const estViral = Math.round(estDedupe * viralRatio);
+
+            // 预估范围（±15%浮动）
+            const estMin = Math.round(estViral * 0.85);
+            const estMax = Math.round(estViral * 1.15);
+
+            // 当触发下限保护时，显示"≥期望值"而非可能误导的范围
+            const estAnalysis = wasClamped ? `≥${expectedCount}` : `${estMin}-${estMax}`;
+
+            return {
+                targetCount,           // 实际采集目标（传给后端）
+                viralRatio,            // 筛选比例
+                minSampleCount: expectedCount,  // 最低样本量 = 期望数量
+                estCollect: targetCount,
+                estDedupe,
+                estViral,
+                estAnalysis  // 不含"篇"，HTML已有
+            };
+        }
+
+        // 更新预估数据流显示
+        function updateEstimateFlow() {
+            const expectedCount = getExpectedAnalysisCount();
+            const params = calculateCollectionParams(expectedCount);
+
+            // 更新隐藏的表单字段（保持后端兼容）
+            document.getElementById('targetCount').value = params.targetCount;
+            document.getElementById('viralRatio').value = params.viralRatio;
+            document.getElementById('minSampleCount').value = params.minSampleCount;
+
+            // 更新可视化显示
+            document.getElementById('estCollect').textContent = `~${params.estCollect}条`;
+            document.getElementById('estDedupe').textContent = `~${params.estDedupe}条`;
+            document.getElementById('estViral').textContent = `~${params.estViral}条`;
+            document.getElementById('estAnalysis').textContent = params.estAnalysis;
+
+            // 更新耗时和成本预估
+            const config = SCALE_CONFIG[expectedCount] || {
+                time: `~${Math.ceil(expectedCount * 105 / 60)}分钟`,
+                cost: `~${(expectedCount * 0.025).toFixed(1)}元`
+            };
+            document.getElementById('estTime').textContent = config.time;
+            document.getElementById('estCost').textContent = config.cost;
+
+            // 显示/隐藏自定义输入框
+            const customInput = document.getElementById('customScaleInput');
+            const isCustom = document.querySelector('input[name="analysisScale"]:checked')?.value === 'custom';
+            customInput.style.display = isCustom ? 'block' : 'none';
+        }
+
+        // 兼容旧的函数名（被关键词输入调用）
+        function updateSampleEstimate() {
+            updateEstimateFlow();
         }
 
         // HTML转义
@@ -1568,10 +2595,61 @@
             return div.innerHTML;
         }
 
-        // 监听相关表单变化
-        document.getElementById('targetCount')?.addEventListener('change', updateSampleEstimate);
-        document.getElementById('viralRatio')?.addEventListener('change', updateSampleEstimate);
-        document.getElementById('minSampleCount')?.addEventListener('change', updateSampleEstimate);
+        // 监听分析规模选择变化
+        document.querySelectorAll('input[name="analysisScale"]').forEach(radio => {
+            radio.addEventListener('change', updateEstimateFlow);
+        });
+
+        // 监听自定义数量输入变化（带范围校验）
+        const customInput = document.getElementById('customAnalysisCount');
+        if (customInput) {
+            customInput.addEventListener('input', function() {
+                updateEstimateFlow();
+            });
+
+            // 失焦时强制clamp到有效范围
+            customInput.addEventListener('blur', function() {
+                const min = 5;
+                const max = 200;
+                let value = parseInt(this.value) || 60;
+
+                if (value < min || value > max) {
+                    const clamped = Math.min(max, Math.max(min, value));
+                    this.value = clamped;
+
+                    // 显示提示
+                    const hint = value < min
+                        ? `最少需要${min}篇，已自动调整`
+                        : `最多支持${max}篇，已自动调整`;
+                    showCustomInputHint(hint);
+                    updateEstimateFlow();
+                }
+            });
+        }
+
+        // 显示自定义输入提示
+        function showCustomInputHint(message) {
+            // 移除已有提示
+            const existingHint = document.getElementById('customInputHint');
+            if (existingHint) existingHint.remove();
+
+            // 创建新提示
+            const hint = document.createElement('div');
+            hint.id = 'customInputHint';
+            hint.className = 'text-warning small mt-1';
+            hint.innerHTML = `<i class="fas fa-exclamation-triangle"></i> ${message}`;
+            hint.style.animation = 'fadeIn 0.3s ease';
+
+            const container = document.getElementById('customScaleInput');
+            if (container) {
+                container.appendChild(hint);
+                // 3秒后自动消失
+                setTimeout(() => hint.remove(), 3000);
+            }
+        }
+
+        // 页面加载时初始化预估显示
+        setTimeout(updateEstimateFlow, 100);
 
         // 页面加载后初始化
         setTimeout(initKeywordInput, 100);
@@ -1596,9 +2674,12 @@
                 min_sample_count: parseInt(document.getElementById('minSampleCount').value) || 50
             };
 
-            document.getElementById('progressCard').style.display = 'block';
-            document.getElementById('resultsSection').style.display = 'none';
-            document.getElementById('targetCountDisplay').textContent = formData.target_count;
+            // 保存采集时的笔记类型，供自动分析使用
+            collectionNoteType = formData.note_type;
+
+            document.getElementById('progressResultCard').style.display = 'block';
+            // 显示期望分析数量（用户关心的是最终分析多少，而非采集多少）
+            document.getElementById('targetCountDisplay').textContent = getExpectedAnalysisCount();
 
             // 显示多关键词进度列表
             if (keywordList.length > 1) {
@@ -1606,6 +2687,11 @@
             }
 
             try {
+                // 清空并展开日志面板
+                clearLogs();
+                const logPanel = document.getElementById('logPanel');
+                logPanel.classList.remove('collapsed');
+
                 const response = await authFetch('/api/viral/search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -1616,6 +2702,12 @@
                 if (data.task_id) {
                     currentTaskId = data.task_id;
                     startTime = new Date();
+                    isAnalyzing = false;  // 重置分析状态
+                    analysisStartTime = null;
+                    analysisStarted = false;  // 重置分析启动标志，允许新任务触发分析
+                    collectedNoteCount = 0;
+                    logCursor = 0;  // 重置日志游标
+                    startGlobalTimer();  // 启动全局计时器
                     startStatusPolling();
                 }
             } catch (error) {
@@ -1625,7 +2717,7 @@
 
         // 显示多关键词进度列表
         function showKeywordProgressList(keywords) {
-            const progressCard = document.getElementById('progressCard');
+            const progressCard = document.getElementById('progressResultCard');
             let listHtml = `
                 <div class="keyword-progress-list" id="keywordProgressList">
                     <div class="mb-2 text-muted small">
@@ -1642,12 +2734,16 @@
             });
             listHtml += '</div>';
 
-            // 添加到进度卡片
+            // 添加到进度卡片（左侧执行进度区域）
             const existingList = document.getElementById('keywordProgressList');
             if (existingList) {
                 existingList.remove();
             }
-            progressCard.querySelector('.card-body').insertAdjacentHTML('beforeend', listHtml);
+            // 插入到左侧执行进度区域底部
+            const leftCol = progressCard.querySelector('.col-md-6.border-end');
+            if (leftCol) {
+                leftCol.insertAdjacentHTML('beforeend', listHtml);
+            }
         }
 
         // ==================== 状态轮询 ====================
@@ -1659,21 +2755,126 @@
                 if (!currentTaskId) return;
 
                 try {
-                    const response = await authFetch(`/api/viral/status/${currentTaskId}`);
+                    // 添加 log_cursor 参数，获取增量日志
+                    const url = logCursor > 0
+                        ? `/api/viral/status/${currentTaskId}?log_cursor=${logCursor}`
+                        : `/api/viral/status/${currentTaskId}`;
+                    const response = await authFetch(url);
                     const status = await response.json();
 
                     updateProgressDisplay(status);
 
-                    if (status.status === 'completed' || status.status === 'failed') {
+                    // 处理增量日志
+                    if (status.logs && status.logs.length > 0) {
+                        processIncrementalLogs(status.logs);
+                    }
+
+                    // 处理各种状态
+                    if (status.status === 'completed') {
+                        // 采集完成，自动启动分析
+                        showResults(status);
+                    } else if (status.status === 'analyzing') {
+                        // 分析进行中，继续轮询
+                        updateAnalysisProgress(status);
+                    } else if (status.status === 'analyzed') {
+                        // 分析完成
                         clearInterval(statusTimer);
-                        if (status.status === 'completed') {
-                            showResults(status);
-                        }
+                        onAnalysisCompleted(status);
+                    } else if (status.status === 'analysis_failed') {
+                        // 分析失败
+                        clearInterval(statusTimer);
+                        onAnalysisFailed(status);
+                    } else if (status.status === 'failed') {
+                        // 采集失败
+                        clearInterval(statusTimer);
+                        stopGlobalTimer();
+                        document.getElementById('estimatedRemaining').textContent = '采集失败';
                     }
                 } catch (error) {
                     console.error('获取状态失败:', error);
                 }
             }, 500);
+        }
+
+        // 更新分析进度显示
+        function updateAnalysisProgress(status) {
+            const progress = status.analysis_progress || 0;
+            document.getElementById('progressBar').style.width = progress + '%';
+            document.getElementById('progressText').textContent = progress + '%';
+            document.getElementById('statusMessage').textContent = `分析中 ${progress}%`;
+
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge status-running';
+            badge.textContent = '分析中';
+        }
+
+        // 分析完成回调
+        function onAnalysisCompleted(status) {
+            isAnalyzing = false;
+            stopGlobalTimer();
+            document.getElementById('estimatedRemaining').textContent = '已完成';
+
+            // 隐藏分析进度提示
+            const analysisHint = document.getElementById('analysisProgressHint');
+            if (analysisHint) {
+                analysisHint.style.display = 'none';
+            }
+
+            // 更新进度条
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('progressText').textContent = '100%';
+
+            // 更新状态徽章
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge status-completed';
+            badge.textContent = '分析完成';
+
+            // 显示成功提示
+            const successDiv = document.createElement('div');
+            successDiv.className = 'alert alert-success mt-3';
+            successDiv.id = 'analysisSuccessAlert';
+            successDiv.innerHTML = '<i class="fas fa-check-circle"></i> 分析完成！可点击「导出报告」下载Excel';
+            const leftCol = document.getElementById('progressResultCard').querySelector('.col-md-6.border-end');
+            // 移除旧的成功提示
+            const oldAlert = document.getElementById('analysisSuccessAlert');
+            if (oldAlert) oldAlert.remove();
+            if (leftCol) {
+                leftCol.appendChild(successDiv);
+            }
+
+            // 加载分析结果
+            if (status.analysis_file || status.analysis_completed) {
+                loadAnalysisResults();
+            }
+            loadHistory();
+        }
+
+        // 分析失败回调
+        function onAnalysisFailed(status) {
+            isAnalyzing = false;
+            stopGlobalTimer();
+            document.getElementById('estimatedRemaining').textContent = '分析失败';
+
+            // 隐藏分析进度提示
+            const analysisHint = document.getElementById('analysisProgressHint');
+            if (analysisHint) {
+                analysisHint.style.display = 'none';
+            }
+
+            // 更新状态徽章
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge status-failed';
+            badge.textContent = '分析失败';
+
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'alert alert-danger mt-3';
+            errorDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> 分析失败：' +
+                (status.analysis_error || '未知错误');
+            const leftCol = document.getElementById('progressResultCard').querySelector('.col-md-6.border-end');
+            if (leftCol) {
+                leftCol.appendChild(errorDiv);
+            }
+            setTimeout(() => errorDiv.remove(), 10000);
         }
 
         function updateProgressDisplay(status) {
@@ -1695,10 +2896,8 @@
                     `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
             }
 
-            if (status.statistics && status.statistics.avg_interaction) {
-                document.getElementById('avgInteraction').textContent =
-                    status.statistics.avg_interaction.toLocaleString();
-            }
+            // 更新预估剩余时间
+            updateEstimatedRemaining(status);
 
             // 更新多关键词进度
             if (status.status === 'completed') {
@@ -1751,6 +2950,87 @@
             });
         }
 
+        // 启动全局计时器（贯穿采集和分析阶段）
+        function startGlobalTimer() {
+            if (globalTimer) clearInterval(globalTimer);
+            globalTimer = setInterval(() => {
+                if (startTime) {
+                    const elapsed = Math.floor((new Date() - startTime) / 1000);
+                    const minutes = Math.floor(elapsed / 60);
+                    const seconds = elapsed % 60;
+                    document.getElementById('elapsedTime').textContent =
+                        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+                // 分析阶段更新预估剩余时间
+                if (isAnalyzing && analysisStartTime) {
+                    updateAnalysisEstimatedRemaining();
+                }
+            }, 1000);
+        }
+
+        // 停止全局计时器
+        function stopGlobalTimer() {
+            if (globalTimer) {
+                clearInterval(globalTimer);
+                globalTimer = null;
+            }
+        }
+
+        // 更新分析阶段预估剩余时间
+        function updateAnalysisEstimatedRemaining() {
+            const estimatedEl = document.getElementById('estimatedRemaining');
+            if (!estimatedEl) return;
+
+            const noteCount = collectedNoteCount || 0;
+            if (noteCount === 0) {
+                estimatedEl.textContent = '--:--';
+                return;
+            }
+
+            // 分析阶段：约105秒/篇（根据实际测试：8篇视频约14分钟）
+            const totalEstimatedSeconds = noteCount * 105;
+            const elapsedAnalysisSeconds = Math.floor((new Date() - analysisStartTime) / 1000);
+            const remainingSeconds = Math.max(0, totalEstimatedSeconds - elapsedAnalysisSeconds);
+
+            if (remainingSeconds === 0) {
+                estimatedEl.textContent = '即将完成';
+                return;
+            }
+
+            const minutes = Math.floor(remainingSeconds / 60);
+            const seconds = Math.floor(remainingSeconds % 60);
+            estimatedEl.textContent =
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        // 更新预估剩余时间（采集阶段）
+        // 采集阶段：约5秒/篇
+        function updateEstimatedRemaining(status) {
+            const estimatedEl = document.getElementById('estimatedRemaining');
+            if (!estimatedEl) return;
+
+            // 分析阶段由 updateAnalysisEstimatedRemaining 处理
+            if (isAnalyzing) return;
+
+            const collected = status.collected || 0;
+            const target = status.target || parseInt(document.getElementById('targetCountDisplay').textContent) || 100;
+            const remaining = target - collected;
+
+            if (remaining <= 0 || status.status === 'completed') {
+                // 采集完成，等待进入分析阶段
+                estimatedEl.textContent = '分析中...';
+                return;
+            }
+
+            // 采集阶段：约5秒/篇
+            const estimatedSeconds = remaining * 5;
+
+            const minutes = Math.floor(estimatedSeconds / 60);
+            const seconds = Math.floor(estimatedSeconds % 60);
+            estimatedEl.textContent =
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
         // 显示样本量警告
         function showSampleWarning(warning) {
             const existingWarning = document.getElementById('sampleWarningAlert');
@@ -1765,83 +3045,113 @@
                 ${warning}
             `;
 
-            const progressCard = document.getElementById('progressCard');
-            progressCard.querySelector('.card-body').appendChild(warningDiv);
+            // 添加到左侧进度区域
+            const progressCard = document.getElementById('progressResultCard');
+            const leftCol = progressCard.querySelector('.col-md-6.border-end');
+            if (leftCol) {
+                leftCol.appendChild(warningDiv);
+            }
         }
+
+        // 标志：是否已尝试启动分析（防止重复调用）
+        let analysisStarted = false;
 
         function showResults(status) {
-            document.getElementById('resultsSection').style.display = 'block';
             loadHistory(); // 刷新历史记录
+            scrollToProgressCard(); // 自动滚动到进度区域
+            // 采集完成后自动启动分析（只触发一次）
+            if (!analysisStarted) {
+                analysisStarted = true;
+                autoStartAnalysis();
+            }
         }
 
-        // ==================== 分析功能 ====================
+        // ==================== 分析功能（自动触发，后台任务模式） ====================
 
-        async function startAnalysis() {
+        async function autoStartAnalysis() {
             if (!currentTaskId) return;
 
-            const useAi = document.getElementById('useAiCheckbox').checked;
-            const analysisType = document.querySelector('input[name="analysisType"]:checked')?.value || 'all';
-            const videoSourceMode = document.querySelector('input[name="videoSourceMode"]:checked')?.value || 'url';
-            const analysisTypeLabels = { 'all': '全部', 'image': '图文', 'video': '视频' };
-            const videoModeLabels = { 'url': 'URL直传', 'proxy': '本地下载' };
+            // 防止重复调用（如果已在分析中）
+            if (isAnalyzing) {
+                console.log('分析已在进行中，跳过重复调用');
+                return;
+            }
 
-            const analyzeBtn = document.querySelector('button[onclick="startAnalysis()"]');
-            const originalBtnText = analyzeBtn.innerHTML;
-            analyzeBtn.disabled = true;
-            analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 分析中...';
+            // 使用采集开始时保存的笔记类型（避免用户中途修改下拉框导致分析类型不匹配）
+            const noteType = collectionNoteType ?? parseInt(document.getElementById('noteType').value);
+            let analysisType = 'all';
+            if (noteType === 1) analysisType = 'video';
+            else if (noteType === 2) analysisType = 'image';
 
-            // 构建提示信息（视频模式仅在包含视频分析时显示）
-            const hasVideo = analysisType === 'video' || analysisType === 'all';
-            const videoModeInfo = hasVideo ? ` | 视频：${videoModeLabels[videoSourceMode]}` : '';
+            // 设置分析阶段状态（用于全局计时器）
+            const collected = parseInt(document.getElementById('collectedCount').textContent) || 0;
+            collectedNoteCount = collected;
+            isAnalyzing = true;
+            analysisStartTime = new Date();
 
-            const loadingDiv = document.createElement('div');
-            loadingDiv.id = 'analysisLoading';
-            loadingDiv.className = 'alert alert-info mt-3';
-            loadingDiv.innerHTML = `
-                <div class="d-flex align-items-center">
-                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                    <div>
-                        <strong>正在分析中...</strong><br>
-                        <small>分析类型：${analysisTypeLabels[analysisType]}笔记${videoModeInfo} | ${useAi ? 'AI深度分析，约10分钟' : '基础特征分析'}</small>
-                    </div>
-                </div>
-            `;
-            document.getElementById('resultsSection').prepend(loadingDiv);
+            // 显示分析进度提示
+            const analysisHint = document.getElementById('analysisProgressHint');
+            const analysisText = document.getElementById('analysisProgressText');
+            if (analysisHint) {
+                analysisHint.style.display = 'block';
+                const estimatedMinutes = Math.ceil(collected * 1.2);  // 约1.2分钟/篇
+                analysisText.textContent = `分析 ${collected} 篇笔记，预计需要 ${estimatedMinutes} 分钟`;
+            }
 
             try {
+                // 启动后台分析任务（API立即返回，不等待分析完成）
                 const response = await authFetch('/api/viral/analyze', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         task_id: currentTaskId,
-                        use_ai: useAi,
-                        analysis_type: analysisType,
-                        video_source_mode: videoSourceMode
+                        use_ai: true,  // 默认启用AI深度分析
+                        analysis_type: analysisType
+                        // video_source_mode 不传，使用后端默认值(proxy)
                     })
                 });
 
                 const result = await response.json();
-                document.getElementById('analysisLoading')?.remove();
 
-                const successDiv = document.createElement('div');
-                successDiv.className = 'alert alert-success mt-3';
-                successDiv.innerHTML = '<i class="fas fa-check-circle"></i> 分析完成！';
-                document.getElementById('resultsSection').prepend(successDiv);
-                setTimeout(() => successDiv.remove(), 3000);
-
-                if (result.analysis_file) {
-                    loadAnalysisResults();
+                if (result.status === 'started' || result.status === 'already_running') {
+                    // 分析已启动，继续轮询状态（轮询会识别 analyzing/analyzed 状态）
+                    console.log('分析任务已启动，继续轮询状态...');
+                    // 轮询已在运行，无需额外操作
+                } else {
+                    // 可能是旧版本同步响应（兼容处理）
+                    if (result.status === 'success' && result.analysis_file) {
+                        isAnalyzing = false;
+                        stopGlobalTimer();
+                        document.getElementById('estimatedRemaining').textContent = '已完成';
+                        if (analysisHint) analysisHint.style.display = 'none';
+                        loadAnalysisResults();
+                        loadHistory();
+                    }
                 }
             } catch (error) {
-                document.getElementById('analysisLoading')?.remove();
+                // 启动分析失败：重置状态，避免UI卡住
+                console.error('启动分析任务失败:', error);
+                isAnalyzing = false;
+                analysisStartTime = null;
+
+                // 隐藏分析进度提示
+                const analysisHint = document.getElementById('analysisProgressHint');
+                if (analysisHint) {
+                    analysisHint.style.display = 'none';
+                }
+
                 const errorDiv = document.createElement('div');
-                errorDiv.className = 'alert alert-danger mt-3';
-                errorDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> 分析失败：' + error.message;
-                document.getElementById('resultsSection').prepend(errorDiv);
-                setTimeout(() => errorDiv.remove(), 5000);
-            } finally {
-                analyzeBtn.disabled = false;
-                analyzeBtn.innerHTML = originalBtnText;
+                errorDiv.className = 'alert alert-warning mt-3';
+                errorDiv.id = 'analysisErrorAlert';
+                errorDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 启动分析失败：' + error.message;
+                const leftCol = document.getElementById('progressResultCard').querySelector('.col-md-6.border-end');
+                // 移除旧的错误提示
+                const oldAlert = document.getElementById('analysisErrorAlert');
+                if (oldAlert) oldAlert.remove();
+                if (leftCol) {
+                    leftCol.appendChild(errorDiv);
+                }
+                setTimeout(() => errorDiv.remove(), 10000);
             }
         }
 
@@ -1859,25 +3169,7 @@
                     });
                 }
 
-                if (data.content_patterns) {
-                    document.getElementById('avgContentLength').textContent = data.content_patterns.avg_length || '-';
-                    const structureLabels = {
-                        'has_list': '含列表编号', 'has_steps': '含步骤说明', 'has_tips': '含小贴士',
-                        'has_warning': '含注意事项', 'has_summary': '含总结', 'has_cta': '含互动引导'
-                    };
-                    const structureList = document.getElementById('contentStructure');
-                    structureList.innerHTML = '';
-                    const structures = data.content_patterns.structure_patterns || {};
-                    Object.entries(structures)
-                        .filter(([_, value]) => value > 20)
-                        .sort((a, b) => b[1] - a[1])
-                        .forEach(([key, value]) => {
-                            structureList.innerHTML += `<li>${structureLabels[key] || key}: ${value}%</li>`;
-                        });
-                    if (structureList.innerHTML === '') {
-                        structureList.innerHTML = '<li class="text-muted">无显著结构特征</li>';
-                    }
-                }
+                // content_patterns 相关DOM已移除，跳过处理
 
                 if (data.interaction_features) {
                     const { avg_liked, avg_collected, avg_collection_rate } = data.interaction_features;
@@ -1894,14 +3186,11 @@
 
         async function exportResults(format) {
             if (!currentTaskId) {
-                alert('没有当前任务，请使用"导出最新数据"按钮');
+                alert('请先执行采集任务');
                 return;
             }
-            await downloadWithAuth(`/api/viral/export/${currentTaskId}?format=${format}`, format);
-        }
-
-        async function exportLatest(format) {
-            await downloadWithAuth(`/api/viral/export/latest?format=${format}`, format);
+            // 默认使用合并导出模式
+            await downloadWithAuth(`/api/viral/export/${currentTaskId}?format=${format}&export_mode=combined`, format);
         }
 
         /**
@@ -1967,25 +3256,36 @@
 
                 const container = document.getElementById('historyList');
                 if (history.length === 0) {
-                    container.innerHTML = '<div class="text-center text-muted small py-3">暂无历史记录</div>';
+                    container.innerHTML = '<div class="history-empty">暂无历史记录</div>';
                 } else {
-                    container.innerHTML = history.map(item => `
-                        <div class="history-item" onclick="loadHistoryItem('${item.filename}')" data-filename="${item.filename}">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="keyword">${item.keyword || '未知关键词'}</div>
-                                <span class="note-count">${item.total_notes || 0}篇</span>
-                            </div>
-                            <div class="meta">
-                                <i class="fas fa-clock"></i> ${formatTime(item.time) || '-'}
-                            </div>
-                        </div>
-                    `).join('');
+                    // 使用简洁列表样式（使用 data-filename 避免 inline onclick 注入风险）
+                    container.innerHTML = `
+                        <ul class="history-simple-list" id="historySimpleList">
+                            ${history.map(item => `
+                                <li class="history-simple-item" data-filename="${escapeHtml(item.filename)}">
+                                    <span class="history-simple-keyword">${escapeHtml(item.keyword || '未知')}</span>
+                                    <span class="history-simple-meta">
+                                        <span class="history-simple-time">${formatTimeShort(item.time)}</span>
+                                        <span class="history-simple-count">${item.total_notes || 0}篇</span>
+                                    </span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    `;
                 }
             } catch (error) {
                 console.error('加载历史记录失败:', error);
-                document.getElementById('historyList').innerHTML = '<div class="text-center text-danger small py-3">加载失败</div>';
+                document.getElementById('historyList').innerHTML = '<div class="history-empty text-danger">加载失败</div>';
             }
         }
+
+        // 使用事件委托处理历史记录点击（避免 inline onclick 注入风险）
+        document.getElementById('historyList')?.addEventListener('click', (e) => {
+            const item = e.target.closest('.history-simple-item');
+            if (item && item.dataset.filename) {
+                loadHistoryItem(item.dataset.filename);
+            }
+        });
 
         function formatTime(timeStr) {
             if (!timeStr) return '-';
@@ -2006,16 +3306,17 @@
 
                 currentTaskId = `viral_${match[1]}`;
 
-                document.querySelectorAll('.history-item').forEach(item => {
+                // 更新活动状态（使用新的类名）
+                document.querySelectorAll('.history-simple-item').forEach(item => {
                     item.classList.remove('active');
                     if (item.dataset.filename === filename) item.classList.add('active');
                 });
 
-                document.getElementById('resultsSection').style.display = 'block';
+                document.getElementById('progressResultCard').style.display = 'block';
                 await loadAnalysisResults();
 
                 closeSidebar();
-                document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                scrollToProgressCard();
             } catch (error) {
                 alert('加载历史记录失败: ' + error.message);
             }
@@ -2058,7 +3359,6 @@
                 if (result.has_cookie) {
                     document.getElementById('cookieStatus').innerHTML = `<span class="text-success"><i class="fas fa-check-circle"></i> 已配置（${result.cookie_length}字符）</span>`;
                     updateCookieIndicator(true);
-                    // cookie_preview 已移除，不再显示预览（安全考虑）
                 } else {
                     document.getElementById('cookieStatus').innerHTML = '<span class="text-warning"><i class="fas fa-exclamation-triangle"></i> 未配置</span>';
                     updateCookieIndicator(false);
@@ -2069,13 +3369,16 @@
         }
 
         function updateCookieIndicator(configured) {
-            const indicator = document.getElementById('cookieIndicator');
-            if (configured) {
-                indicator.className = 'cookie-status-indicator configured';
-                indicator.innerHTML = '<i class="fas fa-check-circle"></i> 已配置';
-            } else {
-                indicator.className = 'cookie-status-indicator not-configured';
-                indicator.innerHTML = '<i class="fas fa-exclamation-circle"></i> 未配置';
+            // 更新紧凑Cookie状态
+            const compactStatus = document.getElementById('cookieCompactStatus');
+            if (compactStatus) {
+                if (configured) {
+                    compactStatus.className = 'cookie-compact-status configured';
+                    compactStatus.textContent = '已配置';
+                } else {
+                    compactStatus.className = 'cookie-compact-status not-configured';
+                    compactStatus.textContent = '未配置';
+                }
             }
         }
 
@@ -2706,18 +4009,24 @@
 
         async function previewCleanup() {
             const categories = getSelectedCleanupCategories();
+            console.log('预览清理 - 选中的类别:', categories);
+
             if (categories.length === 0) {
                 showToast('请至少选择一个类别', 'warning');
                 return;
             }
 
             try {
+                const requestBody = { categories, dry_run: true };
+                console.log('预览清理 - 请求体:', JSON.stringify(requestBody));
+
                 const response = await authFetch('/api/cleanup', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ categories, dry_run: true })
+                    body: JSON.stringify(requestBody)
                 });
                 const result = await response.json();
+                console.log('预览清理 - 响应:', result);
 
                 if (result.status === 'success') {
                     document.getElementById('cleanupResult').style.display = 'block';
@@ -2728,6 +4037,7 @@
                     `;
                 }
             } catch (error) {
+                console.error('预览清理 - 错误:', error);
                 showToast('预览失败: ' + error.message, 'danger');
             }
         }
@@ -2761,8 +4071,9 @@
                     showToast(`成功清理 ${result.total_size_mb.toFixed(1)} MB`, 'success');
                     // 刷新清理信息
                     setTimeout(loadCleanupInfo, 1000);
-                    if (categories.includes('viral_analysis')) {
-                        loadHistory();
+                    // 刷新历史记录（清理 viral_analysis 或 excel_datas 都会影响历史）
+                    if (categories.includes('viral_analysis') || categories.includes('excel_datas')) {
+                        setTimeout(loadHistory, 500);  // 延迟500ms确保服务器处理完成
                     }
                 }
             } catch (error) {
@@ -2781,6 +4092,95 @@
             return div.innerHTML;
         }
 
+        // ==================== 实时日志面板 ====================
+
+        let logCursor = 0;  // 日志游标，用于增量获取
+        let unreadLogCount = 0;  // 未读日志数量
+
+        // 切换日志面板展开/折叠
+        function toggleLogPanel() {
+            const panel = document.getElementById('logPanel');
+            const badge = document.getElementById('logBadge');
+
+            panel.classList.toggle('collapsed');
+
+            // 展开时清除未读角标
+            if (!panel.classList.contains('collapsed')) {
+                unreadLogCount = 0;
+                badge.textContent = '0';
+                badge.classList.remove('has-new');
+                // 自动滚动到底部
+                const content = document.getElementById('logContent');
+                content.scrollTop = content.scrollHeight;
+            }
+        }
+
+        // 添加日志条目
+        function addLogEntry(log) {
+            const content = document.getElementById('logContent');
+            const panel = document.getElementById('logPanel');
+            const badge = document.getElementById('logBadge');
+
+            // 清除"暂无日志"提示
+            const emptyHint = content.querySelector('.log-empty');
+            if (emptyHint) {
+                emptyHint.remove();
+            }
+
+            // 创建日志条目
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${log.level || 'info'}`;
+            entry.innerHTML = `
+                <span class="log-time">${log.time}</span>
+                <span class="log-message">${escapeHtml(log.message)}</span>
+            `;
+            content.appendChild(entry);
+
+            // 保持最多显示50条（与后端一致）
+            while (content.children.length > 50) {
+                content.removeChild(content.firstChild);
+            }
+
+            // 自动滚动到底部
+            content.scrollTop = content.scrollHeight;
+
+            // 如果面板折叠，显示未读角标
+            if (panel.classList.contains('collapsed')) {
+                unreadLogCount++;
+                badge.textContent = unreadLogCount > 99 ? '99+' : unreadLogCount;
+                badge.classList.add('has-new');
+            }
+        }
+
+        // 清空日志
+        function clearLogs() {
+            const content = document.getElementById('logContent');
+            const badge = document.getElementById('logBadge');
+            content.innerHTML = `
+                <div class="log-empty">
+                    <i class="fas fa-inbox"></i>
+                    暂无日志，启动任务后将显示执行进度
+                </div>
+            `;
+            logCursor = 0;
+            unreadLogCount = 0;
+            badge.textContent = '0';  // 重置角标文本
+            badge.classList.remove('has-new');
+        }
+
+        // 处理增量日志
+        function processIncrementalLogs(logs) {
+            if (!logs || logs.length === 0) return;
+
+            logs.forEach(log => {
+                addLogEntry(log);
+                // 更新游标
+                if (log.id > logCursor) {
+                    logCursor = log.id;
+                }
+            });
+        }
+
         // ==================== 页面初始化 ====================
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -2796,14 +4196,6 @@
                 loadDocStats();
             });
 
-            // 根据分析类型显示/隐藏视频源模式选择器
-            const videoSourceGroup = document.getElementById('videoSourceModeGroup');
-            document.querySelectorAll('input[name="analysisType"]').forEach(radio => {
-                radio.addEventListener('change', (e) => {
-                    // 仅图文模式时隐藏，全部/仅视频模式时显示
-                    videoSourceGroup.style.display = e.target.value === 'image' ? 'none' : 'block';
-                });
-            });
         });
     </script>
 </body>

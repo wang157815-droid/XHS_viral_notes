@@ -38,6 +38,14 @@ except ImportError:
     AV_SYNC_AVAILABLE = False
     logger.warning("音画同步模块未加载，请检查依赖是否完整")
 
+# 帧+ASR联合分析模块（可选加载）
+try:
+    from viral_agent.services.video.frame_asr_joint_analyzer import FrameASRJointAnalyzer
+    FRAME_ASR_AVAILABLE = True
+except ImportError:
+    FRAME_ASR_AVAILABLE = False
+    logger.warning("帧+ASR联合分析模块未加载")
+
 
 class VideoEnhancedAnalyzer:
     """增强的视频分析器，集成所有视频分析功能"""
@@ -74,19 +82,21 @@ class VideoEnhancedAnalyzer:
 
         if need_download and DOWNLOAD_MANAGER_AVAILABLE:
             try:
-                # P2-fix: 统一大小限制计算，考虑 API 20MB 请求体限制
-                # base64 膨胀约 1.33 倍，所以原始视频不能超过 15MB
-                configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '50'))
-                api_limit_mb = 15  # 20MB API 限制 / 1.33 base64 膨胀
-                effective_max_mb = min(int(configured_max_mb * 0.75), api_limit_mb)
+                # P1-fix: 分离 AVSync 和 AI 分析的大小限制
+                # - AVSync 场景：需要完整视频做帧抽取，不受 base64 限制，可以更大
+                # - AI 分析场景：AI 分析器自己做预检和降级（在 video_ai_analyzer.py 中）
+                # 下载管理器使用更宽松的限制，主要服务 AVSync 场景
+                configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '100'))
+                # AVSync 场景允许更大的视频（最大 200MB 或用户配置值）
+                avsync_limit_mb = min(configured_max_mb, 200)
 
                 self.download_manager = VideoDownloadManager(
                     cache_dir=os.path.join("datas", "video_cache"),
-                    max_size_mb=effective_max_mb,  # 使用统一的限制值
-                    download_timeout=int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '60')),
+                    max_size_mb=avsync_limit_mb,  # AVSync 使用更宽松的限制
+                    download_timeout=int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '120')),
                     max_concurrent=int(os.getenv('VIDEO_MAX_CONCURRENT', '2'))
                 )
-                logger.info(f"✅ 视频下载管理器已创建（共享下载模式，限制={effective_max_mb}MB）")
+                logger.info(f"✅ 视频下载管理器已创建（AVSync限制={avsync_limit_mb}MB）")
             except Exception as e:
                 logger.warning(f"视频下载管理器创建失败，将使用独立下载: {e}")
                 self.download_manager = None
@@ -112,7 +122,21 @@ class VideoEnhancedAnalyzer:
         elif self.enable_av_sync and not AV_SYNC_AVAILABLE:
             logger.warning("音画同步分析已启用但模块不可用，请检查依赖")
 
-        logger.info(f"视频增强分析器初始化完成，AI分析: {enable_ai}, 音画同步: {self.enable_av_sync}")
+        # 初始化帧+ASR联合分析器（可选，依赖音画同步）
+        self.enable_frame_asr = os.getenv('ENABLE_FRAME_ASR_ANALYSIS', 'false').lower() == 'true'
+        self.frame_asr_analyzer = None
+        if self.enable_frame_asr and self.enable_av_sync and FRAME_ASR_AVAILABLE:
+            self.frame_asr_analyzer = FrameASRJointAnalyzer()
+            logger.info("✅ 帧+ASR联合分析器已启用")
+        elif self.enable_frame_asr and not self.enable_av_sync:
+            logger.warning("帧+ASR分析需要先启用音画同步(ENABLE_AV_SYNC=true)")
+        elif self.enable_frame_asr and not FRAME_ASR_AVAILABLE:
+            logger.warning("帧+ASR分析模块不可用，请检查依赖")
+
+        logger.info(
+            f"视频增强分析器初始化完成，AI分析: {enable_ai}, "
+            f"音画同步: {self.enable_av_sync}, 帧+ASR联合: {self.enable_frame_asr}"
+        )
 
     async def analyze_single_video(
         self,
@@ -292,6 +316,26 @@ class VideoEnhancedAnalyzer:
 
                 # 并发完成后统一延迟一次（代替每步后的1.5秒延迟）
                 await asyncio.sleep(1.0)
+
+            # 帧+ASR联合分析（依赖AVSync结果，需在其完成后执行）
+            if (
+                self.frame_asr_analyzer and
+                result.av_sync_result and
+                result.av_sync_result.status == 'success' and
+                result.av_sync_result.frames
+            ):
+                try:
+                    logger.info("开始帧+ASR联合分析...")
+                    frame_asr_result = await self.frame_asr_analyzer.analyze(
+                        av_sync_result=result.av_sync_result,
+                        title=note.get('title', ''),
+                        description=note.get('desc', '')
+                    )
+                    result.frame_asr_analysis = frame_asr_result
+                    logger.info(f"帧+ASR联合分析完成: {frame_asr_result.status}")
+                except Exception as e:
+                    logger.warning(f"帧+ASR联合分析失败: {e}")
+                    failed_tasks.append(f"frame_asr:{type(e).__name__}")
 
             # P1-fix-1: 根据子任务结果设置正确的状态
             if failed_tasks:

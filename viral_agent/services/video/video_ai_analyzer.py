@@ -21,11 +21,16 @@ load_dotenv()
 
 # 导入URL验证工具
 try:
-    from xhs_utils.url_validator import validate_video_url, get_best_video_url
+    from xhs_utils.url_validator import (
+        validate_video_url,
+        get_best_video_url,
+        get_best_video_url_for_ai
+    )
 except ImportError:
     logger.warning("无法导入URL验证工具，将使用降级方案")
     validate_video_url = lambda url, timeout=3: True  # 降级为始终返回True
     get_best_video_url = lambda urls, max_attempts=3: urls[0] if urls else None
+    get_best_video_url_for_ai = lambda urls, max_size_mb=7.0, prefer_h264=True: urls[0].get('url') if urls else None
 
 # 导入模块化提示词
 from viral_agent.prompts import build_video_metadata_prompt
@@ -66,11 +71,11 @@ class VideoAIAnalyzer:
         else:
             self.video_source_mode = os.getenv('VIDEO_SOURCE_MODE', 'url')  # url | proxy
         self.video_download_timeout = int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '60'))
-        # P2-fix-4: 考虑 base64 膨胀（约1.33倍）和 API 请求体限制（20MB）
-        # 通义千问等 API 有 20MB 字符串限制，15MB 视频 × 1.33 ≈ 20MB base64
+        # P2-fix-4: 考虑 base64 膨胀（约1.33倍）和 API data-uri 限制（10MB）
+        # 通义千问等 API 有 10MB data-uri 单项限制，7.5MB 视频 × 1.33 ≈ 10MB base64
         configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '50'))
         self._configured_limit = int(configured_max_mb * 0.75)  # 配置值的 75%
-        self._api_limit_mb = 15  # API 20MB 限制 / 1.33 base64膨胀 ≈ 15MB
+        self._api_limit_mb = 7  # API 10MB data-uri 限制 / 1.33 base64膨胀 ≈ 7.5MB，取整为7
         self.video_max_size_mb = min(self._configured_limit, self._api_limit_mb)  # 取更严格的限制
 
         # 视频下载管理器（共享下载，避免重复）
@@ -434,11 +439,15 @@ class VideoAIAnalyzer:
         """
         尝试分析视频，支持多层URL验证和智能回退
 
-        采用4层验证策略：
-        1. HTTP预验证层 - 使用url_validator快速过滤不可访问的URL（0.3秒/URL，免费）
-        2. URL准备层 - 根据预验证结果优化URL优先级
-        3. AI兼容性验证层 - 逐个调用AI，检测1210等格式错误（5秒/URL，消耗tokens）
-        4. 回退机制层 - 所有URL失败后使用元数据分析兜底
+        【优化后的策略】根据模式采用不同的重试策略：
+
+        Proxy模式（本地下载）：
+        - 下载阶段：多URL重试（下载失败时尝试备选URL）
+        - AI调用阶段：只调用一次（换URL不解决AI问题）
+        - 降级策略：base64太大时降级到URL模式
+
+        URL模式（直传URL给AI）：
+        - 多URL重试（AI可能无法访问某些URL）
 
         Args:
             video_url: 主视频URL
@@ -446,24 +455,35 @@ class VideoAIAnalyzer:
             title: 视频标题
             description: 视频描述
             max_tokens: 最大token数
-            video_urls: 备选视频URL列表（可选），多个URL时会触发预验证
+            video_urls: 备选视频URL列表（可选）
             note_id: 笔记ID（用于生成稳定缓存键）
 
         Returns:
             分析结果（AI分析或元数据分析的结果）
         """
-        # 🔍 第1层：HTTP预验证（快速过滤不可访问的URL）
+        # 🔍 第1层：智能URL选择（优先选择压缩版+HTTP验证）
         if video_urls and len(video_urls) > 1:
-            logger.info(f"🔍 预验证 {len(video_urls)} 个视频URL的可访问性...")
+            logger.info(f"🔍 智能选择最优视频URL（共{len(video_urls)}个候选）...")
 
-            # 使用url_validator预先筛选出可访问的URL
-            best_url = get_best_video_url(video_urls, max_attempts=min(3, len(video_urls)))
+            # 使用 get_best_video_url_for_ai 优先选择压缩版 URL
+            # _130.mp4: H.264压缩版 ~3-4MB（最适合AI分析）
+            # _259.mp4: H.264 720p ~5-10MB
+            # _114/_115.mp4: H.265 高清版 ~20-30MB（太大，易超限）
+            best_url = get_best_video_url_for_ai(
+                video_urls,
+                max_size_mb=self.video_max_size_mb,
+                prefer_h264=True
+            )
 
             if best_url:
-                logger.success(f"✅ HTTP预验证通过，优先使用: {best_url[:80]}...")
-                video_url = best_url  # 使用预验证通过的URL
+                # 识别选中的URL类型
+                url_type = "压缩版" if '_130.mp4' in best_url else (
+                    "720p" if '_259.mp4' in best_url else "高清版"
+                )
+                logger.success(f"✅ 选中{url_type}URL: {best_url[:80]}...")
+                video_url = best_url  # 使用优选的URL
 
-                # 重新排序：把验证通过的URL放最前面
+                # 重新排序：把选中的URL放最前面
                 video_urls_reordered = [{'url': best_url}]
                 for url_info in video_urls:
                     url = url_info.get('url') if isinstance(url_info, dict) else url_info
@@ -471,41 +491,103 @@ class VideoAIAnalyzer:
                         video_urls_reordered.append({'url': url} if isinstance(url, str) else url_info)
                 video_urls = video_urls_reordered
             else:
-                logger.warning("⚠️ 所有URL的HTTP预验证都未通过，仍尝试AI调用（可能失败）")
+                logger.warning("⚠️ 未找到合适的压缩版URL，使用原始URL（可能较大）")
 
-        # 🎯 第2层：构建URL尝试列表（用于AI调用）
-        urls_to_try = []
-
-        # 1. 主URL（优先级最高，可能已被预验证优化）
-        urls_to_try.append(video_url)
-
-        # 2. 添加备选URL（如果有）
+        # 🎯 第2层：构建URL尝试列表
+        urls_to_try = [video_url]
         if video_urls:
-            for url_info in video_urls[1:]:  # 跳过第一个（已经是主URL）
+            for url_info in video_urls[1:]:
                 url = url_info.get('url') if isinstance(url_info, dict) else url_info
-                if url and url != video_url:  # 避免重复
+                if url and url != video_url:
                     urls_to_try.append(url)
 
-        logger.info(f"🚀 准备尝试 {len(urls_to_try)} 个视频URL（AI调用层）")
+        # ========================================
+        # 🚀 Proxy模式：优化策略（下载重试 + 单次AI调用）
+        # ========================================
+        if self.video_source_mode == 'proxy':
+            logger.info(f"🎬 Proxy模式：准备分析视频（下载阶段支持{len(urls_to_try)}个URL重试）")
 
-        # 🤖 第3层：AI兼容性验证（逐个尝试，检测1210等AI特定错误）
+            # 尝试AI分析（内部会处理下载重试）
+            try:
+                result = await self._analyze_video_directly(
+                    video_url, prompt, title, description, max_tokens,
+                    note_id=note_id, backup_urls=video_urls
+                )
+
+                # 检查是否成功
+                error_keywords = [
+                    "1210", "视频输入格式", "解析错误",
+                    "API调用异常", "API调用失败",
+                    "无法读取视频", "无法观看视频", "无法访问视频",
+                    "视频无法加载", "视频加载失败", "无法获取视频"
+                ]
+
+                if not any(kw in result for kw in error_keywords):
+                    logger.success("✅ Proxy模式AI分析成功！")
+                    return result
+
+                # 检测是否需要降级到URL模式
+                if "Exceeded limit" in result or "max bytes" in result or "data-uri" in result:
+                    logger.warning("⚠️ base64数据超过API限制，降级到URL模式...")
+                    # 降级到URL模式（只尝试一次）
+                    try:
+                        url_result = await self._analyze_video_directly(
+                            video_url, prompt, title, description, max_tokens,
+                            note_id=note_id, backup_urls=video_urls,
+                            force_url_mode=True
+                        )
+                        if not any(kw in url_result for kw in error_keywords):
+                            logger.success("✅ URL模式降级成功！")
+                            return url_result
+                    except Exception as e:
+                        logger.warning(f"❌ URL模式降级失败: {e}")
+
+                # Proxy模式AI调用失败，直接回退到元数据（换URL不解决AI问题）
+                logger.warning(f"❌ Proxy模式AI分析失败: {result[:100]}")
+
+            except Exception as e:
+                error_str = str(e)
+                if "Exceeded limit" in error_str or "max bytes" in error_str:
+                    logger.warning(f"⚠️ base64超限异常，尝试URL模式降级...")
+                    try:
+                        url_result = await self._analyze_video_directly(
+                            video_url, prompt, title, description, max_tokens,
+                            note_id=note_id, force_url_mode=True
+                        )
+                        if "API调用失败" not in url_result:
+                            logger.success("✅ URL模式降级成功！")
+                            return url_result
+                    except Exception:
+                        pass
+                logger.warning(f"❌ Proxy模式AI分析异常: {e}")
+
+            # 回退到元数据分析
+            logger.warning("⚠️ Proxy模式分析失败，回退到元数据分析")
+            return await self._analyze_video_metadata(
+                video_url, prompt, title, description, max_tokens
+            )
+
+        # ========================================
+        # 🌐 URL模式：保持多URL重试（AI可能无法访问某些URL）
+        # ========================================
+        logger.info(f"🌐 URL模式：准备尝试 {len(urls_to_try)} 个视频URL")
+
         for i, url in enumerate(urls_to_try[:3]):  # 最多尝试3个URL
             try:
-                logger.debug(f"🤖 AI分析尝试 {i+1}/{len(urls_to_try)}: {url[:80]}...")
+                logger.debug(f"🤖 AI分析尝试 {i+1}/{min(3, len(urls_to_try))}: {url[:80]}...")
 
-                # 尝试分析（传入 note_id 和备选URL用于下载共享）
                 result = await self._analyze_video_directly(
                     url, prompt, title, description, max_tokens,
                     note_id=note_id, backup_urls=video_urls
                 )
 
-                # 检查是否成功（没有AI特定错误、API异常、或AI明确表示无法读取）
                 error_keywords = [
-                    "1210", "视频输入格式", "解析错误",  # AI格式错误
-                    "API调用异常", "API调用失败",  # API调用错误
-                    "无法读取视频", "无法观看视频", "无法访问视频",  # AI明确表示无法读取
-                    "视频无法加载", "视频加载失败", "无法获取视频"  # 其他无法读取的表述
+                    "1210", "视频输入格式", "解析错误",
+                    "API调用异常", "API调用失败",
+                    "无法读取视频", "无法观看视频", "无法访问视频",
+                    "视频无法加载", "视频加载失败", "无法获取视频"
                 ]
+
                 if not any(kw in result for kw in error_keywords):
                     if i > 0:
                         logger.success(f"✅ 备选URL {i+1} AI分析成功！")
@@ -513,19 +595,15 @@ class VideoAIAnalyzer:
                         logger.success(f"✅ 主URL AI分析成功！")
                     return result
                 else:
-                    # 区分错误类型以便调试
-                    if any(kw in result for kw in ["无法读取", "无法观看", "无法访问", "无法加载", "无法获取"]):
-                        logger.warning(f"❌ URL {i+1} AI无法读取视频内容，尝试下一个URL...")
-                    else:
-                        logger.warning(f"❌ URL {i+1} AI返回格式错误: {result[:100]}")
-                    continue  # 尝试下一个URL
+                    logger.warning(f"❌ URL {i+1} AI分析失败: {result[:100]}")
+                    continue
 
             except Exception as e:
                 logger.warning(f"❌ URL {i+1} AI分析异常: {e}")
-                continue  # 尝试下一个URL
+                continue
 
-        # 🔄 第4层：回退机制（所有URL都失败，使用元数据分析兜底）
-        logger.warning(f"⚠️ 所有 {len(urls_to_try)} 个视频URL的AI分析都失败，回退到元数据分析")
+        # 所有URL都失败，回退到元数据分析
+        logger.warning(f"⚠️ 所有 {min(3, len(urls_to_try))} 个URL的AI分析都失败，回退到元数据分析")
         return await self._analyze_video_metadata(
             video_url, prompt, title, description, max_tokens
         )
@@ -717,7 +795,8 @@ class VideoAIAnalyzer:
         description: str,
         max_tokens: int,
         note_id: str = None,
-        backup_urls: List[Dict[str, Any]] = None
+        backup_urls: List[Dict[str, Any]] = None,
+        force_url_mode: bool = False
     ) -> str:
         """
         直接分析视频内容（带并发控制和proxy模式支持）
@@ -734,16 +813,19 @@ class VideoAIAnalyzer:
             max_tokens: 最大输出token数
             note_id: 笔记ID（用于生成稳定缓存键）
             backup_urls: 备选视频URL列表
+            force_url_mode: 强制使用URL模式（用于降级重试，避免修改全局状态）
 
         Returns:
             分析结果
         """
         # P0-3: 使用 semaphore 限制视频分析并发
         async with self.video_semaphore:
-            logger.debug(f"🔒 获取视频分析锁，当前模式: {self.video_source_mode}")
+            # P2-fix-6: 使用局部变量决定模式，避免并发竞争
+            effective_mode = 'url' if force_url_mode else self.video_source_mode
+            logger.debug(f"🔒 获取视频分析锁，当前模式: {effective_mode}")
 
             # P0-1: 根据 VIDEO_SOURCE_MODE 选择处理方式
-            if self.video_source_mode == 'proxy':
+            if effective_mode == 'proxy':
                 # proxy 模式：本地下载（带Referer）→ base64传给模型
                 logger.info(f"📥 proxy模式：下载视频并转base64...")
 
@@ -1046,7 +1128,8 @@ class VideoAIAnalyzer:
                         else:
                             error_text = await response.text()
                             logger.error(f"API调用失败: {response.status} - {error_text}")
-                            return f"API调用失败: {response.status}"
+                            # P2-fix-7: 返回值包含错误详情，便于上层检测特定错误（如Exceeded limit）
+                            return f"API调用失败: {response.status} - {error_text[:200]}"
             except asyncio.TimeoutError as e:
                 # P0-2: 超时异常单独处理，可重试
                 timeout_val = 60  # 与 ClientTimeout(total=60) 一致

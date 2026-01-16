@@ -8,6 +8,7 @@ import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pathlib import Path
+from collections import deque
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -18,6 +19,7 @@ from loguru import logger
 from dotenv import load_dotenv
 import re
 import uuid
+import random
 
 # 导入认证模块
 from viral_agent.auth import (
@@ -50,6 +52,9 @@ from viral_agent.models.document import KnowledgeDocument, DocumentMetadata
 # 导入清理服务
 from viral_agent.services.cleanup_service import CleanupService
 
+# 导入自动补采服务
+from viral_agent.services.core.auto_resupply import AutoResupplyService, ResupplyResult
+
 # 加载环境变量
 load_dotenv()
 
@@ -70,6 +75,42 @@ templates = Jinja2Templates(directory="web/templates")
 # 全局任务状态存储
 task_status = {}
 
+# 日志缓冲区配置
+LOG_BUFFER_SIZE = 50  # 每个任务最多保存50条日志
+_log_id_counter = 0  # 日志ID计数器
+
+
+def add_task_log(task_id: str, message: str, level: str = "info") -> None:
+    """
+    添加任务日志
+
+    Args:
+        task_id: 任务ID
+        message: 日志消息
+        level: 日志级别 (info/success/warning/error)
+    """
+    global _log_id_counter
+
+    if task_id not in task_status:
+        return
+
+    # 确保任务有日志队列
+    if "logs" not in task_status[task_id]:
+        task_status[task_id]["logs"] = deque(maxlen=LOG_BUFFER_SIZE)
+
+    # 生成日志条目
+    _log_id_counter += 1
+    log_entry = {
+        "id": _log_id_counter,
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "message": message,
+        "level": level
+    }
+
+    task_status[task_id]["logs"].append(log_entry)
+    # 更新最后日志ID，便于前端增量获取
+    task_status[task_id]["last_log_id"] = _log_id_counter
+
 
 # ==================== 请求模型定义 ====================
 
@@ -87,19 +128,24 @@ class ViralSearchRequest(BaseModel):
         description="搜索关键词（向后兼容，优先使用keywords）",
         json_schema_extra={"example": "防脱精华"}
     )
-    target_count: int = Field(default=100, description="目标爬取数量（三维度总和）", ge=30, le=500)
+    target_count: int = Field(
+        default=200,
+        description="采集目标数量（由前端根据期望分析数量自动计算）",
+        ge=30,
+        le=800
+    )
     viral_ratio: float = Field(
         default=0.5,
-        description="爆款比例: 0.5(前1/2), 0.33(前1/3), 0.25(前1/4)",
+        description="爆款筛选比例：取互动分数前N%的笔记",
         ge=0.1,
         le=1.0
     )
     note_type: int = Field(default=0, description="笔记类型：0不限 1视频 2图文")
     time_range: int = Field(default=0, description="时间范围：0不限 1一天内 2一周内 3半年内")
     min_sample_count: int = Field(
-        default=50,
-        description="最低分析样本量（低于此数量将显示警告）",
-        ge=10,
+        default=60,
+        description="期望分析样本量（用户设定的目标分析数量）",
+        ge=5,
         le=200
     )
 
@@ -129,8 +175,8 @@ class AnalysisRequest(BaseModel):
         pattern="^(image|video|all)$"
     )
     video_source_mode: Optional[str] = Field(
-        default=None,
-        description="视频源模式：url=URL直传 proxy=本地下载，None表示使用环境变量配置",
+        default="proxy",
+        description="视频源模式：url=URL直传 proxy=本地下载（默认），大视频自动降级URL",
         pattern="^(url|proxy)$"
     )
 
@@ -367,8 +413,9 @@ async def start_viral_search(
     if not keywords:
         raise HTTPException(status_code=400, detail="必须提供至少一个关键词")
 
-    # 生成任务ID
-    task_id = f"viral_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    # 生成任务ID（加随机后缀，避免秒级冲突）
+    task_id = f"viral_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(100, 999)}"
+    keyword_display = "、".join(keywords)  # 提前定义，用于日志和返回值
 
     # 初始化任务状态（支持多关键词）
     task_status[task_id] = {
@@ -382,8 +429,13 @@ async def start_viral_search(
         "keyword_progress": {kw: {"collected": 0, "status": "pending"} for kw in keywords},
         "min_sample_count": request.min_sample_count,
         "message": "正在初始化...",
-        "start_time": datetime.now().isoformat()
+        "start_time": datetime.now().isoformat(),
+        "logs": deque(maxlen=LOG_BUFFER_SIZE),  # 日志队列
+        "last_log_id": 0  # 最后日志ID
     }
+
+    # 添加初始日志
+    add_task_log(task_id, f"🚀 任务启动：搜索「{keyword_display}」", "info")
 
     # 启动后台任务
     background_tasks.add_task(
@@ -397,7 +449,6 @@ async def start_viral_search(
         request.min_sample_count
     )
 
-    keyword_display = "、".join(keywords)
     return {
         "task_id": task_id,
         "status": "started",
@@ -407,98 +458,123 @@ async def start_viral_search(
 
 
 @app.get("/api/viral/status/{task_id}")
-async def get_task_status(task_id: str, username: str = Depends(verify_token_and_password_changed)):
+async def get_task_status(
+    task_id: str,
+    log_cursor: Optional[int] = None,
+    username: str = Depends(verify_token_and_password_changed)
+):
     """
     获取任务状态（需要认证）
 
+    Args:
+        task_id: 任务ID
+        log_cursor: 日志游标，传入后只返回该ID之后的新日志
+
     Returns:
-        任务当前状态信息
+        任务当前状态信息（包含增量日志）
     """
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    return task_status[task_id]
+    status = task_status[task_id].copy()
+
+    # 处理日志：将 deque 转为 list，并支持增量获取
+    logs_deque = status.get("logs", deque())
+    if log_cursor is not None:
+        # 只返回 cursor 之后的新日志
+        new_logs = [log for log in logs_deque if log["id"] > log_cursor]
+        status["logs"] = new_logs
+    else:
+        # 返回全部日志
+        status["logs"] = list(logs_deque)
+
+    return status
 
 
 @app.post("/api/viral/analyze")
 async def analyze_viral_notes(
     request: AnalysisRequest,
+    background_tasks: BackgroundTasks,
     username: str = Depends(verify_token_and_password_changed)
 ):
     """
     分析爆款笔记生成爆文模型（需要认证）
+    改为后台任务模式，支持实时日志更新
 
     Returns:
-        分析结果
+        任务状态（前端轮询获取分析进度）
     """
     task_id = request.task_id
 
     if task_id not in task_status:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    if task_status[task_id]["status"] != "completed":
-        raise HTTPException(status_code=400, detail="采集任务尚未完成")
+    current_status = task_status[task_id]["status"]
+
+    # 检查是否已在分析中
+    if current_status == "analyzing":
+        return {
+            "status": "already_running",
+            "task_id": task_id,
+            "message": "分析任务已在运行中"
+        }
+
+    # 允许从以下状态启动分析：
+    # - completed: 采集完成，首次分析
+    # - analyzed: 分析完成，允许重新分析
+    # - analysis_failed: 分析失败，允许重试
+    if current_status not in ("completed", "analyzed", "analysis_failed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前状态为 {current_status}，无法启动分析。需要采集完成后才能分析"
+        )
 
     # 加载采集的数据
     data_file = task_status[task_id].get("data_file")
     if not data_file or not os.path.exists(data_file):
         raise HTTPException(status_code=404, detail="数据文件不存在")
 
-    with open(data_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    # 更新状态为"分析中"
+    task_status[task_id]["status"] = "analyzing"
+    task_status[task_id]["analysis_progress"] = 0
+    add_task_log(task_id, "🔬 开始深度分析爆款笔记...", "info")
 
-    # 转换为ViralNote对象
-    notes = [ViralNote.from_spider_data(note) for note in data['notes']]
-
-    # 创建分析器
-    if request.use_ai:
-        # 启用AI分析，使用环境变量配置
-        analyzer = ViralAnalyzer(api_key="auto")  # "auto"会自动读取环境变量
-    else:
-        # 禁用AI分析
-        analyzer = ViralAnalyzer(api_key=None)  # None表示明确禁用AI
-
-    # 执行分析（根据 analysis_type 进行分流）
-    result = analyzer.analyze_viral_notes(
-        notes=notes,
-        keyword=task_status[task_id]["keyword"],
-        threshold=data.get('statistics', {}).get('viral_threshold', 5000),
-        analysis_type=request.analysis_type,
-        video_source_mode=request.video_source_mode  # 视频源模式（None则使用环境变量配置）
+    # 启动后台分析任务
+    background_tasks.add_task(
+        analyze_viral_notes_task,
+        task_id,
+        data_file,
+        request.use_ai,
+        request.analysis_type,
+        request.video_source_mode
     )
 
-    # 将原始笔记数据添加到分析结果中（用于导出Excel原始数据分表）
-    result.notes = [note.to_dict() for note in notes]
-
-    # 保存分析结果
-    analysis_file = data_file.replace('viral_notes', 'viral_analysis')
-    result.save_to_file(analysis_file)
-
-    # 更新任务状态
-    task_status[task_id]["analysis_completed"] = True
-    task_status[task_id]["analysis_file"] = analysis_file
-
     return {
-        "status": "success",
-        "analysis_file": analysis_file,
-        "summary": {
-            "total_notes": result.total_notes,
-            "keyword": result.keyword,
-            "model_generated": bool(result.viral_model)
-        }
+        "status": "started",
+        "task_id": task_id,
+        "message": "分析任务已启动，请轮询状态接口获取进度"
     }
 
 
 @app.get("/api/viral/export/latest")
-async def export_latest(format: str = "excel", username: str = Depends(verify_token_and_password_changed)):
+async def export_latest(
+    format: str = "excel",
+    export_mode: str = "combined",
+    username: str = Depends(verify_token_and_password_changed)
+):
     """
     导出最新的分析结果（需要认证）
 
     Args:
         format: 导出格式 (excel/json)
+        export_mode: 导出模式 (combined/separate/image_only/video_only)
+            - combined: 单个Excel（默认）
+            - separate: 图文+视频两个独立Excel
+            - image_only: 仅图文报告
+            - video_only: 仅视频报告
 
     Returns:
-        文件下载
+        文件下载或文件列表JSON
     """
     data_dir = Path("datas/viral_analysis")
     if not data_dir.exists():
@@ -522,14 +598,28 @@ async def export_latest(format: str = "excel", username: str = Depends(verify_to
         from viral_agent.services.export.export_service import export_to_excel
 
         try:
-            excel_file = export_to_excel(str(latest_file))
+            result = export_to_excel(str(latest_file), export_mode=export_mode)
 
-            if not os.path.exists(excel_file):
+            # separate模式返回多个文件的下载链接
+            if export_mode == "separate" and isinstance(result, dict):
+                download_links = {}
+                for file_type, file_path in result.items():
+                    if file_path and os.path.exists(file_path):
+                        filename = os.path.basename(file_path)
+                        download_links[file_type] = f"/api/viral/download/{filename}"
+                return JSONResponse(content={
+                    "status": "success",
+                    "export_mode": "separate",
+                    "files": download_links
+                })
+
+            # 其他模式返回单个文件
+            if not os.path.exists(result):
                 raise HTTPException(status_code=500, detail="Excel文件生成失败")
 
             from fastapi.responses import FileResponse
             return FileResponse(
-                excel_file,
+                result,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 filename=f"viral_analysis_latest.xlsx"
             )
@@ -611,10 +701,44 @@ async def get_history(username: str = Depends(verify_token_and_password_changed)
     return history[:20]
 
 
+@app.get("/api/viral/download/{filename}")
+async def download_file(
+    filename: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    下载已生成的文件（用于分开导出模式）
+
+    Args:
+        filename: 文件名
+
+    Returns:
+        文件下载
+    """
+    from fastapi.responses import FileResponse
+
+    # 安全检查：防止路径遍历攻击
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="无效的文件名")
+
+    data_dir = Path("datas/viral_analysis")
+    file_path = data_dir / filename
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")
+
+    return FileResponse(
+        str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename
+    )
+
+
 @app.get("/api/viral/export/{task_id}")
 async def export_results(
     task_id: str,
     format: str = "excel",
+    export_mode: str = "combined",
     username: str = Depends(verify_token_and_password_changed)
 ):
     """
@@ -622,9 +746,14 @@ async def export_results(
 
     Args:
         format: 导出格式 (excel/json)
+        export_mode: 导出模式 (combined/separate/image_only/video_only)
+            - combined: 单个Excel（默认）
+            - separate: 图文+视频两个独立Excel
+            - image_only: 仅图文报告
+            - video_only: 仅视频报告
 
     Returns:
-        文件下载
+        文件下载或文件列表JSON
     """
     # 如果task_id不在内存中，尝试从文件系统查找
     if task_id not in task_status:
@@ -688,14 +817,28 @@ async def export_results(
             raise HTTPException(status_code=404, detail=f"文件不存在: {target_file}")
 
         try:
-            excel_file = export_to_excel(target_file)
+            result = export_to_excel(target_file, export_mode=export_mode)
 
-            if not os.path.exists(excel_file):
+            # separate模式返回多个文件的下载链接
+            if export_mode == "separate" and isinstance(result, dict):
+                download_links = {}
+                for file_type, file_path in result.items():
+                    if file_path and os.path.exists(file_path):
+                        filename = os.path.basename(file_path)
+                        download_links[file_type] = f"/api/viral/download/{filename}"
+                return JSONResponse(content={
+                    "status": "success",
+                    "export_mode": "separate",
+                    "files": download_links
+                })
+
+            # 其他模式返回单个文件
+            if not os.path.exists(result):
                 raise HTTPException(status_code=500, detail="Excel文件生成失败")
 
             from fastapi.responses import FileResponse
             return FileResponse(
-                excel_file,
+                result,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 filename=f"viral_analysis_{task_id}.xlsx"
             )
@@ -733,6 +876,7 @@ async def collect_viral_notes_task(
     try:
         # 更新状态
         task_status[task_id]["message"] = "正在初始化采集器..."
+        add_task_log(task_id, "⚙️ 正在初始化采集器...", "info")
 
         # 获取Cookie - 优先使用前端提供的Cookie
         global app_cookie
@@ -740,10 +884,15 @@ async def collect_viral_notes_task(
         # 清理Cookie中的换行符和多余空白
         cookies_str = cookies_str.strip().replace('\n', '').replace('\r', '')
         if not cookies_str:
+            add_task_log(task_id, "❌ Cookie未配置，无法采集", "error")
             raise ValueError("未配置Cookie，请在前端输入Cookie或在.env文件中设置COOKIES")
 
         # 创建采集器
         collector = ViralNoteCollector(cookies_str)
+        add_task_log(task_id, "✅ 采集器初始化完成", "success")
+
+        # 用于控制日志频率的计数器
+        last_logged_count = [0]  # 使用列表以便在闭包中修改
 
         # 更新状态回调（支持解析当前关键词）
         def update_progress(progress_or_collected, message=""):
@@ -752,7 +901,10 @@ async def collect_viral_notes_task(
                 import re
                 match = re.search(r'关键词.*?:\s*(.+?)(?:\s|$)', message)
                 if match:
-                    task_status[task_id]["current_keyword"] = match.group(1)
+                    current_kw = match.group(1)
+                    if task_status[task_id].get("current_keyword") != current_kw:
+                        task_status[task_id]["current_keyword"] = current_kw
+                        add_task_log(task_id, f"🔄 正在采集关键词：{current_kw}", "info")
 
             # 更新进度
             if isinstance(progress_or_collected, int) and progress_or_collected <= 100:
@@ -760,7 +912,7 @@ async def collect_viral_notes_task(
             if message:
                 task_status[task_id]["message"] = message
 
-            # 计算平均互动数
+            # 计算平均互动数并记录采集进度日志
             if hasattr(collector, 'collected_notes') and len(collector.collected_notes) > 0:
                 total_interaction = sum(note.interaction_score for note in collector.collected_notes)
                 avg_interaction = int(total_interaction / len(collector.collected_notes))
@@ -768,12 +920,24 @@ async def collect_viral_notes_task(
                     task_status[task_id]["statistics"] = {}
                 task_status[task_id]["statistics"]["avg_interaction"] = avg_interaction
 
+                # 每采集20篇记录一次日志（避免日志过多）
+                current_count = len(collector.collected_notes)
+                if current_count >= last_logged_count[0] + 20:
+                    last_logged_count[0] = current_count
+                    add_task_log(
+                        task_id,
+                        f"📈 已采集 {current_count} 篇，平均互动 {avg_interaction:,}",
+                        "info"
+                    )
+
         keyword_display = "、".join(keywords)
+        add_task_log(task_id, f"🔍 开始搜索「{keyword_display}」相关笔记", "info")
 
         # 判断使用单关键词还是多关键词采集
         if len(keywords) == 1:
             # 单关键词模式（向后兼容）
             task_status[task_id]["message"] = f"开始采集「{keywords[0]}」相关笔记..."
+            add_task_log(task_id, f"📝 单关键词模式：{keywords[0]}", "info")
             notes = await collector.search_viral_notes(
                 query=keywords[0],
                 target_count=target_count,
@@ -785,6 +949,7 @@ async def collect_viral_notes_task(
         else:
             # 多关键词模式
             task_status[task_id]["message"] = f"开始多关键词采集「{keyword_display}」..."
+            add_task_log(task_id, f"📝 多关键词模式：共 {len(keywords)} 个关键词", "info")
             notes = await collector.search_viral_notes_multi_keywords(
                 keywords=keywords,
                 target_count=target_count,
@@ -797,7 +962,10 @@ async def collect_viral_notes_task(
 
         # 保存数据
         task_status[task_id]["message"] = "正在保存数据..."
+        add_task_log(task_id, f"📊 采集完成，共获取 {len(notes)} 篇笔记", "success")
+        add_task_log(task_id, "💾 正在保存数据...", "info")
         data_file = collector.save_collected_notes()
+        add_task_log(task_id, "✅ 数据保存完成", "success")
 
         # 获取统计信息
         statistics = collector.get_statistics()
@@ -807,10 +975,56 @@ async def collect_viral_notes_task(
             statistics['keyword_distribution'] = collector.keyword_stats
             statistics['multi_match_count'] = getattr(collector, 'multi_match_count', 0)
 
-        # 检查样本量是否充足
+        # 检查样本量是否充足，不足则自动补采
+        resupply_result: Optional[ResupplyResult] = None
         sample_warning = None
+
         if len(notes) < min_sample_count:
-            sample_warning = f"⚠️ 样本量不足！当前 {len(notes)} 篇，最低要求 {min_sample_count} 篇。建议增加更多关键词。"
+            logger.info(f"📊 样本量不足 ({len(notes)} < {min_sample_count})，启动自动补采...")
+            task_status[task_id]["message"] = "样本量不足，正在自动补采..."
+            task_status[task_id]["progress"] = 87
+            add_task_log(task_id, f"⚠️ 样本量不足 ({len(notes)} < {min_sample_count})", "warning")
+            add_task_log(task_id, "🔄 启动自动补采...", "info")
+
+            resupply_service = AutoResupplyService()
+
+            # 获取筛选前的全部笔记（用于阶段1零成本补采）
+            all_notes_before_filter = getattr(
+                collector, '_all_notes_before_filter', notes
+            )
+
+            notes, resupply_result = await resupply_service.execute_resupply(
+                all_notes_before_filter=all_notes_before_filter,
+                current_viral_ratio=viral_ratio,
+                min_sample_count=min_sample_count,
+                collector=collector,
+                keywords=keywords,
+                original_target_count=target_count,
+                note_type=note_type,
+                time_range=time_range,
+                progress_callback=lambda p, m: task_status[task_id].update({
+                    "progress": p, "message": m
+                })
+            )
+
+            # 补采后需要重新保存数据
+            collector.collected_notes = notes
+            data_file = collector.save_collected_notes()
+            statistics = collector.get_statistics()
+
+            # 重新附加多关键词统计（补采可能改变了笔记列表）
+            if hasattr(collector, 'keyword_stats'):
+                statistics['keyword_distribution'] = collector.keyword_stats
+                statistics['multi_match_count'] = getattr(collector, 'multi_match_count', 0)
+
+            if resupply_result.success:
+                logger.success(f"✅ 自动补采成功: {resupply_result.message}")
+                sample_warning = f"✅ 通过自动补采达到 {len(notes)} 篇: {resupply_result.message}"
+                add_task_log(task_id, f"✅ 补采成功，现有 {len(notes)} 篇", "success")
+            else:
+                logger.warning(f"⚠️ 自动补采完成但仍不足: {resupply_result.message}")
+                sample_warning = f"⚠️ {resupply_result.message}"
+                add_task_log(task_id, f"⚠️ 补采后仍不足：{len(notes)} 篇", "warning")
 
         # 更新最终状态（清空 current_keyword 表示全部完成）
         task_status[task_id].update({
@@ -822,20 +1036,151 @@ async def collect_viral_notes_task(
             "data_file": data_file,
             "end_time": datetime.now().isoformat(),
             "statistics": statistics,
-            "sample_warning": sample_warning
+            "sample_warning": sample_warning,
+            "resupply_info": {
+                "executed": resupply_result is not None,
+                "phases": resupply_result.phases_executed if resupply_result else [],
+                "success": resupply_result.success if resupply_result else None,
+                "extra_collected": resupply_result.extra_collected if resupply_result else 0
+            } if resupply_result else None
         })
 
         logger.success(f"任务 {task_id} 完成，采集 {len(notes)} 篇爆款笔记")
+        add_task_log(task_id, f"🎉 采集任务完成！共 {len(notes)} 篇笔记", "success")
         if sample_warning:
-            logger.warning(sample_warning)
+            logger.info(sample_warning)
 
     except Exception as e:
         logger.error(f"任务 {task_id} 失败: {e}")
+        add_task_log(task_id, f"❌ 任务失败: {str(e)}", "error")
         task_status[task_id].update({
             "status": "failed",
             "message": f"任务失败: {str(e)}",
             "error": str(e),
             "end_time": datetime.now().isoformat()
+        })
+
+
+async def analyze_viral_notes_task(
+    task_id: str,
+    data_file: str,
+    use_ai: bool,
+    analysis_type: str,
+    video_source_mode: Optional[str]
+):
+    """
+    后台任务：分析爆款笔记（支持实时日志）
+
+    Args:
+        task_id: 任务ID（复用采集时的ID）
+        data_file: 采集数据文件路径
+        use_ai: 是否启用AI分析
+        analysis_type: 分析类型（image/video/all）
+        video_source_mode: 视频源模式
+    """
+    try:
+        # 加载数据
+        add_task_log(task_id, "📂 正在加载采集数据...", "info")
+        with open(data_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # 转换为ViralNote对象
+        notes = [ViralNote.from_spider_data(note) for note in data['notes']]
+        add_task_log(task_id, f"✅ 已加载 {len(notes)} 篇笔记", "success")
+
+        # 统计笔记类型
+        video_count = sum(1 for n in notes if n.note_type == '视频')
+        image_count = len(notes) - video_count
+        add_task_log(task_id, f"📊 笔记类型分布: 图文 {image_count} 篇, 视频 {video_count} 篇", "info")
+
+        # 创建分析器
+        add_task_log(task_id, "⚙️ 初始化AI分析器...", "info")
+        task_status[task_id]["analysis_progress"] = 10
+        if use_ai:
+            analyzer = ViralAnalyzer(api_key="auto")
+        else:
+            analyzer = ViralAnalyzer(api_key=None)
+        add_task_log(task_id, "✅ 分析器初始化完成", "success")
+
+        # 开始各阶段分析
+        task_status[task_id]["analysis_progress"] = 15
+        add_task_log(task_id, "🔍 开始特征提取（标题/内容/互动）...", "info")
+
+        # 执行分析（通过monkey patch传递日志回调）
+        # 注：实际分析过程在 ViralAnalyzer 内部，这里添加阶段性日志
+        task_status[task_id]["analysis_progress"] = 20
+
+        if analysis_type in ['image', 'all'] and image_count > 0:
+            add_task_log(task_id, f"🖼️ 开始图文笔记分析（{image_count} 篇）...", "info")
+        if analysis_type in ['video', 'all'] and video_count > 0:
+            add_task_log(task_id, f"🎬 准备视频笔记分析（{video_count} 篇）...", "info")
+
+        task_status[task_id]["analysis_progress"] = 30
+        add_task_log(task_id, "📊 执行产品引出分析...", "info")
+
+        task_status[task_id]["analysis_progress"] = 40
+        add_task_log(task_id, "🎯 执行场景方向分析...", "info")
+
+        task_status[task_id]["analysis_progress"] = 50
+        add_task_log(task_id, "🤖 调用AI深度分析（可能需要1-2分钟）...", "info")
+
+        # 执行完整分析
+        result = analyzer.analyze_viral_notes(
+            notes=notes,
+            keyword=task_status[task_id]["keyword"],
+            threshold=data.get('statistics', {}).get('viral_threshold', 5000),
+            analysis_type=analysis_type,
+            video_source_mode=video_source_mode
+        )
+
+        task_status[task_id]["analysis_progress"] = 85
+        add_task_log(task_id, "✅ AI分析完成", "success")
+
+        # 检查视频分析结果
+        video_ai_insights = result.viral_model.get('video_ai_insights', {})
+        if video_ai_insights.get('status') == 'success':
+            analyzed_count = video_ai_insights.get('analyzed_count', 0)
+            add_task_log(task_id, f"🎬 视频分析完成: {analyzed_count} 个视频", "success")
+        elif video_ai_insights.get('status') == 'skipped':
+            add_task_log(task_id, "📷 图文模式跳过视频分析", "info")
+
+        # 将原始笔记数据添加到分析结果中
+        result.notes = [note.to_dict() for note in notes]
+
+        # 保存分析结果
+        task_status[task_id]["analysis_progress"] = 90
+        add_task_log(task_id, "💾 正在保存分析结果...", "info")
+        analysis_file = data_file.replace('viral_notes', 'viral_analysis')
+        result.save_to_file(analysis_file)
+        add_task_log(task_id, "✅ 分析结果已保存", "success")
+
+        # 更新最终状态
+        task_status[task_id].update({
+            "status": "analyzed",
+            "analysis_progress": 100,
+            "analysis_completed": True,
+            "analysis_file": analysis_file,
+            "analysis_end_time": datetime.now().isoformat(),
+            "analysis_summary": {
+                "total_notes": result.total_notes,
+                "keyword": result.keyword,
+                "model_generated": bool(result.viral_model)
+            }
+        })
+
+        add_task_log(task_id, f"🎉 分析完成！共分析 {result.total_notes} 篇笔记", "success")
+        add_task_log(task_id, "💡 可以点击「导出报告」下载Excel分析报告", "info")
+        logger.success(f"分析任务 {task_id} 完成")
+
+    except Exception as e:
+        logger.error(f"分析任务 {task_id} 失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        add_task_log(task_id, f"❌ 分析失败: {str(e)}", "error")
+        task_status[task_id].update({
+            "status": "analysis_failed",
+            "analysis_error": str(e),
+            "analysis_end_time": datetime.now().isoformat()
         })
 
 
@@ -1398,7 +1743,9 @@ async def cleanup_history(
         清理结果汇总
     """
     try:
+        logger.info(f"清理请求: categories={request.categories}, dry_run={request.dry_run}")
         service = CleanupService()
+        logger.info(f"CleanupService base_path: {service.base_path}")
 
         # 验证类别
         valid_categories = set(service.CATEGORIES.keys())
