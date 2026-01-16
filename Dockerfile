@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
