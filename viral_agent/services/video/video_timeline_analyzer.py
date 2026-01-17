@@ -146,16 +146,9 @@ class VideoTimelineAnalyzer:
             ]
             return await asyncio.gather(*tasks)
 
-        # 检查是否已有运行中的事件循环
-        try:
-            loop = asyncio.get_running_loop()
-            # 如果已有运行中的循环，使用 nest_asyncio 支持的方式
-            import nest_asyncio
-            nest_asyncio.apply()
-            analyses = loop.run_until_complete(run_all_tasks())
-        except RuntimeError:
-            # 没有运行中的循环，创建新的
-            analyses = asyncio.run(run_all_tasks())
+        # 使用安全包装器运行异步任务（兼容 uvloop）
+        from viral_agent.utils.async_utils import run_async_safely
+        analyses = run_async_safely(run_all_tasks())
 
         # 筛选出视频笔记（与analyses对应）
         video_notes = [n for n in notes if n.get('note_type') == '视频' and n.get('video_addr')]

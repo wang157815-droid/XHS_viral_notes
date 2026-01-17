@@ -172,15 +172,11 @@ class VideoContentAnalyzer:
                     duration=note.get('duration')
                 )
 
-        # 执行批量分析
-        try:
-            import nest_asyncio
-            nest_asyncio.apply()
-            tasks = [analyze_with_semaphore(note) for note in video_notes]
-            analyses = await asyncio.gather(*tasks, return_exceptions=True)
-        except RuntimeError:
-            tasks = [analyze_with_semaphore(note) for note in video_notes]
-            analyses = asyncio.run(asyncio.gather(*tasks, return_exceptions=True))
+        # 执行批量分析（使用安全包装器，兼容 uvloop）
+        from viral_agent.utils.async_utils import safe_nest_asyncio_apply
+        safe_nest_asyncio_apply()
+        tasks = [analyze_with_semaphore(note) for note in video_notes]
+        analyses = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 处理结果
         valid_analyses = []
