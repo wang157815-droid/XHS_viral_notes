@@ -1,10 +1,14 @@
 """
 封面分析器
 负责分析笔记封面图片的视觉特征和文字内容
+
+OCR 模式（通过环境变量 OCR_MODE 配置）：
+- ai: 使用 AI 视觉模型（默认，需要配置多模态 API）
+- disabled: 禁用 OCR 功能（封面颜色/布局分析仍正常）
 """
 import os
+import asyncio
 import requests
-import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 from collections import Counter
 from PIL import Image, ImageFilter
@@ -14,26 +18,8 @@ from loguru import logger
 import jieba
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 尝试导入OCR引擎（优先EasyOCR，备选PaddleOCR）
-OCR_ENGINE = None
-OCR_AVAILABLE = False
-
-# 先尝试EasyOCR（更稳定）
-try:
-    import easyocr
-    OCR_ENGINE = 'easy'
-    OCR_AVAILABLE = True
-except Exception:
-    pass
-
-# 如果EasyOCR不可用，尝试PaddleOCR
-if not OCR_AVAILABLE:
-    try:
-        from paddleocr import PaddleOCR
-        OCR_ENGINE = 'paddle'
-        OCR_AVAILABLE = True
-    except Exception:  # 捕获所有异常，不只是ImportError
-        pass
+# OCR 模式配置：ai（默认）或 disabled
+OCR_MODE = os.getenv('OCR_MODE', 'ai').lower()
 
 
 class CoverAnalyzer:
@@ -49,60 +35,38 @@ class CoverAnalyzer:
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
 
-        # 初始化OCR
-        self.ocr = None
-        self.ocr_engine = None
+        # OCR 相关属性
+        self.ai_ocr = None  # AI OCR 服务实例
+        self.ocr_enabled = False  # OCR 是否可用
 
-        if OCR_AVAILABLE:
-            if OCR_ENGINE == 'paddle':
-                # 尝试初始化PaddleOCR
-                init_configs = [
-                    {'det_limit_side_len': 960, 'rec_batch_num': 6, 'lang': 'ch', 'show_log': False},
-                    {'lang': 'ch', 'show_log': False},
-                    {'lang': 'ch'},
-                    {},
-                ]
+        # 根据 OCR_MODE 初始化
+        self._init_ocr()
 
-                for i, config in enumerate(init_configs, 1):
-                    try:
-                        logger.info(f"尝试PaddleOCR方案{i}: {config}")
-                        from paddleocr import PaddleOCR
-                        self.ocr = PaddleOCR(**config)
-                        self.ocr_engine = 'paddle'
-                        logger.success(f"✓ PaddleOCR初始化成功（方案{i}）")
-                        break
-                    except Exception as e:
-                        logger.warning(f"PaddleOCR方案{i}失败: {type(e).__name__}")
+    def _init_ocr(self):
+        """初始化 AI OCR 服务"""
+        if OCR_MODE == 'disabled':
+            logger.info("OCR 功能已禁用（OCR_MODE=disabled）")
+            return
 
-                if not self.ocr:
-                    logger.warning("PaddleOCR初始化失败，尝试EasyOCR...")
-
-            if not self.ocr and OCR_ENGINE == 'easy' or (OCR_ENGINE == 'paddle' and not self.ocr):
-                # 尝试初始化EasyOCR
-                try:
-                    logger.info("正在初始化EasyOCR（首次使用会下载模型，请稍候）...")
-                    import easyocr
-                    self.ocr = easyocr.Reader(['ch_sim', 'en'], gpu=False)
-                    self.ocr_engine = 'easy'
-                    logger.success("✓ EasyOCR初始化成功")
-                except Exception as e:
-                    logger.error(f"EasyOCR初始化失败: {e}")
-
-            if not self.ocr:
-                logger.error("所有OCR引擎初始化均失败")
-                logger.warning("封面文字识别功能已禁用，其他分析功能正常")
-                logger.info("修复建议:")
-                logger.info("  方案A（推荐）: pip install easyocr")
-                logger.info("  方案B: pip install --upgrade paddlepaddle paddleocr")
-        else:
-            logger.warning("未安装OCR引擎，封面文字识别功能已禁用")
-            logger.info("安装建议: pip install easyocr")
+        # 使用 AI 视觉模型进行 OCR
+        try:
+            from viral_agent.services.image.ai_ocr_service import get_ai_ocr_service
+            self.ai_ocr = get_ai_ocr_service()
+            if self.ai_ocr.is_available():
+                self.ocr_enabled = True
+                logger.success("✓ AI OCR 服务初始化成功（使用多模态视觉模型 + base64）")
+            else:
+                logger.warning("AI OCR 服务未配置，将禁用封面文字识别")
+                logger.info("配置建议：在 .env 中配置 MULTIMODAL_API_BASE、MULTIMODAL_API_KEY、MULTIMODAL_MODEL_NAME")
+        except Exception as e:
+            logger.error(f"AI OCR 服务初始化失败: {e}")
+            self.ai_ocr = None
 
     def _download_images_parallel(
         self,
         tasks: List[Tuple[str, str]],
         max_workers: int = 10
-    ) -> Dict[str, Image.Image]:
+    ) -> Dict[str, Tuple[Image.Image, str]]:
         """
         并行下载多张图片（性能优化：使用线程池并发下载）
 
@@ -111,7 +75,7 @@ class CoverAnalyzer:
             max_workers: 最大并发线程数
 
         Returns:
-            {note_id: Image} 下载成功的图片字典
+            {note_id: (Image, url)} 下载成功的图片字典，包含原始 URL（供 AI OCR 使用）
         """
         results = {}
 
@@ -135,7 +99,8 @@ class CoverAnalyzer:
                 try:
                     image = future.result()
                     if image:
-                        results[note_id] = image
+                        # 保存图片和原始 URL（AI OCR 需要 URL）
+                        results[note_id] = (image, url)
                 except Exception as e:
                     logger.debug(f"下载图片失败 {note_id}: {e}")
 
@@ -148,7 +113,7 @@ class CoverAnalyzer:
 
     def _analyze_images_parallel(
         self,
-        images: Dict[str, Image.Image],
+        images: Dict[str, Tuple[Image.Image, str]],
         max_workers: int = 4
     ) -> List[Dict[str, Any]]:
         """
@@ -158,7 +123,7 @@ class CoverAnalyzer:
         因此使用线程池仍然能获得一定的并行加速。
 
         Args:
-            images: {note_id: Image} 图片字典
+            images: {note_id: (Image, url)} 图片字典，包含原始 URL
             max_workers: 最大并发线程数（建议2-4，OCR内存占用较大）
 
         Returns:
@@ -172,10 +137,10 @@ class CoverAnalyzer:
         logger.info(f"并行分析 {len(images)} 张图片（线程数: {max_workers}）...")
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交所有分析任务
+            # 提交所有分析任务（传递 image_url 供 AI OCR 使用）
             future_to_id = {
-                executor.submit(self._analyze_image_features, image, note_id): note_id
-                for note_id, image in images.items()
+                executor.submit(self._analyze_image_features, image, note_id, image_url): note_id
+                for note_id, (image, image_url) in images.items()
             }
 
             # 收集结果
@@ -249,13 +214,19 @@ class CoverAnalyzer:
         logger.success(f"封面分析完成，成功分析 {len(all_cover_features)} 个")
         return summary
 
-    def _analyze_image_features(self, image: Image.Image, note_id: str) -> Optional[Dict[str, Any]]:
+    def _analyze_image_features(
+        self,
+        image: Image.Image,
+        note_id: str,
+        image_url: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         分析单张已下载图片的特征（内部方法）
 
         Args:
             image: PIL Image对象
             note_id: 笔记ID
+            image_url: 图片原始 URL（用于 AI OCR）
 
         Returns:
             图片特征字典
@@ -270,8 +241,8 @@ class CoverAnalyzer:
             # 1. 颜色分析
             features['dominant_colors'] = self._analyze_colors(image)
 
-            # 2. 文字识别（OCR）
-            if self.ocr:
+            # 2. 文字识别（AI OCR，使用已下载图片转 base64）
+            if self.ocr_enabled:
                 features['text_content'] = self._extract_text(image)
                 features['text_layout'] = self._analyze_text_layout(features['text_content'])
 
@@ -504,8 +475,8 @@ class CoverAnalyzer:
             # 1. 颜色分析
             features['dominant_colors'] = self._analyze_colors(image)
 
-            # 2. 文字识别（OCR）
-            if self.ocr:
+            # 2. 文字识别（AI OCR，使用已下载图片转 base64）
+            if self.ocr_enabled:
                 features['text_content'] = self._extract_text(image)
                 features['text_layout'] = self._analyze_text_layout(features['text_content'])
 
@@ -550,9 +521,16 @@ class CoverAnalyzer:
 
         return None
 
+    # 下载图片时使用的请求头（绕过小红书 CDN 防盗链）
+    DOWNLOAD_HEADERS = {
+        'Referer': 'https://www.xiaohongshu.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    }
+
     def _download_image(self, url: str, note_id: str) -> Optional[Image.Image]:
         """
-        下载并缓存图片
+        下载并缓存图片（带 Referer 头绕过防盗链）
 
         Args:
             url: 图片URL
@@ -567,8 +545,8 @@ class CoverAnalyzer:
             if os.path.exists(cache_path):
                 return Image.open(cache_path)
 
-            # 下载图片
-            response = requests.get(url, timeout=10)
+            # 下载图片（带 Referer 头绕过小红书 CDN 防盗链）
+            response = requests.get(url, headers=self.DOWNLOAD_HEADERS, timeout=10)
             if response.status_code == 200:
                 image = Image.open(BytesIO(response.content))
 
@@ -648,49 +626,29 @@ class CoverAnalyzer:
 
     def _extract_text(self, image: Image.Image) -> List[str]:
         """
-        使用OCR提取图片中的文字
+        使用 AI OCR 提取图片中的文字（base64 方式，避免防盗链问题）
 
         Args:
-            image: PIL Image对象
+            image: PIL Image对象（已下载的图片）
 
         Returns:
             识别出的文字列表
         """
-        if not self.ocr:
+        if not self.ocr_enabled or not self.ai_ocr:
             return []
 
         try:
-            # 转换为numpy数组
-            img_array = np.array(image)
-            texts = []
-
-            if self.ocr_engine == 'paddle':
-                # PaddleOCR
-                result = self.ocr.ocr(img_array, cls=True)
-                if result and result[0]:
-                    for line in result[0]:
-                        if line and len(line) > 1 and line[1]:
-                            text = line[1][0]  # 文字内容
-                            confidence = line[1][1]  # 置信度
-                            # 只保留置信度较高的文字
-                            if confidence > 0.8 and len(text.strip()) > 0:
-                                texts.append(text.strip())
-
-            elif self.ocr_engine == 'easy':
-                # EasyOCR
-                result = self.ocr.readtext(img_array)
-                for detection in result:
-                    if len(detection) >= 2:
-                        text = detection[1]  # 文字内容
-                        confidence = detection[2] if len(detection) > 2 else 1.0  # 置信度
-                        # 只保留置信度较高的文字
-                        if confidence > 0.6 and len(text.strip()) > 0:
-                            texts.append(text.strip())
-
+            # 在同步上下文中运行异步方法
+            loop = asyncio.new_event_loop()
+            try:
+                texts = loop.run_until_complete(
+                    self.ai_ocr.extract_text_from_image(image)
+                )
+            finally:
+                loop.close()
             return texts
-
         except Exception as e:
-            logger.error(f"OCR识别失败: {e}")
+            logger.error(f"AI OCR 识别失败: {e}")
             return []
 
     def _analyze_text_layout(self, texts: List[str]) -> Dict[str, Any]:

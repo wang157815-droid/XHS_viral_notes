@@ -211,3 +211,175 @@ def verify_token_and_password_changed(
         )
 
     return username
+
+
+# ==================== 用户管理函数 ====================
+
+def is_admin(username: str) -> bool:
+    """检查用户是否是管理员"""
+    users = load_users()
+    if username not in users:
+        return False
+    return users[username].get("role") == "admin"
+
+
+def create_user(
+    username: str,
+    password: str,
+    role: str = "user",
+    created_by: Optional[str] = None
+) -> dict:
+    """
+    创建新用户
+
+    Args:
+        username: 用户名（只能包含字母、数字、下划线）
+        password: 密码（至少8位）
+        role: 角色（admin/user）
+        created_by: 创建者用户名
+
+    Returns:
+        新用户信息
+
+    Raises:
+        ValueError: 用户名已存在或格式错误
+    """
+    import re
+
+    # 验证用户名格式
+    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{2,19}$', username):
+        raise ValueError("用户名必须以字母开头，只能包含字母、数字、下划线，长度3-20位")
+
+    # 验证密码长度
+    if len(password) < 8:
+        raise ValueError("密码长度至少8位")
+
+    users = load_users()
+    if username in users:
+        raise ValueError(f"用户名 '{username}' 已存在")
+
+    # 创建用户
+    users[username] = {
+        "password": pwd_context.hash(password),
+        "role": role if role in ("admin", "user") else "user",
+        "must_change_password": True,  # 新用户首次登录需改密
+        "created_at": datetime.now().isoformat(),
+        "created_by": created_by
+    }
+    save_users(users)
+
+    logger.info(f"用户创建成功: {username} (角色: {role}, 创建者: {created_by})")
+
+    return {
+        "username": username,
+        "role": users[username]["role"],
+        "created_at": users[username]["created_at"]
+    }
+
+
+def delete_user(username: str, deleted_by: str) -> bool:
+    """
+    删除用户
+
+    Args:
+        username: 要删除的用户名
+        deleted_by: 执行删除的用户名
+
+    Returns:
+        是否成功
+
+    Raises:
+        ValueError: 不能删除自己或admin账户
+    """
+    if username == "admin":
+        raise ValueError("不能删除 admin 账户")
+
+    if username == deleted_by:
+        raise ValueError("不能删除自己的账户")
+
+    users = load_users()
+    if username not in users:
+        return False
+
+    del users[username]
+    save_users(users)
+
+    logger.info(f"用户已删除: {username} (操作者: {deleted_by})")
+    return True
+
+
+def list_users() -> list:
+    """
+    获取所有用户列表（不含密码）
+
+    Returns:
+        用户信息列表
+    """
+    users = load_users()
+    result = []
+    for username, data in users.items():
+        result.append({
+            "username": username,
+            "role": data.get("role", "user"),
+            "created_at": data.get("created_at"),
+            "created_by": data.get("created_by"),
+            "must_change_password": data.get("must_change_password", False),
+            "password_changed_at": data.get("password_changed_at")
+        })
+    return result
+
+
+def get_user_info(username: str) -> Optional[dict]:
+    """
+    获取单个用户信息（不含密码）
+
+    Args:
+        username: 用户名
+
+    Returns:
+        用户信息字典，用户不存在返回 None
+    """
+    users = load_users()
+    if username not in users:
+        return None
+
+    data = users[username]
+    return {
+        "username": username,
+        "role": data.get("role", "user"),
+        "created_at": data.get("created_at"),
+        "created_by": data.get("created_by"),
+        "must_change_password": data.get("must_change_password", False),
+        "password_changed_at": data.get("password_changed_at")
+    }
+
+
+def update_user_role(username: str, new_role: str, updated_by: str) -> bool:
+    """
+    更新用户角色
+
+    Args:
+        username: 用户名
+        new_role: 新角色（admin/user）
+        updated_by: 操作者用户名
+
+    Returns:
+        是否成功
+    """
+    if username == "admin" and new_role != "admin":
+        raise ValueError("不能更改 admin 账户的角色")
+
+    if new_role not in ("admin", "user"):
+        raise ValueError("角色只能是 admin 或 user")
+
+    users = load_users()
+    if username not in users:
+        return False
+
+    users[username]["role"] = new_role
+    users[username]["role_updated_at"] = datetime.now().isoformat()
+    users[username]["role_updated_by"] = updated_by
+    save_users(users)
+
+    logger.info(f"用户角色已更新: {username} -> {new_role} (操作者: {updated_by})")
+    return True
