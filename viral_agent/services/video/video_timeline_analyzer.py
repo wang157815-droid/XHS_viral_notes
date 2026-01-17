@@ -104,9 +104,9 @@ class VideoTimelineAnalyzer:
             logger.error(f"时间轴分析失败: {e}")
             return self._get_default_analysis(error=str(e))
 
-    def analyze_timelines_batch(self, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def analyze_timelines_batch(self, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        批量分析视频时间轴
+        批量分析视频时间轴（异步版本）
 
         Args:
             notes: 笔记列表，每个笔记包含video_addr字段
@@ -132,23 +132,18 @@ class VideoTimelineAnalyzer:
             logger.warning("没有找到视频URL")
             return self._get_empty_stats()
 
-        # 批量分析（使用异步）- 兼容嵌套事件循环
-        async def run_all_tasks():
-            tasks = [
-                self.analyze_timeline(
-                    item['url'],
-                    item['title'],
-                    item['description'],
-                    video_urls=item.get('video_urls'),  # P0-4: 透传备选URL
-                    note_id=item.get('note_id')  # P1-download: 透传note_id实现下载共享
-                )
-                for item in videos
-            ]
-            return await asyncio.gather(*tasks)
-
-        # 使用安全包装器运行异步任务（兼容 uvloop）
-        from viral_agent.utils.async_utils import run_async_safely
-        analyses = run_async_safely(run_all_tasks())
+        # 批量分析（纯异步，无需 run_async_safely）
+        tasks = [
+            self.analyze_timeline(
+                item['url'],
+                item['title'],
+                item['description'],
+                video_urls=item.get('video_urls'),  # P0-4: 透传备选URL
+                note_id=item.get('note_id')  # P1-download: 透传note_id实现下载共享
+            )
+            for item in videos
+        ]
+        analyses = await asyncio.gather(*tasks)
 
         # 筛选出视频笔记（与analyses对应）
         video_notes = [n for n in notes if n.get('note_type') == '视频' and n.get('video_addr')]
