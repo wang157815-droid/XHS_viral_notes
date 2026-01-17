@@ -15,8 +15,11 @@ from io import BytesIO
 from typing import List, Optional, Dict, TYPE_CHECKING
 from loguru import logger
 
+# 运行时导入 PIL.Image（用于图片处理）
+from PIL import Image
+
 if TYPE_CHECKING:
-    from PIL import Image
+    pass  # 保留 TYPE_CHECKING 块用于未来可能的类型导入
 
 
 class AIOCRService:
