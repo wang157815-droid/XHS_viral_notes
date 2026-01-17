@@ -273,18 +273,9 @@ class SceneAnalyzer:
 
             return results
 
-        # 运行异步任务
-        # 使用 nest_asyncio 解决 FastAPI 等异步框架中的事件循环嵌套问题
-        import nest_asyncio
-        nest_asyncio.apply()
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        video_results = loop.run_until_complete(analyze_video_batch())
+        # 运行异步任务（使用安全包装器，兼容 uvloop）
+        from viral_agent.utils.async_utils import run_async_safely
+        video_results = run_async_safely(analyze_video_batch())
 
         # 统计视频场景
         video_scene_counter = Counter()

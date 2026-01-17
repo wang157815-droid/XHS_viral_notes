@@ -10,10 +10,10 @@ from loguru import logger
 from openai import OpenAI
 from dotenv import load_dotenv
 import asyncio
-import nest_asyncio
 
-# 允许嵌套事件循环（解决FastAPI等异步框架中的冲突）
-nest_asyncio.apply()
+# 安全应用 nest_asyncio（兼容 uvloop）
+from viral_agent.utils.async_utils import safe_nest_asyncio_apply
+safe_nest_asyncio_apply()
 
 from viral_agent.models.viral_note import ViralNote, ViralAnalysisResult
 from viral_agent.services.core.feature_extractor import ViralFeatureExtractor

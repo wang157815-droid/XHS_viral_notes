@@ -548,16 +548,9 @@ class VideoEnhancedAnalyzer:
             return await self.analyze_batch_videos(video_notes)
 
         try:
-            # 检查是否已有运行中的事件循环
-            try:
-                loop = asyncio.get_running_loop()
-                # 如果已有运行中的循环，使用 nest_asyncio 支持的方式
-                import nest_asyncio
-                nest_asyncio.apply()
-                batch_result = loop.run_until_complete(run_batch_analysis())
-            except RuntimeError:
-                # 没有运行中的循环，创建新的
-                batch_result = asyncio.run(run_batch_analysis())
+            # 使用安全包装器运行异步任务（兼容 uvloop）
+            from viral_agent.utils.async_utils import run_async_safely
+            batch_result = run_async_safely(run_batch_analysis())
 
             # 构建特征字典
             features = {

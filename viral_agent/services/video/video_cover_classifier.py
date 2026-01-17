@@ -168,16 +168,11 @@ class VideoCoverClassifier:
                     title=note.get('title')
                 )
 
-        # 执行批量分析
-        try:
-            loop = asyncio.get_running_loop()
-            import nest_asyncio
-            nest_asyncio.apply()
-            tasks = [analyze_with_semaphore(note) for note in video_notes]
-            analyses = await asyncio.gather(*tasks, return_exceptions=True)
-        except RuntimeError:
-            tasks = [analyze_with_semaphore(note) for note in video_notes]
-            analyses = asyncio.run(asyncio.gather(*tasks, return_exceptions=True))
+        # 执行批量分析（使用安全包装器，兼容 uvloop）
+        from viral_agent.utils.async_utils import safe_nest_asyncio_apply
+        safe_nest_asyncio_apply()
+        tasks = [analyze_with_semaphore(note) for note in video_notes]
+        analyses = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 处理结果
         valid_analyses = []
@@ -502,14 +497,12 @@ class VideoCoverClassifier:
 
         # 检查是否已有运行中的事件循环
         try:
-            loop = asyncio.get_running_loop()
-            # 如果已有运行中的循环，使用 nest_asyncio 支持的方式
-            import nest_asyncio
-            nest_asyncio.apply()
-            classifications = loop.run_until_complete(run_all_tasks())
-        except RuntimeError:
-            # 没有运行中的循环，创建新的
-            classifications = asyncio.run(run_all_tasks())
+            # 使用安全包装器运行异步任务（兼容 uvloop）
+            from viral_agent.utils.async_utils import run_async_safely
+            classifications = run_async_safely(run_all_tasks())
+        except Exception as e:
+            logger.error(f"封面分类分析失败: {e}")
+            classifications = []
 
         # 统计分类结果
         stats = self._calculate_statistics(classifications)
