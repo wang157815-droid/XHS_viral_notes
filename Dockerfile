@@ -33,8 +33,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 安装额外依赖（requirements.txt 中被注释或遗漏的）
 # - chromadb: RAG知识库向量检索
 # - opencv-python-headless: 视频帧提取分析（headless版无GUI依赖）
-# - easyocr: OCR文字识别（可选，用于封面文字提取）
-RUN pip install --no-cache-dir chromadb opencv-python-headless easyocr
+# 注：OCR 使用 AI 多模态 API（ai_ocr_service.py），无需本地 EasyOCR/PyTorch
+RUN pip install --no-cache-dir chromadb opencv-python-headless
 
 COPY . .
 
