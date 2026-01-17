@@ -461,9 +461,9 @@ class VideoCoverClassifier:
             'recommendations': ['请先采集视频数据后再进行分析']
         }
 
-    def classify_covers_batch(self, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def classify_covers_batch(self, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        批量分类视频封面
+        批量分类视频封面（异步版本）
 
         Args:
             notes: 笔记列表，每个笔记包含video_cover字段
@@ -487,19 +487,13 @@ class VideoCoverClassifier:
             logger.warning("没有找到视频封面")
             return self._get_empty_stats()
 
-        # 批量分类（使用异步）- 兼容嵌套事件循环
-        async def run_all_tasks():
+        # 批量分类（纯异步，无需 run_async_safely）
+        try:
             tasks = [
                 self.classify_cover(item['url'], item['title'])
                 for item in cover_urls
             ]
-            return await asyncio.gather(*tasks)
-
-        # 检查是否已有运行中的事件循环
-        try:
-            # 使用安全包装器运行异步任务（兼容 uvloop）
-            from viral_agent.utils.async_utils import run_async_safely
-            classifications = run_async_safely(run_all_tasks())
+            classifications = await asyncio.gather(*tasks)
         except Exception as e:
             logger.error(f"封面分类分析失败: {e}")
             classifications = []

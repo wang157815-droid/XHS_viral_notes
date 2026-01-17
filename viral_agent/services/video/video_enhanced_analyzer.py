@@ -454,33 +454,33 @@ class VideoEnhancedAnalyzer:
 
             logger.info(f"已完成 {min(i + max_concurrent, len(video_notes))}/{len(video_notes)}")
 
-        # 生成统计数据
-        self._generate_batch_statistics(batch_result, video_notes)
+        # 生成统计数据（异步）
+        await self._generate_batch_statistics(batch_result, video_notes)
 
         logger.success(f"批量分析完成: 成功{batch_result.success_count}, 失败{batch_result.failed_count}")
 
         return batch_result
 
-    def _generate_batch_statistics(
+    async def _generate_batch_statistics(
         self,
         batch_result: VideoAnalysisBatch,
         notes: List[Dict[str, Any]]
     ):
         """
-        生成批量统计数据
+        生成批量统计数据（异步版本）
 
         Args:
             batch_result: 批量结果对象
             notes: 原始笔记数据
         """
-        # 封面统计
-        batch_result.cover_stats = self.cover_classifier.classify_covers_batch(notes)
+        # 封面统计（异步）
+        batch_result.cover_stats = await self.cover_classifier.classify_covers_batch(notes)
 
-        # 标题统计
+        # 标题统计（同步，无需改动）
         batch_result.title_stats = self.title_classifier.classify_titles_batch(notes)
 
-        # 时间轴统计
-        batch_result.timeline_stats = self.timeline_analyzer.analyze_timelines_batch(notes)
+        # 时间轴统计（异步）
+        batch_result.timeline_stats = await self.timeline_analyzer.analyze_timelines_batch(notes)
 
         # 生成综合建议
         batch_result.recommendations = self._generate_recommendations(batch_result)
