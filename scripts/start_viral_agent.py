@@ -23,12 +23,17 @@ def check_environment():
     if not os.getenv("OPENAI_API_KEY"):
         logger.warning("未配置OPENAI_API_KEY，将无法使用AI深度分析功能")
 
-    # 检查必要的目录
-    dirs = ["web/static", "web/templates", "datas/viral_analysis"]
+    # 检查必要的目录（使用 UserDataService 创建默认用户目录）
+    dirs = ["web/static", "web/templates"]
     for dir_path in dirs:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path, exist_ok=True)
             logger.info(f"创建目录: {dir_path}")
+
+    # 初始化默认用户数据目录
+    from viral_agent.services.user_data_service import get_user_data_service
+    user_data = get_user_data_service()  # 默认用户 admin
+    logger.info(f"用户数据目录: {user_data.get_user_data_dir()}")
 
     if issues:
         logger.error("环境检查失败:")

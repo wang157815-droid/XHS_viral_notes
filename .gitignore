@@ -78,7 +78,7 @@ logs/
 
 # 数据目录（包含爬取的数据）
 datas/
-download/
+/download/
 
 # 向量数据库存储
 viral_agent/storage/chromadb/
