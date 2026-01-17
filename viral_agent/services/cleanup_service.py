@@ -2,6 +2,7 @@
 历史记录清理服务
 
 提供清理各类缓存和历史数据的功能，支持选择性清理。
+支持用户数据隔离：部分缓存为用户专属，部分为全局共享。
 """
 
 import os
@@ -11,6 +12,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 from loguru import logger
+
+from viral_agent.services.user_data_service import get_user_data_service, UserDataService
 
 
 @dataclass
@@ -33,32 +36,14 @@ class CleanupSummary:
 
 
 class CleanupService:
-    """历史记录清理服务"""
+    """历史记录清理服务（支持用户数据隔离）"""
 
-    # 清理类别定义
-    CATEGORIES = {
-        'cover_cache': {
-            'name': '封面缓存',
-            'path': 'datas/cover_cache',
-            'description': '笔记封面图片缓存',
-            'safe_to_delete': True
-        },
+    # 全局清理类别定义（与用户无关的共享资源）
+    GLOBAL_CATEGORIES = {
         'video_cache': {
             'name': '视频缓存',
             'path': 'datas/video_cache',
-            'description': '视频文件缓存（包含下载的视频和封面）',
-            'safe_to_delete': True
-        },
-        'viral_analysis': {
-            'name': '分析结果',
-            'path': 'datas/viral_analysis',
-            'description': '爆文分析的 JSON 和 Excel 报告',
-            'safe_to_delete': True
-        },
-        'excel_datas': {
-            'name': '爬虫数据',
-            'path': 'datas/excel_datas',
-            'description': '爬虫采集的 Excel 数据',
+            'description': '视频文件缓存（全局共享）',
             'safe_to_delete': True
         },
         'media_datas': {
@@ -76,7 +61,7 @@ class CleanupService:
         'chromadb': {
             'name': '向量数据库',
             'path': 'viral_agent/storage/chromadb',
-            'description': 'RAG 知识库的向量索引',
+            'description': 'RAG 知识库的向量索引（全局共享）',
             'safe_to_delete': True
         },
         'av_sync_cache': {
@@ -87,21 +72,59 @@ class CleanupService:
         }
     }
 
+    # 用户专属清理类别定义（路径由 username 动态生成）
+    USER_CATEGORIES = {
+        'cover_cache': {
+            'name': '封面缓存',
+            'subdir': 'cover_cache',
+            'description': '笔记封面图片缓存',
+            'safe_to_delete': True
+        },
+        'viral_analysis': {
+            'name': '分析结果',
+            'subdir': 'viral_analysis',
+            'description': '爆文分析的 JSON 和 Excel 报告',
+            'safe_to_delete': True
+        },
+        'excel_datas': {
+            'name': '导出数据',
+            'subdir': 'excel_datas',
+            'description': '导出的 Excel 数据',
+            'safe_to_delete': True
+        },
+    }
+
+    # 合并所有类别（用于兼容性）
+    CATEGORIES = {**GLOBAL_CATEGORIES, **USER_CATEGORIES}
+
     # 不可删除的目录（保护）
     PROTECTED_PATHS = [
         'datas/auth',  # 用户认证数据
         'viral_agent/config',  # 配置文件
     ]
 
-    def __init__(self, base_path: Optional[str] = None):
+    def __init__(self, base_path: Optional[str] = None, username: Optional[str] = None):
         """
         初始化清理服务
 
         Args:
             base_path: 项目根目录路径，默认为当前工作目录
+            username: 用户名，用于清理用户专属数据。为空时使用默认用户
         """
         self.base_path = Path(base_path) if base_path else Path.cwd()
-        logger.info(f"清理服务初始化，根目录: {self.base_path}")
+        self.username = username or UserDataService.DEFAULT_USER
+        self.user_data = get_user_data_service(self.username)
+        logger.info(f"清理服务初始化，根目录: {self.base_path}, 用户: {self.username}")
+
+    def _get_category_path(self, category: str) -> Path:
+        """获取类别的实际路径（区分全局和用户专属）"""
+        if category in self.GLOBAL_CATEGORIES:
+            return self.base_path / self.GLOBAL_CATEGORIES[category]['path']
+        elif category in self.USER_CATEGORIES:
+            subdir = self.USER_CATEGORIES[category]['subdir']
+            return self.user_data.get_user_data_dir() / subdir
+        else:
+            return self.base_path / category  # 未知类别，返回相对路径
 
     def get_category_info(self) -> Dict[str, dict]:
         """
@@ -112,21 +135,25 @@ class CleanupService:
         """
         info = {}
         for key, cat in self.CATEGORIES.items():
-            full_path = self.base_path / cat['path']
+            full_path = self._get_category_path(key)
             size_mb = 0
             file_count = 0
 
             if full_path.exists():
                 size_mb, file_count = self._get_dir_size(full_path)
 
+            # 获取显示路径
+            display_path = str(full_path.relative_to(self.base_path)) if full_path.is_relative_to(self.base_path) else str(full_path)
+
             info[key] = {
                 'name': cat['name'],
                 'description': cat['description'],
-                'path': cat['path'],
+                'path': display_path,
                 'size_mb': round(size_mb, 2),
                 'file_count': file_count,
                 'exists': full_path.exists(),
-                'safe_to_delete': cat['safe_to_delete']
+                'safe_to_delete': cat['safe_to_delete'],
+                'is_user_specific': key in self.USER_CATEGORIES
             }
 
         return info
@@ -175,7 +202,7 @@ class CleanupService:
             )
 
         cat = self.CATEGORIES[category]
-        full_path = self.base_path / cat['path']
+        full_path = self._get_category_path(category)
 
         if not full_path.exists():
             return CleanupResult(
@@ -187,14 +214,15 @@ class CleanupService:
             )
 
         # 检查是否受保护
+        path_str = str(full_path)
         for protected in self.PROTECTED_PATHS:
-            if cat['path'].startswith(protected):
+            if protected in path_str:
                 return CleanupResult(
                     category=category,
                     files_deleted=0,
                     size_freed_mb=0,
                     success=False,
-                    error=f"受保护的目录，不可删除: {cat['path']}"
+                    error=f"受保护的目录，不可删除: {path_str}"
                 )
 
         try:
