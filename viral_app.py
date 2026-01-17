@@ -24,7 +24,9 @@ import random
 # 导入认证模块
 from viral_agent.auth import (
     init_auth, verify_token, verify_token_and_password_changed,
-    verify_password, create_token, check_must_change_password, change_password
+    verify_password, create_token, check_must_change_password, change_password,
+    # 用户管理
+    is_admin, create_user, delete_user, list_users, get_user_info, update_user_role
 )
 
 # 导入爆文Agent核心模块
@@ -52,6 +54,9 @@ from viral_agent.models.document import KnowledgeDocument, DocumentMetadata
 # 导入清理服务
 from viral_agent.services.cleanup_service import CleanupService
 
+# 导入用户数据隔离服务
+from viral_agent.services.user_data_service import get_user_data_service, UserDataService
+
 # 导入自动补采服务
 from viral_agent.services.core.auto_resupply import AutoResupplyService, ResupplyResult
 
@@ -78,6 +83,30 @@ task_status = {}
 # 日志缓冲区配置
 LOG_BUFFER_SIZE = 50  # 每个任务最多保存50条日志
 _log_id_counter = 0  # 日志ID计数器
+
+
+def verify_task_ownership(task_id: str, username: str) -> None:
+    """
+    验证任务归属权限
+
+    Args:
+        task_id: 任务ID
+        username: 当前用户名
+
+    Raises:
+        HTTPException: 任务不存在或无权访问
+    """
+    if task_id not in task_status:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    task_owner = task_status[task_id].get("username")
+    if task_owner and task_owner != username:
+        # 检查是否是管理员（管理员可以访问所有任务）
+        if not is_admin(username):
+            raise HTTPException(
+                status_code=403,
+                detail="无权访问此任务"
+            )
 
 
 def add_task_log(task_id: str, message: str, level: str = "info") -> None:
@@ -200,6 +229,22 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., description="新密码", min_length=8)
 
 
+class CreateUserRequest(BaseModel):
+    """创建用户请求模型"""
+    username: str = Field(
+        ...,
+        description="用户名（字母开头，3-20位，只能包含字母数字下划线）",
+        pattern="^[a-zA-Z][a-zA-Z0-9_]{2,19}$"
+    )
+    password: str = Field(..., description="初始密码", min_length=8)
+    role: str = Field(default="user", description="角色：admin 或 user", pattern="^(admin|user)$")
+
+
+class UpdateUserRoleRequest(BaseModel):
+    """更新用户角色请求模型"""
+    role: str = Field(..., description="新角色：admin 或 user", pattern="^(admin|user)$")
+
+
 # ==================== 知识库管理请求模型 ====================
 
 class DomainCreateRequest(BaseModel):
@@ -248,8 +293,7 @@ class CleanupRequest(BaseModel):
 
 
 # ==================== Cookie管理 ====================
-# 全局Cookie存储（生产环境应该使用数据库或缓存）
-app_cookie = None
+# Cookie 现已改为用户独立存储，见 UserDataService.save_cookie() / get_cookie()
 
 # ==================== API路由 ====================
 
@@ -276,13 +320,28 @@ async def login(request: LoginRequest):
     # 检查是否需要强制修改密码
     must_change = check_must_change_password(request.username)
 
+    # 获取用户角色
+    user_info = get_user_info(request.username)
+    user_role = user_info.get("role", "user") if user_info else "user"
+
     token = create_token(request.username)
     return {
         "status": "success",
+        "username": request.username,
         "token": token,
         "token_type": "bearer",
         "expires_in": 24 * 3600,
-        "must_change_password": must_change
+        "must_change_password": must_change,
+        "role": user_role  # 返回用户角色，前端用于显示管理员功能
+    }
+
+
+@app.get("/api/auth/me")
+async def get_current_user(username: str = Depends(verify_token)):
+    """获取当前登录用户信息（需要认证）"""
+    return {
+        "status": "success",
+        "username": username
     }
 
 
@@ -299,19 +358,144 @@ async def api_change_password(
     return {"status": "success", "message": "密码修改成功"}
 
 
+# ==================== 用户管理API（仅管理员） ====================
+
+@app.get("/api/admin/users")
+async def api_list_users(username: str = Depends(verify_token_and_password_changed)):
+    """
+    获取所有用户列表（仅管理员）
+
+    Returns:
+        用户列表
+    """
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="仅管理员可访问")
+
+    users = list_users()
+    return {
+        "status": "success",
+        "count": len(users),
+        "users": users
+    }
+
+
+@app.post("/api/admin/users")
+async def api_create_user(
+    request: CreateUserRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    创建新用户（仅管理员）
+
+    新创建的用户首次登录需要修改密码。
+    """
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="仅管理员可创建用户")
+
+    try:
+        user_info = create_user(
+            username=request.username,
+            password=request.password,
+            role=request.role,
+            created_by=username
+        )
+
+        # 自动为新用户创建数据目录
+        from viral_agent.services.user_data_service import get_user_data_service
+        get_user_data_service(request.username)
+
+        return {
+            "status": "success",
+            "message": f"用户 {request.username} 创建成功",
+            "user": user_info
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/users/{target_username}")
+async def api_get_user(
+    target_username: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """获取单个用户详情（仅管理员）"""
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="仅管理员可访问")
+
+    user_info = get_user_info(target_username)
+    if not user_info:
+        raise HTTPException(status_code=404, detail=f"用户 {target_username} 不存在")
+
+    # 获取用户数据使用情况
+    from viral_agent.services.user_data_service import get_user_data_service
+    user_data = get_user_data_service(target_username)
+    user_info["storage_usage_mb"] = round(user_data.get_storage_usage_mb(), 2)
+    user_info["analysis_count"] = len(user_data.list_analysis_files())
+
+    return {
+        "status": "success",
+        "user": user_info
+    }
+
+
+@app.put("/api/admin/users/{target_username}/role")
+async def api_update_user_role(
+    target_username: str,
+    request: UpdateUserRoleRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """更新用户角色（仅管理员）"""
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="仅管理员可修改角色")
+
+    try:
+        if not update_user_role(target_username, request.role, username):
+            raise HTTPException(status_code=404, detail=f"用户 {target_username} 不存在")
+
+        return {
+            "status": "success",
+            "message": f"用户 {target_username} 角色已更新为 {request.role}"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/admin/users/{target_username}")
+async def api_delete_user(
+    target_username: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    删除用户（仅管理员）
+
+    注意：此操作不会删除用户的数据目录，需要手动清理。
+    """
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="仅管理员可删除用户")
+
+    try:
+        if not delete_user(target_username, username):
+            raise HTTPException(status_code=404, detail=f"用户 {target_username} 不存在")
+
+        return {
+            "status": "success",
+            "message": f"用户 {target_username} 已删除"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/viral/cookie")
 async def save_cookie(
     request: CookieRequest,
     username: str = Depends(verify_token_and_password_changed)
 ):
     """
-    保存Cookie（需要认证）
+    保存Cookie（需要认证，用户独立存储）
 
     Returns:
         保存状态
     """
-    global app_cookie
-
     # 清理Cookie中的换行符和多余空白
     cookie = request.cookie.strip().replace('\n', '').replace('\r', '')
 
@@ -323,71 +507,46 @@ async def save_cookie(
     if 'a1=' not in cookie:
         return {"status": "error", "message": "Cookie格式不正确，缺少a1字段"}
 
-    # 保存Cookie
-    app_cookie = cookie
-
-    # 同时更新.env文件（可选）
-    try:
-        # 读取现有.env内容
-        env_path = Path(".env")
-        if env_path.exists():
-            with open(env_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-
-            # 更新或添加COOKIES行
-            cookie_updated = False
-            for i, line in enumerate(lines):
-                if line.startswith('COOKIES=') or line.startswith('COOKIE='):
-                    lines[i] = f'COOKIES="{cookie}"\n'
-                    cookie_updated = True
-                    break
-
-            if not cookie_updated:
-                lines.append(f'\nCOOKIES="{cookie}"\n')
-
-            # 写回文件
-            with open(env_path, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
-    except Exception as e:
-        logger.warning(f"更新.env文件失败: {e}")
-
-    logger.info(f"Cookie已更新，长度: {len(cookie)}")
-    return {
-        "status": "success",
-        "message": "Cookie保存成功",
-        "cookie_length": len(cookie)
-    }
+    # 保存到用户专属目录
+    user_data = get_user_data_service(username)
+    if user_data.save_cookie(cookie):
+        logger.info(f"用户 {username} 的 Cookie 已更新，长度: {len(cookie)}")
+        return {
+            "status": "success",
+            "message": "Cookie保存成功",
+            "cookie_length": len(cookie)
+        }
+    else:
+        return {"status": "error", "message": "Cookie保存失败"}
 
 
 @app.get("/api/viral/cookie/status")
 async def get_cookie_status(username: str = Depends(verify_token_and_password_changed)):
     """
-    获取Cookie状态（需要认证）
+    获取Cookie状态（需要认证，用户独立）
 
     Returns:
         Cookie配置状态（不返回Cookie内容预览，防止泄露）
     """
-    global app_cookie
+    # 优先使用用户专属Cookie
+    user_data = get_user_data_service(username)
+    user_cookie_info = user_data.get_cookie_info()
 
-    # 优先使用内存中的Cookie
-    if app_cookie:
-        return {
-            "has_cookie": True,
-            "cookie_length": len(app_cookie),
-            "source": "memory"
-        }
+    if user_cookie_info and user_cookie_info.get("has_cookie"):
+        return user_cookie_info
 
-    # 尝试从环境变量获取
-    env_cookie = os.getenv("COOKIE") or os.getenv("COOKIES") or ""
-    env_cookie = env_cookie.strip().replace('\n', '').replace('\r', '')
+    # 回退：仅 admin 用户可使用环境变量中的全局 Cookie
+    if is_admin(username):
+        env_cookie = os.getenv("COOKIE") or os.getenv("COOKIES") or ""
+        env_cookie = env_cookie.strip().replace('\n', '').replace('\r', '')
 
-    if env_cookie:
-        app_cookie = env_cookie  # 缓存到内存
-        return {
-            "has_cookie": True,
-            "cookie_length": len(env_cookie),
-            "source": "env"
-        }
+        if env_cookie:
+            return {
+                "has_cookie": True,
+                "cookie_length": len(env_cookie),
+                "source": "env_fallback",
+                "message": "使用环境变量中的全局Cookie（仅管理员可用）"
+            }
 
     return {
         "has_cookie": False,
@@ -417,7 +576,7 @@ async def start_viral_search(
     task_id = f"viral_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(100, 999)}"
     keyword_display = "、".join(keywords)  # 提前定义，用于日志和返回值
 
-    # 初始化任务状态（支持多关键词）
+    # 初始化任务状态（支持多关键词，记录用户名用于数据隔离）
     task_status[task_id] = {
         "status": "running",
         "progress": 0,
@@ -431,7 +590,8 @@ async def start_viral_search(
         "message": "正在初始化...",
         "start_time": datetime.now().isoformat(),
         "logs": deque(maxlen=LOG_BUFFER_SIZE),  # 日志队列
-        "last_log_id": 0  # 最后日志ID
+        "last_log_id": 0,  # 最后日志ID
+        "username": username  # 用户名（用于数据隔离）
     }
 
     # 添加初始日志
@@ -473,8 +633,8 @@ async def get_task_status(
     Returns:
         任务当前状态信息（包含增量日志）
     """
-    if task_id not in task_status:
-        raise HTTPException(status_code=404, detail="任务不存在")
+    # 验证任务归属（防止跨用户访问）
+    verify_task_ownership(task_id, username)
 
     status = task_status[task_id].copy()
 
@@ -506,8 +666,8 @@ async def analyze_viral_notes(
     """
     task_id = request.task_id
 
-    if task_id not in task_status:
-        raise HTTPException(status_code=404, detail="任务不存在")
+    # 验证任务归属（防止跨用户访问）
+    verify_task_ownership(task_id, username)
 
     current_status = task_status[task_id]["status"]
 
@@ -576,7 +736,9 @@ async def export_latest(
     Returns:
         文件下载或文件列表JSON
     """
-    data_dir = Path("datas/viral_analysis")
+    # 使用用户专属数据目录
+    user_data = get_user_data_service(username)
+    data_dir = user_data.get_analysis_dir()
     if not data_dir.exists():
         raise HTTPException(status_code=404, detail="数据目录不存在")
 
@@ -636,10 +798,11 @@ async def get_history(username: str = Depends(verify_token_and_password_changed)
     获取历史分析记录（需要认证）
 
     Returns:
-        历史记录列表
+        历史记录列表（用户专属）
     """
-    # 扫描数据目录
-    data_dir = Path("datas/viral_analysis")
+    # 使用用户专属数据目录
+    user_data = get_user_data_service(username)
+    data_dir = user_data.get_analysis_dir()
     if not data_dir.exists():
         return []
 
@@ -713,7 +876,7 @@ async def download_file(
         filename: 文件名
 
     Returns:
-        文件下载
+        文件下载（用户专属）
     """
     from fastapi.responses import FileResponse
 
@@ -721,7 +884,9 @@ async def download_file(
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="无效的文件名")
 
-    data_dir = Path("datas/viral_analysis")
+    # 使用用户专属数据目录
+    user_data = get_user_data_service(username)
+    data_dir = user_data.get_analysis_dir()
     file_path = data_dir / filename
 
     if not file_path.exists():
@@ -755,12 +920,16 @@ async def export_results(
     Returns:
         文件下载或文件列表JSON
     """
-    # 如果task_id不在内存中，尝试从文件系统查找
-    if task_id not in task_status:
+    # 如果task_id在内存中，验证归属权限
+    if task_id in task_status:
+        verify_task_ownership(task_id, username)
+    else:
+        # task_id不在内存中，尝试从文件系统查找（仅搜索当前用户目录，天然隔离）
         logger.warning(f"任务 {task_id} 不在内存中，尝试从文件系统查找...")
 
-        # 尝试查找对应的数据文件
-        data_dir = Path("datas/viral_analysis")
+        # 使用用户专属数据目录
+        user_data = get_user_data_service(username)
+        data_dir = user_data.get_analysis_dir()
         if not data_dir.exists():
             raise HTTPException(status_code=404, detail="数据目录不存在")
 
@@ -782,10 +951,11 @@ async def export_results(
                 detail=f"找不到任务数据文件。请确保采集任务已完成。查找文件: {analysis_pattern} 或 {notes_pattern}"
             )
 
-        # 创建临时任务状态
+        # 创建临时任务状态（必须标记归属用户，防止跨用户访问）
         task_status[task_id] = {
             "data_file": target_file if "notes" in str(target_file) else None,
-            "analysis_file": target_file if "analysis" in str(target_file) else None
+            "analysis_file": target_file if "analysis" in str(target_file) else None,
+            "username": username  # 标记为当前用户的任务
         }
 
     if format == "json":
@@ -878,14 +1048,23 @@ async def collect_viral_notes_task(
         task_status[task_id]["message"] = "正在初始化采集器..."
         add_task_log(task_id, "⚙️ 正在初始化采集器...", "info")
 
-        # 获取Cookie - 优先使用前端提供的Cookie
-        global app_cookie
-        cookies_str = app_cookie or os.getenv("COOKIE") or os.getenv("COOKIES") or ""
-        # 清理Cookie中的换行符和多余空白
-        cookies_str = cookies_str.strip().replace('\n', '').replace('\r', '')
+        # 获取任务所属用户
+        task_username = task_status[task_id].get("username", "admin")
+
+        # 获取用户专属 Cookie
+        user_data = get_user_data_service(task_username)
+        cookies_str = user_data.get_cookie()
+
+        if not cookies_str and is_admin(task_username):
+            # 仅 admin 用户可回退到环境变量中的全局 Cookie
+            cookies_str = os.getenv("COOKIE") or os.getenv("COOKIES") or ""
+            cookies_str = cookies_str.strip().replace('\n', '').replace('\r', '')
+            if cookies_str:
+                add_task_log(task_id, "ℹ️ 使用环境变量中的全局Cookie", "info")
+
         if not cookies_str:
             add_task_log(task_id, "❌ Cookie未配置，无法采集", "error")
-            raise ValueError("未配置Cookie，请在前端输入Cookie或在.env文件中设置COOKIES")
+            raise ValueError("未配置Cookie，请在「设置」中输入您的小红书Cookie")
 
         # 创建采集器
         collector = ViralNoteCollector(cookies_str)
@@ -960,11 +1139,15 @@ async def collect_viral_notes_task(
                 progress_callback=update_progress
             )
 
-        # 保存数据
+        # 保存数据（使用用户专属目录）
         task_status[task_id]["message"] = "正在保存数据..."
         add_task_log(task_id, f"📊 采集完成，共获取 {len(notes)} 篇笔记", "success")
         add_task_log(task_id, "💾 正在保存数据...", "info")
-        data_file = collector.save_collected_notes()
+        # 获取用户专属数据目录
+        task_username = task_status[task_id].get("username", "admin")
+        user_data = get_user_data_service(task_username)
+        user_analysis_dir = str(user_data.get_analysis_dir())
+        data_file = collector.save_collected_notes(output_dir=user_analysis_dir)
         add_task_log(task_id, "✅ 数据保存完成", "success")
 
         # 获取统计信息
@@ -1007,9 +1190,9 @@ async def collect_viral_notes_task(
                 })
             )
 
-            # 补采后需要重新保存数据
+            # 补采后需要重新保存数据（使用用户专属目录）
             collector.collected_notes = notes
-            data_file = collector.save_collected_notes()
+            data_file = collector.save_collected_notes(output_dir=user_analysis_dir)
             statistics = collector.get_statistics()
 
             # 重新附加多关键词统计（补采可能改变了笔记列表）
@@ -1714,7 +1897,7 @@ async def get_cleanup_info(username: str = Depends(verify_token_and_password_cha
         各类别的文件数量和大小
     """
     try:
-        service = CleanupService()
+        service = CleanupService(username=username)
         info = service.get_category_info()
         total = service.get_total_cache_size()
 
@@ -1744,7 +1927,7 @@ async def cleanup_history(
     """
     try:
         logger.info(f"清理请求: categories={request.categories}, dry_run={request.dry_run}")
-        service = CleanupService()
+        service = CleanupService(username=username)
         logger.info(f"CleanupService base_path: {service.base_path}")
 
         # 验证类别
@@ -1808,7 +1991,7 @@ async def cleanup_all_data(
         清理结果汇总
     """
     try:
-        service = CleanupService()
+        service = CleanupService(username=username)
 
         # 执行清理所有类别
         summary = service.cleanup_all(dry_run=dry_run)
@@ -1846,8 +2029,8 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
 
-    # 确保必要的目录存在
-    os.makedirs("datas/viral_analysis", exist_ok=True)
+    # 确保必要的目录存在（使用 UserDataService 创建默认用户目录）
+    default_user_data = get_user_data_service()  # 默认用户 admin
     os.makedirs("web/static", exist_ok=True)
     os.makedirs("web/templates", exist_ok=True)
 
@@ -1862,5 +2045,5 @@ if __name__ == "__main__":
         port=8000,
         reload=not is_production,  # 生产环境禁用热重载
         log_level="info",
-        workers=1 if not is_production else 2  # 生产环境使用多worker
+        workers=1  # 单worker模式：任务状态存储在内存中，多worker会导致状态查询404
     )
