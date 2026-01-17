@@ -80,16 +80,124 @@
             overflow-x: hidden;
         }
 
+        /* ==================== 窄条工具栏 (ChatGPT 风格) ==================== */
+        .sidebar-rail {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 60px;
+            height: 100vh;
+            background: #f9f9f9;
+            border-right: 1px solid #e5e5e5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 0;
+            z-index: 1060;  /* 必须高于侧边栏(1050)，确保始终在最上层 */
+            gap: 8px;
+        }
+
+        .rail-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            background: transparent;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #424242;
+            font-size: 1.1rem;
+            transition: background-color 0.15s ease;
+            position: relative;
+        }
+
+        .rail-btn:hover {
+            background-color: rgba(0, 0, 0, 0.08);
+        }
+
+        .rail-btn:active {
+            background-color: rgba(0, 0, 0, 0.12);
+        }
+
+        .rail-btn.rail-open {
+            cursor: default;
+        }
+
+        .rail-btn.rail-open:hover {
+            background-color: transparent;
+        }
+
+        .rail-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .rail-icon-xhs {
+            display: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            background: #ff2442;
+            color: #fff;
+            font-size: 7px;
+            font-weight: 700;
+            line-height: 1;
+            text-align: center;
+            padding: 2px;
+            letter-spacing: -0.5px;
+        }
+
+        .rail-btn.rail-open .rail-icon-panel {
+            display: none;
+        }
+
+        .rail-btn.rail-open .rail-icon-xhs {
+            display: flex;
+        }
+
+        /* 窄条按钮的 tooltip */
+        .rail-btn::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: calc(100% + 8px);
+            top: 50%;
+            transform: translateY(-50%);
+            background: #1a1a1a;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 500;
+            padding: 6px 10px;
+            border-radius: 6px;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.15s ease, visibility 0.15s ease;
+            pointer-events: none;
+            z-index: 1100;
+        }
+
+        .rail-btn:hover::after {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .rail-spacer {
+            flex: 1;
+        }
+
         /* ==================== 侧边栏样式 (Google AI 风格) ==================== */
         .sidebar {
             position: fixed;
             top: 0;
-            left: 0;
+            left: 60px;  /* 窄条宽度 */
             width: var(--sidebar-width);
             height: 100vh;
             background: var(--color-background);
             box-shadow: var(--shadow-sidebar);
-            transform: translateX(-100%);
+            transform: translateX(calc(-100% - 60px));  /* 完全隐藏到窄条左侧 */
             transition: transform var(--duration-medium) var(--ease-standard);
             z-index: 1050;
             display: flex;
@@ -509,16 +617,26 @@
         /* ==================== 主内容区样式 ==================== */
         .main-wrapper {
             min-height: 100vh;
+            margin-left: 60px;  /* 始终留出窄条空间 */
             transition: margin-left 0.3s ease, width 0.3s ease;
         }
 
-        /* 侧边栏打开时，主内容区被推挤 */
+        /* 侧边栏打开时，主内容区被推挤（窄条60px + 侧边栏宽度） */
         .main-wrapper.sidebar-open {
-            margin-left: var(--sidebar-width);
+            margin-left: calc(60px + var(--sidebar-width));
         }
 
-        /* 移动端：侧边栏覆盖而非推挤 */
+        /* 移动端：窄条隐藏，侧边栏覆盖 */
         @media (max-width: 768px) {
+            .sidebar-rail {
+                display: none;  /* 移动端隐藏窄条 */
+            }
+            .sidebar {
+                left: 0;  /* 移动端侧边栏从最左边开始 */
+            }
+            .main-wrapper {
+                margin-left: 0;  /* 移动端不留边距 */
+            }
             .main-wrapper.sidebar-open {
                 margin-left: 0;  /* 移动端不推挤 */
             }
@@ -1707,6 +1825,29 @@
         </div>
     </div>
 
+    <!-- 窄条工具栏（始终显示） -->
+    <div class="sidebar-rail" id="sidebarRail">
+        <button class="rail-btn" onclick="openSidebarFromRail()" data-tooltip="展开边栏" id="railToggleBtn" aria-label="展开边栏">
+            <span class="rail-icon rail-icon-panel" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <line x1="9" y1="3" x2="9" y2="21"/>
+                </svg>
+            </span>
+            <span class="rail-icon rail-icon-xhs" aria-hidden="true">小红书</span>
+        </button>
+        <button class="rail-btn" onclick="openSidebarToCookie()" data-tooltip="Cookie 配置">
+            <i class="fas fa-key"></i>
+        </button>
+        <button class="rail-btn" onclick="openSidebarToHistory()" data-tooltip="历史记录">
+            <i class="fas fa-history"></i>
+        </button>
+        <div class="rail-spacer"></div>
+        <button class="rail-btn" onclick="openSettingsModal()" data-tooltip="设置">
+            <i class="fas fa-cog"></i>
+        </button>
+    </div>
+
     <!-- 侧边栏遮罩 -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
@@ -1736,7 +1877,7 @@
                 </div>
                 <div class="cookie-compact-content">
                     <textarea class="form-control form-control-sm mb-2" id="cookieInput" rows="3"
-                              placeholder="从浏览器F12开发者工具获取"></textarea>
+                              placeholder="粘贴您的小红书Cookie（每个用户独立保存）"></textarea>
                     <div class="d-flex gap-2">
                         <button type="button" class="btn btn-success btn-sm flex-grow-1" onclick="saveCookie()">
                             <i class="fas fa-save"></i> 保存
@@ -1779,9 +1920,17 @@
                     <input type="file" id="avatarInput" accept="image/*" style="display: none;" onchange="handleAvatarUpload(event)">
                     <span class="sidebar-user-name" id="sidebarUsername">用户名</span>
                 </div>
-                <button class="sidebar-settings-btn" onclick="openSettingsModal()">
-                    设置与管理
-                </button>
+                <div class="d-flex gap-2">
+                    <button class="sidebar-settings-btn" onclick="openSettingsModal()">
+                        设置与管理
+                    </button>
+                    <button class="sidebar-settings-btn" id="userManageBtn" onclick="openUserManageModal()" style="display: none;" title="用户管理">
+                        <i class="fas fa-users"></i>
+                    </button>
+                    <button class="sidebar-settings-btn" onclick="logout()" title="退出登录" style="background: #dc3545;">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -1795,6 +1944,17 @@
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
+                    <!-- 用户管理（仅管理员可见） -->
+                    <div class="mb-4" id="adminSettingsBtn" style="display: none;">
+                        <h6 class="mb-3"><i class="fas fa-users-cog text-danger"></i> 用户管理</h6>
+                        <p class="small text-muted mb-2">管理系统用户账户、角色权限和存储配额</p>
+                        <button class="btn btn-outline-danger btn-sm w-100" onclick="openUserManageModal()">
+                            <i class="fas fa-external-link-alt"></i> 打开用户管理
+                        </button>
+                    </div>
+
+                    <hr id="adminSettingsDivider" style="display: none;">
+
                     <!-- 知识库管理 -->
                     <div class="mb-4">
                         <h6 class="mb-3"><i class="fas fa-database text-primary"></i> 知识库管理</h6>
@@ -1868,18 +2028,6 @@
     <!-- 主内容区 -->
     <div class="main-wrapper" id="mainWrapper">
         <div class="container-main">
-            <!-- 头部（Logo已移至侧边栏） -->
-            <div class="header header-compact">
-                <div class="header-content">
-                    <button class="menu-toggle" onclick="toggleSidebar()" data-tooltip="打开边栏" aria-label="打开边栏">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/>
-                            <line x1="9" y1="3" x2="9" y2="21"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-
             <!-- 搜索配置卡片 -->
             <div class="card">
                 <div class="card-header">
@@ -1960,6 +2108,24 @@
                                         <option value="3">半年内</option>
                                     </select>
                                 </div>
+                            </div>
+                        </div>
+                        <!-- 配置验证提示区 -->
+                        <div id="configValidationArea" class="mb-3" style="display: none;">
+                            <!-- 错误提示（阻止提交） -->
+                            <div id="configErrors" class="alert alert-danger py-2 mb-2" style="display: none;">
+                                <i class="fas fa-exclamation-circle"></i>
+                                <span id="configErrorsText"></span>
+                            </div>
+                            <!-- 警告提示（允许提交但提醒） -->
+                            <div id="configWarnings" class="alert alert-warning py-2 mb-2" style="display: none;">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <span id="configWarningsText"></span>
+                            </div>
+                            <!-- 预期分析数量实时显示 -->
+                            <div id="configInfo" class="alert alert-info py-2 mb-0" style="display: none;">
+                                <i class="fas fa-info-circle"></i>
+                                <span id="configInfoText"></span>
                             </div>
                         </div>
                         <div class="text-center">
@@ -2345,6 +2511,125 @@
         </div>
     </div>
 
+    <!-- 用户管理模态框 -->
+    <div class="modal fade" id="userManageModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header" style="background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%); color: white;">
+                    <h5 class="modal-title"><i class="fas fa-users-cog"></i> 用户管理</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- 操作栏 -->
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="text-muted small">
+                            <i class="fas fa-info-circle"></i> 管理系统用户账户和权限
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateUserForm()">
+                            <i class="fas fa-plus"></i> 添加用户
+                        </button>
+                    </div>
+
+                    <!-- 创建用户表单（默认隐藏） -->
+                    <div id="createUserForm" class="card mb-3" style="display: none;">
+                        <div class="card-header py-2 bg-light">
+                            <span><i class="fas fa-user-plus"></i> 创建新用户</span>
+                            <button type="button" class="btn-close float-end" onclick="hideCreateUserForm()" style="font-size: 0.7rem;"></button>
+                        </div>
+                        <div class="card-body">
+                            <form id="newUserForm" onsubmit="handleCreateUser(event)">
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">用户名</label>
+                                        <input type="text" class="form-control form-control-sm" id="newUsername"
+                                               pattern="^[a-zA-Z][a-zA-Z0-9_]{2,19}$" required
+                                               placeholder="字母开头，3-20位">
+                                        <div class="form-text">字母开头，可包含字母、数字、下划线</div>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">初始密码</label>
+                                        <input type="password" class="form-control form-control-sm" id="createUserPassword"
+                                               minlength="8" required placeholder="至少8位">
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">角色</label>
+                                        <select class="form-select form-select-sm" id="newUserRole">
+                                            <option value="user" selected>普通用户</option>
+                                            <option value="admin">管理员</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="createUserError" class="alert alert-danger small py-2 d-none"></div>
+                                <div class="d-flex justify-content-end gap-2">
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="hideCreateUserForm()">取消</button>
+                                    <button type="submit" class="btn btn-primary btn-sm">
+                                        <i class="fas fa-check"></i> 创建
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- 用户列表 -->
+                    <div class="card">
+                        <div class="card-header py-2 bg-light d-flex justify-content-between align-items-center">
+                            <span><i class="fas fa-list"></i> 用户列表</span>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="loadUserList()">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 25%">用户名</th>
+                                            <th style="width: 15%">角色</th>
+                                            <th style="width: 25%">创建时间</th>
+                                            <th style="width: 15%">存储用量</th>
+                                            <th style="width: 20%" class="text-end">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="userListBody">
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted py-4">
+                                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 修改角色模态框 -->
+    <div class="modal fade" id="changeRoleModal" tabindex="-1">
+        <div class="modal-dialog modal-sm modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title"><i class="fas fa-user-tag"></i> 修改角色</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted mb-2">用户: <strong id="changeRoleUsername"></strong></p>
+                    <select class="form-select form-select-sm" id="newRoleSelect">
+                        <option value="user">普通用户</option>
+                        <option value="admin">管理员</option>
+                    </select>
+                    <div id="changeRoleError" class="alert alert-danger small py-2 mt-2 d-none"></div>
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="confirmChangeRole()">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // ==================== 认证管理 ====================
@@ -2360,6 +2645,13 @@
 
             // 加载用户头像
             loadUserAvatar();
+            // 加载用户名（本地缓存）
+            loadSidebarUsername();
+            // 加载用户角色（本地缓存）
+            const cachedRole = localStorage.getItem('userRole');
+            if (cachedRole) {
+                updateAdminUI(cachedRole);
+            }
 
             // 检查是否已登录
             if (!authToken) {
@@ -2367,6 +2659,8 @@
             } else {
                 // 验证 token 是否有效
                 verifyToken();
+                // 同步用户名和角色
+                syncUserProfile();
             }
 
             // 登录表单提交
@@ -2391,7 +2685,12 @@
                 });
                 if (response.status === 401) {
                     localStorage.removeItem('token');
+                    localStorage.removeItem('username');
+                    localStorage.removeItem('userRole');
                     authToken = null;
+                    setSidebarUsername('未登录');
+                    updateAdminUI(null);
+                    loadUserAvatar();  // 重置头像
                     showLoginModal();
                 }
             } catch (error) {
@@ -2417,6 +2716,11 @@
                 if (response.ok && data.status === 'success') {
                     authToken = data.token;
                     localStorage.setItem('token', authToken);
+                    localStorage.setItem('username', data.username || username);
+                    localStorage.setItem('userRole', data.role || 'user');
+                    setSidebarUsername(data.username || username);
+                    updateAdminUI(data.role);
+                    loadUserAvatar();  // 加载该用户的头像
                     hideLoginModal();
 
                     // 检查是否需要强制修改密码
@@ -2438,6 +2742,35 @@
                 errorDiv.textContent = '网络错误：' + error.message;
                 errorDiv.classList.remove('d-none');
             }
+        }
+
+        /**
+         * 退出登录
+         */
+        function logout() {
+            if (!confirm('确定要退出登录吗？')) {
+                return;
+            }
+
+            // 清除本地存储的认证信息
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            localStorage.removeItem('userRole');
+            authToken = null;
+
+            // 重置头像为默认图标
+            loadUserAvatar();
+
+            // 显示登录模态框
+            showLoginModal();
+
+            // 清空敏感数据显示
+            document.getElementById('sidebarUsername').textContent = '未登录';
+            document.getElementById('cookieInput').value = '';
+            document.getElementById('cookieStatus').innerHTML = '';
+            updateCookieIndicator(false);
+
+            console.log('✅ 已退出登录');
         }
 
         async function handleChangePassword(e) {
@@ -2499,7 +2832,12 @@
 
             if (response.status === 401) {
                 localStorage.removeItem('token');
+                localStorage.removeItem('username');
+                localStorage.removeItem('userRole');
                 authToken = null;
+                setSidebarUsername('未登录');
+                updateAdminUI(null);
+                loadUserAvatar();  // 重置头像
                 showLoginModal();
                 throw new Error('登录已过期，请重新登录');
             }
@@ -2529,22 +2867,85 @@
 
         // ==================== 侧边栏控制 ====================
 
+        function updateRailToggleState(isOpen) {
+            const railToggleBtn = document.getElementById('railToggleBtn');
+            if (!railToggleBtn) return;
+            railToggleBtn.classList.toggle('rail-open', isOpen);
+            railToggleBtn.setAttribute('data-tooltip', isOpen ? '小红书' : '展开边栏');
+            railToggleBtn.setAttribute('aria-label', isOpen ? '小红书' : '展开边栏');
+        }
+
+        function openSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            const mainWrapper = document.getElementById('mainWrapper');
+
+            sidebar.classList.add('open');
+            overlay.classList.add('show');
+            mainWrapper.classList.add('sidebar-open');
+            updateRailToggleState(true);
+        }
+
+        function openSidebarFromRail() {
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar && sidebar.classList.contains('open')) {
+                return;
+            }
+            openSidebar();
+        }
+
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
             const mainWrapper = document.getElementById('mainWrapper');
-            sidebar.classList.toggle('open');
-            overlay.classList.toggle('show');
-            mainWrapper.classList.toggle('sidebar-open');  // 推挤主内容区
+
+            const isOpen = sidebar.classList.contains('open');
+            if (isOpen) {
+                closeSidebar();
+            } else {
+                openSidebar();
+            }
         }
 
         function closeSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
             const mainWrapper = document.getElementById('mainWrapper');
+
             sidebar.classList.remove('open');
             overlay.classList.remove('show');
-            mainWrapper.classList.remove('sidebar-open');  // 取消推挤
+            mainWrapper.classList.remove('sidebar-open');
+            updateRailToggleState(false);
+        }
+
+        // 打开侧边栏并定位到历史记录
+        function openSidebarToHistory() {
+            openSidebar();
+
+            // 滚动到历史记录区域
+            setTimeout(() => {
+                const historySection = document.getElementById('historyList');
+                if (historySection) {
+                    historySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 300);
+        }
+
+        // 打开侧边栏并定位到 Cookie 配置
+        function openSidebarToCookie() {
+            openSidebar();
+
+            // 展开 Cookie 配置区域
+            setTimeout(() => {
+                const cookieSection = document.getElementById('cookieCompact');
+                if (cookieSection && !cookieSection.classList.contains('expanded')) {
+                    cookieSection.classList.add('expanded');
+                }
+                // 滚动到 Cookie 区域
+                if (cookieSection) {
+                    cookieSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 300);
         }
 
         function toggleSection(sectionId) {
@@ -2589,28 +2990,105 @@
                 avatarImg.style.display = 'block';
                 avatarIcon.style.display = 'none';
 
-                // 保存到 localStorage
-                localStorage.setItem('userAvatar', e.target.result);
+                // 保存到 localStorage（按用户名区分）
+                const currentUser = localStorage.getItem('username');
+                if (currentUser) {
+                    localStorage.setItem('userAvatar_' + currentUser, e.target.result);
+                }
             };
             reader.readAsDataURL(file);
         }
 
-        // 页面加载时恢复头像
+        // 加载当前用户头像
         function loadUserAvatar() {
-            const savedAvatar = localStorage.getItem('userAvatar');
+            const avatarImg = document.getElementById('userAvatarImg');
+            const avatarIcon = document.getElementById('userAvatarIcon');
+
+            // 获取当前登录用户的头像
+            const currentUser = localStorage.getItem('username');
+            const savedAvatar = currentUser ? localStorage.getItem('userAvatar_' + currentUser) : null;
+
             if (savedAvatar) {
-                const avatarImg = document.getElementById('userAvatarImg');
-                const avatarIcon = document.getElementById('userAvatarIcon');
                 avatarImg.src = savedAvatar;
                 avatarImg.style.display = 'block';
                 avatarIcon.style.display = 'none';
+            } else {
+                // 未登录或无头像，显示默认图标
+                avatarImg.style.display = 'none';
+                avatarIcon.style.display = 'block';
+            }
+        }
+
+        // ==================== 用户名显示 ====================
+        function setSidebarUsername(name) {
+            const usernameEl = document.getElementById('sidebarUsername');
+            if (!usernameEl) return;
+            usernameEl.textContent = name || '未登录';
+        }
+
+        function loadSidebarUsername() {
+            const cached = localStorage.getItem('username');
+            if (cached) {
+                setSidebarUsername(cached);
+            } else {
+                setSidebarUsername('未登录');
+            }
+        }
+
+        async function syncUserProfile() {
+            if (!authToken) return;
+            try {
+                const response = await fetch('/api/auth/me', {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    const oldUsername = localStorage.getItem('username');
+                    if (data.username) {
+                        localStorage.setItem('username', data.username);
+                        setSidebarUsername(data.username);
+                        // 用户名变更时重新加载头像
+                        if (oldUsername !== data.username) {
+                            loadUserAvatar();
+                        }
+                    }
+                    if (data.role) {
+                        localStorage.setItem('userRole', data.role);
+                        updateAdminUI(data.role);
+                    }
+                }
+            } catch (error) {
+                console.error('获取用户信息失败:', error);
+            }
+        }
+
+        // 更新管理员相关UI显示
+        function updateAdminUI(role) {
+            const adminBtn = document.getElementById('userManageBtn');
+            const adminSettingsBtn = document.getElementById('adminSettingsBtn');
+            const adminSettingsDivider = document.getElementById('adminSettingsDivider');
+            const isAdmin = role === 'admin';
+
+            if (adminBtn) {
+                adminBtn.style.display = isAdmin ? 'block' : 'none';
+            }
+            if (adminSettingsBtn) {
+                adminSettingsBtn.style.display = isAdmin ? 'block' : 'none';
+            }
+            if (adminSettingsDivider) {
+                adminSettingsDivider.style.display = isAdmin ? 'block' : 'none';
             }
         }
 
         // 打开设置与管理模态框
         function openSettingsModal() {
             closeSidebar();
-            const settingsModal = new bootstrap.Modal(document.getElementById('settingsModal'));
+            const settingsModalEl = document.getElementById('settingsModal');
+            if (!settingsModalEl) return;
+            if (settingsModalEl.classList.contains('show')) {
+                return;
+            }
+            const settingsModal = bootstrap.Modal.getOrCreateInstance(settingsModalEl);
             settingsModal.show();
             loadKnowledgeSummary();
             loadCleanupInfo();
@@ -2626,9 +3104,306 @@
             }
             closeSidebar();
 
-            const modal = new bootstrap.Modal(document.getElementById('knowledgeModal'));
+            const knowledgeModalEl = document.getElementById('knowledgeModal');
+            if (!knowledgeModalEl) return;
+            if (knowledgeModalEl.classList.contains('show')) {
+                return;
+            }
+            const modal = bootstrap.Modal.getOrCreateInstance(knowledgeModalEl);
             modal.show();
             loadDomains();
+        }
+
+        // ==================== 用户管理功能 ====================
+
+        let userManageModal = null;
+        let changeRoleModal = null;
+        let currentEditUsername = null;
+
+        // 打开用户管理模态框
+        function openUserManageModal() {
+            // 先关闭设置模态框（如果打开的话）
+            const settingsModalEl = document.getElementById('settingsModal');
+            const settingsModal = bootstrap.Modal.getInstance(settingsModalEl);
+            if (settingsModal) {
+                settingsModal.hide();
+            }
+            closeSidebar();
+
+            if (!userManageModal) {
+                userManageModal = new bootstrap.Modal(document.getElementById('userManageModal'));
+            }
+            const userManageModalEl = document.getElementById('userManageModal');
+            if (userManageModalEl && userManageModalEl.classList.contains('show')) {
+                return;
+            }
+            userManageModal.show();
+            loadUserList();
+        }
+
+        // 加载用户列表
+        async function loadUserList() {
+            const tbody = document.getElementById('userListBody');
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="text-center text-muted py-4">
+                        <i class="fas fa-spinner fa-spin"></i> 加载中...
+                    </td>
+                </tr>
+            `;
+
+            try {
+                const response = await authFetch('/api/admin/users');
+                if (!response.ok) {
+                    throw new Error('获取用户列表失败');
+                }
+
+                const data = await response.json();
+                const users = data.users || [];
+
+                if (users.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">
+                                <i class="fas fa-inbox"></i> 暂无用户
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = users.map(user => `
+                    <tr>
+                        <td>
+                            <i class="fas fa-user text-muted me-2"></i>
+                            <strong>${escapeHtml(user.username)}</strong>
+                            ${user.username === 'admin' ? '<span class="badge bg-warning text-dark ms-1">系统</span>' : ''}
+                        </td>
+                        <td>
+                            <span class="badge ${user.role === 'admin' ? 'bg-danger' : 'bg-secondary'}">
+                                ${user.role === 'admin' ? '管理员' : '普通用户'}
+                            </span>
+                        </td>
+                        <td class="text-muted small">${formatDateTime(user.created_at)}</td>
+                        <td class="small">${formatStorageSize(user.storage_used_bytes)}</td>
+                        <td class="text-end">
+                            <button class="btn btn-outline-primary btn-sm me-1" onclick="showChangeRoleModal('${escapeHtml(user.username)}', '${user.role}')" ${user.username === 'admin' ? 'disabled' : ''}>
+                                <i class="fas fa-user-tag"></i>
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="confirmDeleteUser('${escapeHtml(user.username)}')" ${user.username === 'admin' ? 'disabled' : ''}>
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+
+            } catch (error) {
+                console.error('加载用户列表失败:', error);
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-center text-danger py-4">
+                            <i class="fas fa-exclamation-circle"></i> ${error.message}
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        // 显示创建用户表单
+        function showCreateUserForm() {
+            document.getElementById('createUserForm').style.display = 'block';
+            document.getElementById('newUsername').value = '';
+            document.getElementById('createUserPassword').value = '';
+            document.getElementById('newUserRole').value = 'user';
+            document.getElementById('createUserError').classList.add('d-none');
+            document.getElementById('newUsername').focus();
+        }
+
+        // 隐藏创建用户表单
+        function hideCreateUserForm() {
+            document.getElementById('createUserForm').style.display = 'none';
+        }
+
+        // 处理创建用户
+        async function handleCreateUser(event) {
+            event.preventDefault();
+            const username = document.getElementById('newUsername').value.trim();
+            const password = document.getElementById('createUserPassword').value;
+            const role = document.getElementById('newUserRole').value;
+            const errorDiv = document.getElementById('createUserError');
+
+            // 验证用户名格式
+            const usernameRegex = /^[a-zA-Z][a-zA-Z0-9_]{2,19}$/;
+            if (!usernameRegex.test(username)) {
+                errorDiv.textContent = '用户名必须以字母开头，3-20位，只能包含字母、数字和下划线';
+                errorDiv.classList.remove('d-none');
+                return;
+            }
+
+            // 验证密码长度
+            if (password.length < 8) {
+                errorDiv.textContent = '密码长度至少8位';
+                errorDiv.classList.remove('d-none');
+                return;
+            }
+
+            try {
+                const response = await authFetch('/api/admin/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, role })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    hideCreateUserForm();
+                    loadUserList();
+                } else {
+                    // 处理不同格式的错误响应
+                    let errorMsg = '创建用户失败';
+                    if (data.detail) {
+                        if (Array.isArray(data.detail)) {
+                            // Pydantic 422 验证错误（数组格式）
+                            errorMsg = data.detail.map(err => {
+                                const field = err.loc ? err.loc[err.loc.length - 1] : '';
+                                const fieldName = {
+                                    'username': '用户名',
+                                    'password': '密码',
+                                    'role': '角色'
+                                }[field] || field;
+                                // 翻译常见错误
+                                if (err.type === 'string_too_short') {
+                                    return `${fieldName}长度至少${err.ctx?.min_length || 8}位`;
+                                }
+                                if (err.type === 'string_pattern_mismatch') {
+                                    return `${fieldName}格式不正确`;
+                                }
+                                return err.msg || '验证失败';
+                            }).join('；');
+                        } else {
+                            // 字符串格式错误
+                            errorMsg = data.detail;
+                        }
+                    }
+                    errorDiv.textContent = errorMsg;
+                    errorDiv.classList.remove('d-none');
+                }
+            } catch (error) {
+                errorDiv.textContent = '网络错误：' + error.message;
+                errorDiv.classList.remove('d-none');
+            }
+        }
+
+        // 显示修改角色模态框
+        function showChangeRoleModal(username, currentRole) {
+            currentEditUsername = username;
+            document.getElementById('changeRoleUsername').textContent = username;
+            document.getElementById('newRoleSelect').value = currentRole;
+            document.getElementById('changeRoleError').classList.add('d-none');
+
+            if (!changeRoleModal) {
+                changeRoleModal = new bootstrap.Modal(document.getElementById('changeRoleModal'));
+            }
+            changeRoleModal.show();
+        }
+
+        // 确认修改角色
+        async function confirmChangeRole() {
+            if (!currentEditUsername) return;
+
+            const newRole = document.getElementById('newRoleSelect').value;
+            const errorDiv = document.getElementById('changeRoleError');
+
+            try {
+                const response = await authFetch(`/api/admin/users/${currentEditUsername}/role`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: newRole })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    changeRoleModal.hide();
+                    loadUserList();
+                } else {
+                    errorDiv.textContent = data.detail || '修改角色失败';
+                    errorDiv.classList.remove('d-none');
+                }
+            } catch (error) {
+                errorDiv.textContent = '网络错误：' + error.message;
+                errorDiv.classList.remove('d-none');
+            }
+        }
+
+        // 确认删除用户
+        function confirmDeleteUser(username) {
+            if (username === 'admin') {
+                alert('系统管理员账户不可删除');
+                return;
+            }
+
+            if (!confirm(`确定要删除用户 "${username}" 吗？\n\n该操作将删除该用户的所有数据，不可恢复！`)) {
+                return;
+            }
+
+            deleteUser(username);
+        }
+
+        // 删除用户
+        async function deleteUser(username) {
+            try {
+                const response = await authFetch(`/api/admin/users/${username}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    loadUserList();
+                } else {
+                    alert(data.detail || '删除用户失败');
+                }
+            } catch (error) {
+                alert('网络错误：' + error.message);
+            }
+        }
+
+        // 格式化日期时间
+        function formatDateTime(dateStr) {
+            if (!dateStr) return '-';
+            try {
+                const date = new Date(dateStr);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hour = String(date.getHours()).padStart(2, '0');
+                const minute = String(date.getMinutes()).padStart(2, '0');
+                return `${year}-${month}-${day} ${hour}:${minute}`;
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        // 格式化存储大小
+        function formatStorageSize(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let size = bytes;
+            let unitIndex = 0;
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            return `${size.toFixed(1)} ${units[unitIndex]}`;
+        }
+
+        // HTML 转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // 格式化时间为简短形式
@@ -2822,6 +3597,185 @@
             const estCostEl = document.getElementById('estCost');
             if (estTimeEl) estTimeEl.textContent = config.time;
             if (estCostEl) estCostEl.textContent = config.cost;
+
+            // 实时验证配置
+            validateAndShowConfigStatus();
+        }
+
+        // ==================== 搜索配置验证系统 ====================
+
+        /**
+         * 验证搜索配置参数
+         * @returns {Object} { errors: string[], warnings: string[], info: string[] }
+         */
+        function validateSearchConfig() {
+            const errors = [];
+            const warnings = [];
+            const info = [];
+            const errorFields = [];    // 错误相关字段（红色高亮）
+            const warningFields = [];  // 警告相关字段（黄色高亮）
+
+            // 获取参数
+            const params = getCollectionParams();
+            const keywordCount = keywordList.length;
+            // 使用 estViral（数值）而非 estAnalysis（字符串范围如"50-60"）
+            const expectedAnalysis = params.estViral;
+            const minSampleCount = params.minSampleCount;
+            const targetCount = params.targetCount;
+            const viralRatio = params.viralRatio;
+            const noteType = parseInt(document.getElementById('noteType').value);
+            const timeRange = parseInt(document.getElementById('timeRange').value);
+
+            // ========== 错误验证（阻断提交） ==========
+
+            // 1. 最低样本量 vs 预估分析量
+            if (minSampleCount > expectedAnalysis) {
+                errors.push(`最低样本量(${minSampleCount}) > 预估分析量(${expectedAnalysis})，逻辑矛盾`);
+                errorFields.push('minSampleCount', 'targetCount', 'viralRatioSelect');
+            }
+
+            // 2. 最低样本量 vs 目标数量
+            if (minSampleCount > targetCount) {
+                errors.push(`最低样本量(${minSampleCount}) > 目标采集数(${targetCount})，无法满足`);
+                errorFields.push('minSampleCount', 'targetCount');
+            }
+
+            // ========== 警告验证（建议调整） ==========
+
+            // 3. 关键词数量 vs 目标数量（每关键词至少10条才有意义）
+            if (keywordCount > 0 && targetCount / keywordCount < 10) {
+                warnings.push(`${keywordCount}个关键词分摊${targetCount}条，每词仅~${Math.floor(targetCount/keywordCount)}条，建议增加目标数量`);
+                warningFields.push('targetCount');
+            }
+
+            // 4. 时间范围 vs 目标数量
+            const timeTargetLimits = {
+                1: 50,   // 一天内，超过50条可能采集不到
+                2: 150,  // 一周内
+                3: 500   // 半年内
+            };
+            if (timeRange > 0 && targetCount > timeTargetLimits[timeRange]) {
+                const timeRangeNames = { 1: '一天内', 2: '一周内', 3: '半年内' };
+                warnings.push(`"${timeRangeNames[timeRange]}"时间范围下，${targetCount}条可能采集不全`);
+                warningFields.push('timeRange', 'targetCount');
+            }
+
+            // 5. 高爆款比例 + 低目标数量
+            if (viralRatio >= 0.7 && targetCount < 100) {
+                warnings.push(`高爆款比例(${Math.round(viralRatio*100)}%) + 低目标数(${targetCount})，分析样本可能不足`);
+                warningFields.push('viralRatioSelect', 'targetCount');
+            }
+
+            // 6. 笔记类型限制提醒
+            if (noteType > 0 && targetCount > 100) {
+                const noteTypeNames = { 1: '仅视频', 2: '仅图文' };
+                warnings.push(`${noteTypeNames[noteType]}模式下，高目标数(${targetCount})可能难以满足`);
+                warningFields.push('noteType', 'targetCount');
+            }
+
+            // ========== 信息提示 ==========
+
+            // 预估分析量提示
+            if (expectedAnalysis < 30) {
+                info.push(`预估分析${expectedAnalysis}条，样本偏少，建议提高目标数量或降低爆款比例`);
+            } else if (expectedAnalysis > 200) {
+                info.push(`预估分析${expectedAnalysis}条，耗时较长（约${Math.ceil(expectedAnalysis * 1.75)}分钟）`);
+            }
+
+            return { errors, warnings, info, errorFields, warningFields };
+        }
+
+        /**
+         * 验证并更新UI显示状态
+         */
+        function validateAndShowConfigStatus() {
+            const validation = validateSearchConfig();
+            const areaEl = document.getElementById('configValidationArea');
+            const errorsEl = document.getElementById('configErrors');
+            const errorsTextEl = document.getElementById('configErrorsText');
+            const warningsEl = document.getElementById('configWarnings');
+            const warningsTextEl = document.getElementById('configWarningsText');
+            const infoEl = document.getElementById('configInfo');
+            const infoTextEl = document.getElementById('configInfoText');
+            const submitBtn = document.querySelector('#searchForm button[type="submit"]');
+
+            // 是否有任何提示需要显示
+            const hasContent = validation.errors.length > 0 ||
+                              validation.warnings.length > 0 ||
+                              validation.info.length > 0;
+
+            areaEl.style.display = hasContent ? 'block' : 'none';
+
+            // 显示错误
+            if (validation.errors.length > 0) {
+                errorsEl.style.display = 'block';
+                errorsTextEl.innerHTML = validation.errors.map(e => `<div>• ${e}</div>`).join('');
+                // 禁用提交按钮
+                submitBtn.disabled = true;
+                submitBtn.classList.add('btn-secondary');
+                submitBtn.classList.remove('btn-danger');
+            } else {
+                errorsEl.style.display = 'none';
+                submitBtn.disabled = false;
+                submitBtn.classList.remove('btn-secondary');
+                submitBtn.classList.add('btn-danger');
+            }
+
+            // 显示警告
+            if (validation.warnings.length > 0) {
+                warningsEl.style.display = 'block';
+                warningsTextEl.innerHTML = validation.warnings.map(w => `<div>• ${w}</div>`).join('');
+            } else {
+                warningsEl.style.display = 'none';
+            }
+
+            // 显示信息
+            if (validation.info.length > 0) {
+                infoEl.style.display = 'block';
+                infoTextEl.innerHTML = validation.info.map(i => `<div>• ${i}</div>`).join('');
+            } else {
+                infoEl.style.display = 'none';
+            }
+
+            // 高亮问题输入框（区分错误和警告）
+            highlightProblemInputs(validation.errorFields, validation.warningFields);
+        }
+
+        /**
+         * 高亮显示有问题的输入框
+         * @param {string[]} errorFieldIds - 错误字段（红色边框）
+         * @param {string[]} warningFieldIds - 警告字段（黄色边框）
+         */
+        function highlightProblemInputs(errorFieldIds = [], warningFieldIds = []) {
+            // 所有可能需要高亮的字段
+            const allFields = ['targetCount', 'viralRatioSelect', 'minSampleCount', 'noteType', 'timeRange'];
+
+            // 清除所有高亮
+            allFields.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.classList.remove('is-invalid', 'border-warning', 'border-danger');
+                    el.style.boxShadow = '';
+                }
+            });
+
+            // 添加错误高亮（红色，优先级最高）
+            errorFieldIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.classList.add('border-danger');
+                    el.style.boxShadow = '0 0 0 0.2rem rgba(220, 53, 69, 0.25)';
+                }
+            });
+
+            // 添加警告高亮（黄色，仅对非错误字段）
+            warningFieldIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el && !errorFieldIds.includes(id)) {
+                    el.classList.add('border-warning');
+                    el.style.boxShadow = '0 0 0 0.2rem rgba(255, 193, 7, 0.25)';
+                }
+            });
         }
 
         // 兼容旧的函数名（被关键词输入调用）
@@ -2836,8 +3790,8 @@
             return div.innerHTML;
         }
 
-        // 监听采集配置输入变化
-        ['targetCount', 'viralRatioSelect', 'minSampleCount'].forEach(id => {
+        // 监听采集配置输入变化（包括 noteType/timeRange 用于验证警告）
+        ['targetCount', 'viralRatioSelect', 'minSampleCount', 'noteType', 'timeRange'].forEach(id => {
             const el = document.getElementById(id);
             if (el) {
                 el.addEventListener('change', updateEstimateFlow);
@@ -2859,6 +3813,13 @@
             // 验证至少有一个关键词
             if (keywordList.length === 0) {
                 alert('请至少输入一个搜索关键词');
+                return;
+            }
+
+            // 验证配置参数（双重保险，防止按钮状态被绕过）
+            const validation = validateSearchConfig();
+            if (validation.errors.length > 0) {
+                alert('配置有误，请修正后重试：\n\n' + validation.errors.join('\n'));
                 return;
             }
 
@@ -3633,10 +4594,15 @@
                 const result = await response.json();
 
                 if (result.has_cookie) {
-                    document.getElementById('cookieStatus').innerHTML = `<span class="text-success"><i class="fas fa-check-circle"></i> 已配置（${result.cookie_length}字符）</span>`;
+                    let statusHtml = `<span class="text-success"><i class="fas fa-check-circle"></i> 已配置（${result.cookie_length}字符）</span>`;
+                    // 如果使用的是环境变量回退，显示提示
+                    if (result.source === 'env_fallback') {
+                        statusHtml += `<br><small class="text-warning"><i class="fas fa-info-circle"></i> ${result.message || '使用全局Cookie'}</small>`;
+                    }
+                    document.getElementById('cookieStatus').innerHTML = statusHtml;
                     updateCookieIndicator(true);
                 } else {
-                    document.getElementById('cookieStatus').innerHTML = '<span class="text-warning"><i class="fas fa-exclamation-triangle"></i> 未配置</span>';
+                    document.getElementById('cookieStatus').innerHTML = '<span class="text-warning"><i class="fas fa-exclamation-triangle"></i> 未配置，请输入您的小红书Cookie</span>';
                     updateCookieIndicator(false);
                 }
             } catch (error) {
@@ -4403,6 +5369,18 @@
                 emptyHint.remove();
             }
 
+            // 检测需要用户操作的错误（只提示一次，忽略大小写）
+            const msgLower = (log.message || '').toLowerCase();
+            if (!window._cookieExpiredAlerted && (
+                msgLower.includes('登录已过期') ||
+                msgLower.includes('cookie') && msgLower.includes('过期') ||
+                msgLower.includes('未登录') ||
+                msgLower.includes('需要登录')
+            )) {
+                window._cookieExpiredAlerted = true;
+                showCookieExpiredAlert();
+            }
+
             // 创建日志条目
             const entry = document.createElement('div');
             entry.className = `log-entry log-${log.level || 'info'}`;
@@ -4442,6 +5420,41 @@
             unreadLogCount = 0;
             badge.textContent = '0';  // 重置角标文本
             badge.classList.remove('has-new');
+            // 重置 Cookie 过期提示标志，允许下次任务再次提示
+            window._cookieExpiredAlerted = false;
+        }
+
+        // 显示 Cookie 过期提示
+        function showCookieExpiredAlert() {
+            // 创建提示框（如果不存在）
+            let alertDiv = document.getElementById('cookieExpiredAlert');
+            if (!alertDiv) {
+                alertDiv = document.createElement('div');
+                alertDiv.id = 'cookieExpiredAlert';
+                alertDiv.className = 'alert alert-warning alert-dismissible fade show position-fixed';
+                alertDiv.style.cssText = 'top: 80px; right: 20px; z-index: 9999; max-width: 400px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
+                alertDiv.innerHTML = `
+                    <div class="d-flex align-items-start">
+                        <i class="fas fa-exclamation-triangle me-2 mt-1" style="color: #856404;"></i>
+                        <div>
+                            <strong>小红书 Cookie 已过期</strong>
+                            <p class="mb-2 small">请重新登录小红书网页版，获取新的 Cookie 并更新到系统设置中。</p>
+                            <button class="btn btn-warning btn-sm" onclick="document.getElementById('cookieExpiredAlert').remove(); openSidebarToCookie();">
+                                <i class="fas fa-cog"></i> 去更新 Cookie
+                            </button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-close" onclick="this.parentElement.remove()"></button>
+                `;
+                document.body.appendChild(alertDiv);
+
+                // 10秒后自动消失
+                setTimeout(() => {
+                    if (alertDiv && alertDiv.parentElement) {
+                        alertDiv.remove();
+                    }
+                }, 10000);
+            }
         }
 
         // 处理增量日志
