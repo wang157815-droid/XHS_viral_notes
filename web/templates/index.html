@@ -80,28 +80,15 @@
             overflow-x: hidden;
         }
 
-        /* ==================== 窄条工具栏 (ChatGPT 风格) ==================== */
-        .sidebar-rail {
+        /* ==================== 悬浮菜单按钮 ==================== */
+        .menu-toggle-btn {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 60px;
-            height: 100vh;
-            background: #f9f9f9;
-            border-right: 1px solid #e5e5e5;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 12px 0;
-            z-index: 1060;  /* 必须高于侧边栏(1050)，确保始终在最上层 */
-            gap: 8px;
-        }
-
-        .rail-btn {
-            width: 44px;
-            height: 44px;
+            top: 16px;
+            left: 16px;
+            width: 40px;
+            height: 40px;
             border: none;
-            background: transparent;
+            background: rgba(255, 255, 255, 0.95);
             border-radius: 10px;
             cursor: pointer;
             display: flex;
@@ -109,95 +96,65 @@
             justify-content: center;
             color: #424242;
             font-size: 1.1rem;
-            transition: background-color 0.15s ease;
-            position: relative;
+            transition: all 0.2s ease;
+            z-index: 1060;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
 
-        .rail-btn:hover {
-            background-color: rgba(0, 0, 0, 0.08);
+        .menu-toggle-btn:hover {
+            background: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transform: scale(1.05);
         }
 
-        .rail-btn:active {
-            background-color: rgba(0, 0, 0, 0.12);
+        .menu-toggle-btn:active {
+            transform: scale(0.98);
         }
 
-        .rail-btn.rail-open {
-            cursor: default;
-        }
-
-        .rail-btn.rail-open:hover {
-            background-color: transparent;
-        }
-
-        .rail-icon {
+        /* 菜单图标样式（三横线+左竖线） */
+        .menu-icon {
             display: flex;
             align-items: center;
-            justify-content: center;
+            gap: 3px;
         }
 
-        .rail-icon-xhs {
-            display: none;
-            width: 24px;
-            height: 24px;
-            border-radius: 6px;
-            background: #ff2442;
-            color: #fff;
-            font-size: 7px;
-            font-weight: 700;
-            line-height: 1;
-            text-align: center;
-            padding: 2px;
-            letter-spacing: -0.5px;
+        .menu-icon-bar {
+            width: 2px;
+            height: 16px;
+            background: #424242;
+            border-radius: 1px;
         }
 
-        .rail-btn.rail-open .rail-icon-panel {
-            display: none;
-        }
-
-        .rail-btn.rail-open .rail-icon-xhs {
+        .menu-icon-lines {
             display: flex;
+            flex-direction: column;
+            gap: 3px;
         }
 
-        /* 窄条按钮的 tooltip */
-        .rail-btn::after {
-            content: attr(data-tooltip);
-            position: absolute;
-            left: calc(100% + 8px);
-            top: 50%;
-            transform: translateY(-50%);
-            background: #1a1a1a;
-            color: #fff;
-            font-size: 12px;
-            font-weight: 500;
-            padding: 6px 10px;
-            border-radius: 6px;
-            white-space: nowrap;
+        .menu-icon-lines span {
+            width: 14px;
+            height: 2px;
+            background: #424242;
+            border-radius: 1px;
+        }
+
+        /* 侧边栏打开时隐藏菜单按钮 */
+        .sidebar.open ~ .menu-toggle-btn,
+        body.sidebar-open .menu-toggle-btn {
             opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.15s ease, visibility 0.15s ease;
             pointer-events: none;
-            z-index: 1100;
-        }
-
-        .rail-btn:hover::after {
-            opacity: 1;
-            visibility: visible;
-        }
-
-        .rail-spacer {
-            flex: 1;
         }
 
         /* ==================== 侧边栏样式 (Google AI 风格) ==================== */
         .sidebar {
             position: fixed;
             top: 0;
-            left: 60px;  /* 窄条宽度 */
+            left: 0;
             width: var(--sidebar-width);
             height: 100vh;
             background: var(--color-background);
             box-shadow: var(--shadow-sidebar);
-            transform: translateX(calc(-100% - 60px));  /* 完全隐藏到窄条左侧 */
+            transform: translateX(-100%);
             transition: transform var(--duration-medium) var(--ease-standard);
             z-index: 1050;
             display: flex;
@@ -436,6 +393,13 @@
             background: var(--color-surface);
         }
 
+        /* 笔记类型和时间范围下拉框宽度自适应 */
+        #noteType,
+        #timeRange {
+            width: auto;
+            min-width: 90px;
+        }
+
         /* 按钮样式 */
         .sidebar-section-content .btn {
             border-radius: var(--radius-full);
@@ -617,31 +581,25 @@
         /* ==================== 主内容区样式 ==================== */
         .main-wrapper {
             min-height: 100vh;
-            margin-left: 60px;  /* 始终留出窄条空间 */
+            margin-left: 0;
             transition: margin-left 0.3s ease, width 0.3s ease;
         }
 
-        /* 侧边栏打开时，主内容区被推挤（窄条60px + 侧边栏宽度） */
+        /* 侧边栏打开时，主内容区被推挤 */
         .main-wrapper.sidebar-open {
-            margin-left: calc(60px + var(--sidebar-width));
+            margin-left: var(--sidebar-width);
         }
 
-        /* 移动端：窄条隐藏，侧边栏覆盖 */
+        /* 移动端：侧边栏覆盖模式 */
         @media (max-width: 768px) {
-            .sidebar-rail {
-                display: none;  /* 移动端隐藏窄条 */
-            }
-            .sidebar {
-                left: 0;  /* 移动端侧边栏从最左边开始 */
-            }
             .main-wrapper {
-                margin-left: 0;  /* 移动端不留边距 */
+                margin-left: 0;
             }
             .main-wrapper.sidebar-open {
-                margin-left: 0;  /* 移动端不推挤 */
+                margin-left: 0;  /* 移动端不推挤，使用遮罩覆盖模式 */
             }
             .sidebar-overlay {
-                display: block;  /* 移动端显示遮罩 */
+                display: block;
             }
         }
 
@@ -1825,28 +1783,17 @@
         </div>
     </div>
 
-    <!-- 窄条工具栏（始终显示） -->
-    <div class="sidebar-rail" id="sidebarRail">
-        <button class="rail-btn" onclick="openSidebarFromRail()" data-tooltip="展开边栏" id="railToggleBtn" aria-label="展开边栏">
-            <span class="rail-icon rail-icon-panel" aria-hidden="true">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/>
-                    <line x1="9" y1="3" x2="9" y2="21"/>
-                </svg>
-            </span>
-            <span class="rail-icon rail-icon-xhs" aria-hidden="true">小红书</span>
-        </button>
-        <button class="rail-btn" onclick="openSidebarToCookie()" data-tooltip="Cookie 配置">
-            <i class="fas fa-key"></i>
-        </button>
-        <button class="rail-btn" onclick="openSidebarToHistory()" data-tooltip="历史记录">
-            <i class="fas fa-history"></i>
-        </button>
-        <div class="rail-spacer"></div>
-        <button class="rail-btn" onclick="openSettingsModal()" data-tooltip="设置">
-            <i class="fas fa-cog"></i>
-        </button>
-    </div>
+    <!-- 悬浮菜单按钮 -->
+    <button class="menu-toggle-btn" id="menuToggleBtn" onclick="openSidebar()" title="打开菜单">
+        <div class="menu-icon">
+            <div class="menu-icon-bar"></div>
+            <div class="menu-icon-lines">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    </button>
 
     <!-- 侧边栏遮罩 -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
@@ -1859,7 +1806,6 @@
                 <div class="sidebar-logo-icon">🔥</div>
                 <div class="sidebar-logo-text">
                     爆文模型Agent
-                    <small>智能分析爆款笔记</small>
                 </div>
                 <button class="sidebar-collapse-btn" onclick="closeSidebar()" title="收起侧边栏">
                     <i class="fas fa-chevron-left"></i>
@@ -1920,17 +1866,9 @@
                     <input type="file" id="avatarInput" accept="image/*" style="display: none;" onchange="handleAvatarUpload(event)">
                     <span class="sidebar-user-name" id="sidebarUsername">用户名</span>
                 </div>
-                <div class="d-flex gap-2">
-                    <button class="sidebar-settings-btn" onclick="openSettingsModal()">
-                        设置与管理
-                    </button>
-                    <button class="sidebar-settings-btn" id="userManageBtn" onclick="openUserManageModal()" style="display: none;" title="用户管理">
-                        <i class="fas fa-users"></i>
-                    </button>
-                    <button class="sidebar-settings-btn" onclick="logout()" title="退出登录" style="background: #dc3545;">
-                        <i class="fas fa-sign-out-alt"></i>
-                    </button>
-                </div>
+                <button class="sidebar-settings-btn" onclick="openSettingsModal()" title="设置">
+                    <i class="fas fa-cog"></i>
+                </button>
             </div>
         </div>
     </div>
@@ -1944,17 +1882,6 @@
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <!-- 用户管理（仅管理员可见） -->
-                    <div class="mb-4" id="adminSettingsBtn" style="display: none;">
-                        <h6 class="mb-3"><i class="fas fa-users-cog text-danger"></i> 用户管理</h6>
-                        <p class="small text-muted mb-2">管理系统用户账户、角色权限和存储配额</p>
-                        <button class="btn btn-outline-danger btn-sm w-100" onclick="openUserManageModal()">
-                            <i class="fas fa-external-link-alt"></i> 打开用户管理
-                        </button>
-                    </div>
-
-                    <hr id="adminSettingsDivider" style="display: none;">
-
                     <!-- 知识库管理 -->
                     <div class="mb-4">
                         <h6 class="mb-3"><i class="fas fa-database text-primary"></i> 知识库管理</h6>
@@ -2020,6 +1947,21 @@
                         </div>
                         <div id="cleanupResult" class="mt-2 small" style="display:none;"></div>
                     </div>
+
+                    <hr>
+
+                    <!-- 账户管理 -->
+                    <div>
+                        <h6 class="mb-3"><i class="fas fa-user-circle text-info"></i> 账户管理</h6>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-primary btn-sm flex-grow-1" id="settingsUserManageBtn" onclick="openUserManageModal()" style="display: none;">
+                                <i class="fas fa-users"></i> 多账户管理
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm flex-grow-1" onclick="logout()">
+                                <i class="fas fa-sign-out-alt"></i> 退出登录
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2038,8 +1980,7 @@
                         <!-- 多关键词输入区域 -->
                         <div class="mb-3">
                             <label class="form-label">
-                                搜索关键词 <span class="badge bg-info">支持多个</span>
-                                <small class="text-muted ms-2">（最多5个，多关键词可扩大样本范围）</small>
+                                搜索关键词
                             </label>
                             <div class="keyword-tags-container" id="keywordTagsContainer">
                                 <div class="keyword-tags" id="keywordTags">
@@ -2048,19 +1989,15 @@
                                 <input type="text" class="keyword-input" id="keywordInput"
                                        placeholder="输入关键词，按回车添加" maxlength="30">
                             </div>
-                            <div class="d-flex justify-content-between align-items-center mt-2">
-                                <small class="text-muted">
-                                    <i class="fas fa-lightbulb"></i> 提示：如「巧克力」样本不足，可添加「北欧」「Fazer」扩大范围
-                                </small>
+                            <div class="d-flex justify-content-end align-items-center mt-2">
                                 <small class="text-muted" id="keywordCount">已添加: 0/5</small>
                             </div>
                         </div>
                         <!-- 采集配置（三列输入框样式） -->
                         <div class="row mb-4">
                             <div class="col-md-4">
-                                <label class="form-label">目标数量（三维度总和）</label>
+                                <label class="form-label">目标数量</label>
                                 <input type="number" class="form-control" id="targetCount" value="100" min="30" max="800">
-                                <small class="text-muted">将从点赞/评论/收藏三个维度并行爬取</small>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label">爆款筛选比例</label>
@@ -2071,12 +2008,10 @@
                                     <option value="0.25">前 1/4</option>
                                     <option value="0.2">前 1/5</option>
                                 </select>
-                                <small class="text-muted">按互动总分排序后取前N</small>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label">最低分析样本量</label>
                                 <input type="number" class="form-control" id="minSampleCount" value="50" min="5" max="200">
-                                <small class="text-muted">低于此数量将自动补采</small>
                             </div>
                         </div>
                         <!-- 隐藏字段保持JS兼容 -->
@@ -2092,9 +2027,9 @@
                                 <div class="mb-3">
                                     <label class="form-label">笔记类型</label>
                                     <select class="form-select" id="noteType">
+                                        <option value="1" selected>视频</option>
                                         <option value="2">图文</option>
-                                        <option value="1">视频</option>
-                                        <option value="0" selected>不限</option>
+                                        <option value="0">不限</option>
                                     </select>
                                 </div>
                             </div>
@@ -2102,10 +2037,10 @@
                                 <div class="mb-3">
                                     <label class="form-label">时间范围</label>
                                     <select class="form-select" id="timeRange">
-                                        <option value="0">不限</option>
-                                        <option value="1">一天内</option>
+                                        <option value="3" selected>半年内</option>
                                         <option value="2">一周内</option>
-                                        <option value="3">半年内</option>
+                                        <option value="1">一天内</option>
+                                        <option value="0">不限</option>
                                     </select>
                                 </div>
                             </div>
@@ -2130,7 +2065,7 @@
                         </div>
                         <div class="text-center">
                             <button type="submit" class="btn btn-lg" id="startSearchBtn" style="background: linear-gradient(135deg, #ff4757 0%, #ff3742 100%); color: white; border: none; border-radius: 25px; padding: 12px 40px;">
-                                <i class="fas fa-rocket"></i> 开始采集分析
+                                <i class="fas fa-rocket"></i> 开始执行
                             </button>
                         </div>
                     </form>
@@ -2187,13 +2122,8 @@
                                     </div>
                                 </div>
                             </div>
-                            <!-- 底部区域：样本量保障 + 分析进度提示（用于等高对齐） -->
+                            <!-- 底部区域：分析进度提示 -->
                             <div class="progress-left-bottom">
-                                <!-- 样本量保障 -->
-                                <div class="sample-guarantee">
-                                    <div class="sample-guarantee-title">样本量保障</div>
-                                    <div class="small text-muted" id="sampleGuaranteeText">自动补采确保分析样本充足</div>
-                                </div>
                                 <!-- 分析进度提示 -->
                                 <div id="analysisProgressHint" class="alert alert-info mt-3" style="display: none;">
                                     <div class="d-flex align-items-center">
@@ -2752,6 +2682,15 @@
                 return;
             }
 
+            // 关闭所有可能打开的模态框
+            const openModals = document.querySelectorAll('.modal.show');
+            openModals.forEach(modal => {
+                const modalInstance = bootstrap.Modal.getInstance(modal);
+                if (modalInstance) {
+                    modalInstance.hide();
+                }
+            });
+
             // 清除本地存储的认证信息
             localStorage.removeItem('token');
             localStorage.removeItem('username');
@@ -2867,14 +2806,6 @@
 
         // ==================== 侧边栏控制 ====================
 
-        function updateRailToggleState(isOpen) {
-            const railToggleBtn = document.getElementById('railToggleBtn');
-            if (!railToggleBtn) return;
-            railToggleBtn.classList.toggle('rail-open', isOpen);
-            railToggleBtn.setAttribute('data-tooltip', isOpen ? '小红书' : '展开边栏');
-            railToggleBtn.setAttribute('aria-label', isOpen ? '小红书' : '展开边栏');
-        }
-
         function openSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
@@ -2883,15 +2814,7 @@
             sidebar.classList.add('open');
             overlay.classList.add('show');
             mainWrapper.classList.add('sidebar-open');
-            updateRailToggleState(true);
-        }
-
-        function openSidebarFromRail() {
-            const sidebar = document.getElementById('sidebar');
-            if (sidebar && sidebar.classList.contains('open')) {
-                return;
-            }
-            openSidebar();
+            document.body.classList.add('sidebar-open');
         }
 
         function toggleSidebar() {
@@ -2915,7 +2838,7 @@
             sidebar.classList.remove('open');
             overlay.classList.remove('show');
             mainWrapper.classList.remove('sidebar-open');
-            updateRailToggleState(false);
+            document.body.classList.remove('sidebar-open');
         }
 
         // 打开侧边栏并定位到历史记录
@@ -3064,19 +2987,12 @@
 
         // 更新管理员相关UI显示
         function updateAdminUI(role) {
-            const adminBtn = document.getElementById('userManageBtn');
-            const adminSettingsBtn = document.getElementById('adminSettingsBtn');
-            const adminSettingsDivider = document.getElementById('adminSettingsDivider');
+            const settingsUserManageBtn = document.getElementById('settingsUserManageBtn');
             const isAdmin = role === 'admin';
 
-            if (adminBtn) {
-                adminBtn.style.display = isAdmin ? 'block' : 'none';
-            }
-            if (adminSettingsBtn) {
-                adminSettingsBtn.style.display = isAdmin ? 'block' : 'none';
-            }
-            if (adminSettingsDivider) {
-                adminSettingsDivider.style.display = isAdmin ? 'block' : 'none';
+            // 设置模态框中的多账户管理按钮（仅管理员可见）
+            if (settingsUserManageBtn) {
+                settingsUserManageBtn.style.display = isAdmin ? 'inline-block' : 'none';
             }
         }
 
@@ -3472,9 +3388,6 @@
             document.getElementById('keywordTagsContainer').addEventListener('click', () => {
                 input.focus();
             });
-
-            // 初始化时添加一个默认关键词
-            addSearchKeyword('防脱精华');
         }
 
         // 添加搜索关键词
@@ -3625,20 +3538,6 @@
             const viralRatio = params.viralRatio;
             const noteType = parseInt(document.getElementById('noteType').value);
             const timeRange = parseInt(document.getElementById('timeRange').value);
-
-            // ========== 错误验证（阻断提交） ==========
-
-            // 1. 最低样本量 vs 预估分析量
-            if (minSampleCount > expectedAnalysis) {
-                errors.push(`最低样本量(${minSampleCount}) > 预估分析量(${expectedAnalysis})，逻辑矛盾`);
-                errorFields.push('minSampleCount', 'targetCount', 'viralRatioSelect');
-            }
-
-            // 2. 最低样本量 vs 目标数量
-            if (minSampleCount > targetCount) {
-                errors.push(`最低样本量(${minSampleCount}) > 目标采集数(${targetCount})，无法满足`);
-                errorFields.push('minSampleCount', 'targetCount');
-            }
 
             // ========== 警告验证（建议调整） ==========
 
@@ -4315,6 +4214,43 @@
                     })
                 });
 
+                // 检查响应类型：如果 Nginx 超时会返回 HTML 而非 JSON
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('application/json')) {
+                    // 收到非 JSON 响应（可能是 Nginx 504 超时页面）
+                    // 等待后检查任务是否已在后台启动
+                    console.warn('⚠️ 收到非JSON响应，可能是网关超时，检查任务状态...');
+                    await new Promise(r => setTimeout(r, 2000));  // 等待 2 秒
+
+                    try {
+                        const statusResp = await authFetch(`/api/viral/status/${currentTaskId}`);
+                        const taskStatus = await statusResp.json();
+
+                        // 根据实际任务状态决定后续行为
+                        if (taskStatus.status === 'analyzing') {
+                            // 任务正在运行，继续轮询
+                            console.log('✅ 任务已在后台运行，继续轮询状态');
+                            return;
+                        } else if (taskStatus.status === 'analyzed') {
+                            // 任务已完成，直接触发完成回调
+                            console.log('✅ 任务已完成分析');
+                            onAnalysisCompleted(taskStatus);
+                            return;
+                        } else if (taskStatus.status === 'analysis_failed') {
+                            // 任务已失败，触发失败回调
+                            console.log('⚠️ 任务分析失败');
+                            onAnalysisFailed(taskStatus);
+                            return;
+                        }
+                        // 其他状态（completed 等）说明任务未启动，继续抛错
+                    } catch (statusErr) {
+                        console.error('检查任务状态失败:', statusErr);
+                    }
+
+                    // 任务确实未启动，抛出错误
+                    throw new Error('服务器响应超时，请重试');
+                }
+
                 const result = await response.json();
                 console.log('📥 分析请求响应:', result);
 
@@ -4579,7 +4515,18 @@
                 if (result.status === 'success') {
                     document.getElementById('cookieStatus').innerHTML = '<span class="text-success"><i class="fas fa-check-circle"></i> 保存成功</span>';
                     updateCookieIndicator(true);
-                    setTimeout(() => document.getElementById('cookieStatus').innerHTML = '', 3000);
+
+                    // 记录 Cookie 保存时间戳
+                    localStorage.setItem('cookieSavedTime', Date.now().toString());
+
+                    // 1秒后自动折叠 Cookie 配置区域
+                    setTimeout(() => {
+                        const cookieCompact = document.getElementById('cookieCompact');
+                        if (cookieCompact && cookieCompact.classList.contains('expanded')) {
+                            cookieCompact.classList.remove('expanded');
+                        }
+                        document.getElementById('cookieStatus').innerHTML = '';
+                    }, 1000);
                 } else {
                     document.getElementById('cookieStatus').innerHTML = `<span class="text-danger"><i class="fas fa-exclamation-circle"></i> ${result.message}</span>`;
                 }
@@ -4592,6 +4539,7 @@
             try {
                 const response = await authFetch('/api/viral/cookie/status');
                 const result = await response.json();
+                const cookieCompact = document.getElementById('cookieCompact');
 
                 if (result.has_cookie) {
                     let statusHtml = `<span class="text-success"><i class="fas fa-check-circle"></i> 已配置（${result.cookie_length}字符）</span>`;
@@ -4601,9 +4549,24 @@
                     }
                     document.getElementById('cookieStatus').innerHTML = statusHtml;
                     updateCookieIndicator(true);
+
+                    // 已配置：检查12小时规则决定是否展开
+                    const COOKIE_EXPIRE_HOURS = 12;
+                    const savedTime = localStorage.getItem('cookieSavedTime');
+                    if (savedTime) {
+                        const hoursPassed = (Date.now() - parseInt(savedTime, 10)) / (1000 * 60 * 60);
+                        if (hoursPassed >= COOKIE_EXPIRE_HOURS && cookieCompact) {
+                            cookieCompact.classList.add('expanded');
+                        }
+                    }
                 } else {
                     document.getElementById('cookieStatus').innerHTML = '<span class="text-warning"><i class="fas fa-exclamation-triangle"></i> 未配置，请输入您的小红书Cookie</span>';
                     updateCookieIndicator(false);
+
+                    // 未配置：自动展开 Cookie 配置区域
+                    if (cookieCompact) {
+                        cookieCompact.classList.add('expanded');
+                    }
                 }
             } catch (error) {
                 document.getElementById('cookieStatus').innerHTML = '<span class="text-danger"><i class="fas fa-exclamation-circle"></i> 检查失败</span>';
@@ -5474,7 +5437,7 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             loadHistory();
-            checkCookie();
+            checkCookie();  // 会自动处理 Cookie 配置区域的展开状态
             loadKnowledgeSummary();
             loadCleanupInfo();
 

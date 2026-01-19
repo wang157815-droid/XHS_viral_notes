@@ -127,11 +127,12 @@ def add_task_log(task_id: str, message: str, level: str = "info") -> None:
     if "logs" not in task_status[task_id]:
         task_status[task_id]["logs"] = deque(maxlen=LOG_BUFFER_SIZE)
 
-    # 生成日志条目
+    # 生成日志条目（使用毫秒精度避免同秒显示）
     _log_id_counter += 1
+    now = datetime.now()
     log_entry = {
         "id": _log_id_counter,
-        "time": datetime.now().strftime("%H:%M:%S"),
+        "time": now.strftime("%H:%M:%S") + f".{now.microsecond // 1000:03d}",
         "message": message,
         "level": level
     }
@@ -1112,6 +1113,17 @@ async def collect_viral_notes_task(
         keyword_display = "、".join(keywords)
         add_task_log(task_id, f"🔍 开始搜索「{keyword_display}」相关笔记", "info")
 
+        # 智能调整参数：确保 min_sample_count 不超过合理范围
+        expected_analysis = int(target_count * viral_ratio)
+        original_min_sample = min_sample_count
+
+        if min_sample_count > target_count:
+            min_sample_count = target_count
+            add_task_log(task_id, f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (不超过目标数量)", "info")
+        elif min_sample_count > expected_analysis:
+            min_sample_count = max(expected_analysis, 10)  # 至少保留10条
+            add_task_log(task_id, f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (适配预估分析量)", "info")
+
         # 判断使用单关键词还是多关键词采集
         if len(keywords) == 1:
             # 单关键词模式（向后兼容）
@@ -1285,45 +1297,40 @@ async def analyze_viral_notes_task(
             analyzer = ViralAnalyzer(api_key=None)
         add_task_log(task_id, "✅ 分析器初始化完成", "success")
 
-        # 开始各阶段分析
+        # 开始分析（细分步骤由回调报告，避免重复日志）
         task_status[task_id]["analysis_progress"] = 15
-        add_task_log(task_id, "🔍 开始特征提取（标题/内容/互动）...", "info")
-
-        # 执行分析（通过monkey patch传递日志回调）
-        # 注：实际分析过程在 ViralAnalyzer 内部，这里添加阶段性日志
-        task_status[task_id]["analysis_progress"] = 20
-
+        analysis_desc = []
         if analysis_type in ['image', 'all'] and image_count > 0:
-            add_task_log(task_id, f"🖼️ 开始图文笔记分析（{image_count} 篇）...", "info")
+            analysis_desc.append(f"图文 {image_count} 篇")
         if analysis_type in ['video', 'all'] and video_count > 0:
-            add_task_log(task_id, f"🎬 准备视频笔记分析（{video_count} 篇）...", "info")
+            analysis_desc.append(f"视频 {video_count} 篇")
+        desc_text = ', '.join(analysis_desc) if analysis_desc else "全部笔记"
+        add_task_log(task_id, f"🚀 开始AI深度分析（{desc_text}）...", "info")
 
-        task_status[task_id]["analysis_progress"] = 30
-        add_task_log(task_id, "📊 执行产品引出分析...", "info")
+        # 定义进度回调函数，将分析器内部进度同步到任务日志
+        def analysis_progress_callback(message: str, progress: int = None):
+            """分析进度回调：将内部日志同步到任务状态"""
+            add_task_log(task_id, message, "info")
+            if progress is not None:
+                task_status[task_id]["analysis_progress"] = progress
 
-        task_status[task_id]["analysis_progress"] = 40
-        add_task_log(task_id, "🎯 执行场景方向分析...", "info")
-
-        task_status[task_id]["analysis_progress"] = 50
-        add_task_log(task_id, "🤖 调用AI深度分析（可能需要1-2分钟）...", "info")
-
-        # 执行完整分析
+        # 执行完整分析（带进度回调）
         result = analyzer.analyze_viral_notes(
             notes=notes,
             keyword=task_status[task_id]["keyword"],
             threshold=data.get('statistics', {}).get('viral_threshold', 5000),
             analysis_type=analysis_type,
-            video_source_mode=video_source_mode
+            video_source_mode=video_source_mode,
+            progress_callback=analysis_progress_callback
         )
 
-        task_status[task_id]["analysis_progress"] = 85
+        task_status[task_id]["analysis_progress"] = 88
         add_task_log(task_id, "✅ AI分析完成", "success")
 
-        # 检查视频分析结果
+        # 检查视频分析结果（日志已由回调处理，这里只做额外检查）
         video_ai_insights = result.viral_model.get('video_ai_insights', {})
         if video_ai_insights.get('status') == 'success':
-            analyzed_count = video_ai_insights.get('analyzed_count', 0)
-            add_task_log(task_id, f"🎬 视频分析完成: {analyzed_count} 个视频", "success")
+            pass  # 成功日志已由回调处理
         elif video_ai_insights.get('status') == 'skipped':
             add_task_log(task_id, "📷 图文模式跳过视频分析", "info")
 

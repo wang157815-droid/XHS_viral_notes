@@ -4,7 +4,7 @@
 """
 import json
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime
 from loguru import logger
 from openai import OpenAI
@@ -202,7 +202,8 @@ class ViralAnalyzer:
         keyword: str,
         threshold: int = 5000,
         analysis_type: str = "all",
-        video_source_mode: Optional[str] = None
+        video_source_mode: Optional[str] = None,
+        progress_callback: Optional[Callable[[str, Optional[int]], None]] = None
     ) -> ViralAnalysisResult:
         """
         分析爆款笔记并生成爆文模型
@@ -213,13 +214,19 @@ class ViralAnalyzer:
             threshold: 互动阈值
             analysis_type: 分析类型 ("image"=仅图文, "video"=仅视频, "all"=全部)
             video_source_mode: 视频源模式 ("url"=URL直传, "proxy"=本地下载)，None使用环境变量
+            progress_callback: 进度回调函数，接收 (message: str, progress: int) 参数
 
         Returns:
             分析结果
         """
+        def report_progress(message: str, progress: int = None):
+            """内部进度报告函数"""
+            logger.info(message)
+            if progress_callback:
+                progress_callback(message, progress)
         # 保存视频源模式供后续使用
         self._video_source_mode = video_source_mode
-        logger.info(f"开始分析 {len(notes)} 篇爆款笔记，分析类型: {analysis_type}")
+        report_progress(f"开始分析 {len(notes)} 篇爆款笔记，分析类型: {analysis_type}", 50)
 
         # ========== 新增：保存原始笔记用于类型分离特征计算 ==========
         # 无论analysis_type是什么，都保存全量数据用于后续填充image/video分离字段
@@ -257,23 +264,26 @@ class ViralAnalyzer:
             )
 
         # 1. 提取特征
+        report_progress("📊 提取标题/内容/互动特征...", 52)
         features = self.feature_extractor.extract_all_features(notes)
 
         # 2. 场景方向分析（新增：在标题分析之前）
-        logger.info("🎬 开始场景方向分析...")
+        report_progress("🎬 开始场景方向分析...", 55)
         try:
             scene_features = self.scene_analyzer.analyze_scenes(notes, keyword)
             features['scene_features'] = scene_features
-            logger.success(f"场景方向分析完成")
+            report_progress("✅ 场景方向分析完成", 58)
         except Exception as e:
             logger.error(f"场景方向分析失败: {e}")
             features['scene_features'] = {'status': 'error', 'message': str(e)}
 
         # 3. 分析产品引出特征
+        report_progress("📦 分析产品引出特征...", 60)
         product_features = self.product_analyzer.analyze_product_mentions(notes)
         features['product_features'] = product_features
 
         # 4. 生成爆文模型
+        report_progress("🔧 生成爆文模型框架...", 63)
         viral_model = self._generate_viral_model(features, notes)
 
         # 添加场景策略到爆文模型
@@ -281,17 +291,20 @@ class ViralAnalyzer:
             viral_model['scene_strategy'] = features['scene_features'].get('scene_strategy', {})
 
         # 5. 生成产品策略
+        report_progress("💡 生成产品策略...", 65)
         product_strategy = self.product_analyzer.generate_product_strategy(product_features)
         viral_model['product_strategy'] = product_strategy
 
         # 6. 使用AI深度分析（如果配置了API）
         if self.api_key:
+            report_progress("🤖 调用AI深度推理（耗时较长）...", 68)
             ai_insights = self._analyze_with_ai(notes, features, keyword)
             viral_model['ai_insights'] = ai_insights
+            report_progress("✅ AI深度推理完成", 72)
 
         # 7. 使用多模态AI分析图文联合特征（如果配置了多模态模型）
         if self.multimodal_analyzer:
-            logger.info("开始多模态分析（图片+文字联合理解）...")
+            report_progress("🖼️ 开始多模态分析（图文联合理解）...", 75)
             multimodal_insights = self.multimodal_analyzer.analyze_notes_batch(
                 notes=notes,
                 sample_count=len(notes),  # 分析全部笔记
@@ -307,25 +320,24 @@ class ViralAnalyzer:
         # 8. 视频AI深度分析（根据分析类型决定是否执行）
         # 图文模式跳过视频分析，视频/全部模式执行视频分析
         if analysis_type == 'image':
-            logger.info("📷 图文分析模式：跳过视频AI深度分析")
+            report_progress("📷 图文分析模式：跳过视频AI深度分析", 80)
             viral_model['video_ai_insights'] = {
                 'status': 'skipped',
                 'message': '图文分析模式，跳过视频分析'
             }
         else:
-            logger.info(f"开始检查视频笔记... 总共有 {len(notes)} 个笔记")
             video_notes = [n for n in notes if n.note_type == '视频']
-            logger.info(f"筛选出视频笔记: {len(video_notes)} 个")
+            report_progress(f"🎬 检测到 {len(video_notes)} 个视频笔记", 78)
 
             if video_notes:
-                logger.info(f"✅ 检测到 {len(video_notes)} 个视频笔记，准备进行AI深度分析...")
+                report_progress(f"🎬 开始视频AI深度分析（{len(video_notes)} 个视频）...", 80)
                 try:
                     video_ai_insights = self._analyze_videos_with_ai(
                         video_notes,
                         video_source_mode=self._video_source_mode
                     )
                     viral_model['video_ai_insights'] = video_ai_insights
-                    logger.success(f"视频AI深度分析完成")
+                    report_progress("✅ 视频AI深度分析完成", 85)
                 except Exception as e:
                     logger.error(f"视频AI深度分析失败: {e}")
                     import traceback
@@ -335,7 +347,7 @@ class ViralAnalyzer:
                         'message': f'分析失败: {str(e)}'
                     }
             else:
-                logger.warning("⚠️ 没有识别到视频笔记")
+                report_progress("⚠️ 没有识别到视频笔记", 80)
                 viral_model['video_ai_insights'] = {
                     'status': 'no_videos',
                     'message': '没有视频笔记'
@@ -345,7 +357,7 @@ class ViralAnalyzer:
         viral_model['analysis_type'] = analysis_type
 
         # 9. AI综合推理 - 基于所有分析结果生成最终爆文模型
-        logger.info("🧠 开始AI综合推理（基于所有分析结果生成最终爆文模型）...")
+        report_progress("🧠 开始AI综合推理（生成最终爆文模型，可能需要30秒）...", 85)
         try:
             # 构建完整的分析数据供综合推理使用
             full_analysis_data = {
@@ -369,14 +381,15 @@ class ViralAnalyzer:
             viral_model['final_delivery'] = final_delivery
 
             if final_delivery.get('status') == 'success':
-                logger.success("✅ AI综合推理完成，最终爆文模型已生成")
+                report_progress("✅ AI综合推理完成，最终爆文模型已生成", 87)
             else:
-                logger.warning(f"⚠️ AI综合推理状态: {final_delivery.get('status')}")
+                report_progress(f"⚠️ AI综合推理状态: {final_delivery.get('status')}", 87)
 
         except Exception as e:
             logger.error(f"AI综合推理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            report_progress(f"⚠️ AI综合推理失败: {str(e)[:50]}", 87)
             viral_model['final_delivery'] = {
                 'status': 'error',
                 'message': str(e)
