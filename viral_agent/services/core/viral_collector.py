@@ -147,6 +147,17 @@ class ViralNoteCollector:
         keywords = keywords[:5]
         self.search_keywords = keywords  # 保存多关键词列表
 
+        # 智能调整参数：确保 min_sample_count 不超过合理范围
+        expected_analysis = int(target_count * viral_ratio)
+        original_min_sample = min_sample_count
+
+        if min_sample_count > target_count:
+            min_sample_count = target_count
+            logger.info(f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (不超过目标数量)")
+        elif min_sample_count > expected_analysis:
+            min_sample_count = max(expected_analysis, 10)  # 至少保留10条
+            logger.info(f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (适配预估分析量)")
+
         logger.info(f"开始多关键词采集: {keywords}")
         logger.info(f"目标数量: {target_count}, 爆款比例: {viral_ratio}, 最低样本量: {min_sample_count}")
 

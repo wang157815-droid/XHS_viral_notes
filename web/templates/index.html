@@ -1252,12 +1252,8 @@
         .sidebar-logo-icon {
             width: 40px;
             height: 40px;
-            background: var(--gemini-gradient);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
+            object-fit: contain;
+            flex-shrink: 0;
         }
 
         .sidebar-logo-text {
@@ -1803,7 +1799,7 @@
         <!-- 顶部区域：Logo + Cookie配置 -->
         <div class="sidebar-top">
             <div class="sidebar-logo">
-                <div class="sidebar-logo-icon">🔥</div>
+                <img src="/static/images/logo_icon.png" alt="Logo" class="sidebar-logo-icon">
                 <div class="sidebar-logo-text">
                     爆文模型Agent
                 </div>
