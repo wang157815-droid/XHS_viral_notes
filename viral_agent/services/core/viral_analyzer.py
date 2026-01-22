@@ -1131,6 +1131,31 @@ class ViralAnalyzer:
                         'product_embed_way': result.timeline_analysis.product_embed_way
                     }
 
+                # 添加音画同步分析结果（ASR语音识别）
+                if result.av_sync_result:
+                    av = result.av_sync_result
+                    # 兼容 dataclass 和 dict 两种情况
+                    if hasattr(av, 'to_dict'):
+                        insight['av_sync_result'] = av.to_dict()
+                    elif isinstance(av, dict):
+                        insight['av_sync_result'] = av
+                    else:
+                        from dataclasses import asdict, is_dataclass
+                        if is_dataclass(av):
+                            insight['av_sync_result'] = asdict(av)
+
+                # 添加帧+ASR联合分析结果
+                if result.frame_asr_analysis:
+                    fa = result.frame_asr_analysis
+                    if hasattr(fa, 'to_dict'):
+                        insight['frame_asr_analysis'] = fa.to_dict()
+                    elif isinstance(fa, dict):
+                        insight['frame_asr_analysis'] = fa
+                    else:
+                        from dataclasses import asdict, is_dataclass
+                        if is_dataclass(fa):
+                            insight['frame_asr_analysis'] = asdict(fa)
+
                 if result.error_message:
                     insight['error'] = result.error_message
 

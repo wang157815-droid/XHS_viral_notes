@@ -2480,18 +2480,106 @@ def create_viral_creation_guide_sheet(wb, data):
                     cell.fill = PatternFill(start_color="E8F4FF", end_color="E8F4FF", fill_type="solid")
 
 
+def _calculate_asr_stats(insights: list) -> dict:
+    """
+    计算 ASR 语音分析统计数据（含触达模式分布）
+
+    Args:
+        insights: 视频分析结果列表
+
+    Returns:
+        包含 ASR 统计和触达模式分布的字典
+    """
+    import re
+
+    total_videos = len(insights)  # 所有视频数
+    has_asr = 0  # 有ASR数据的视频数
+    success = 0  # ASR分析成功的视频数
+    text_lengths = []
+    product_mentions = []
+    # 触达模式统计
+    touch_modes = {
+        '先口播后展示': 0,
+        '先展示后介绍': 0,
+        '视听同步': 0,
+        '仅视觉': 0,
+        '仅口播': 0,
+    }
+
+    for insight in insights:
+        av_sync = insight.get('av_sync_result')
+        timeline = insight.get('timeline_analysis', {})
+
+        # 解析 AI 视觉的产品出现时间
+        ai_product_time = None
+        if timeline:
+            ai_product_str = timeline.get('product_appear_time', '')
+            if ai_product_str and ai_product_str != '/':
+                match = re.search(r'(\d+(?:\.\d+)?)', str(ai_product_str))
+                if match:
+                    ai_product_time = float(match.group(1))
+
+        # 解析 ASR 的产品提及时间
+        asr_product_time = None
+        if av_sync:
+            has_asr += 1
+            status = av_sync.get('status', '') if isinstance(av_sync, dict) else getattr(av_sync, 'status', '')
+
+            # 修复：支持 success 和 partial 状态
+            if status in ('success', 'partial'):
+                success += 1
+
+                # 获取转录文本长度
+                full_text = av_sync.get('full_text', '') if isinstance(av_sync, dict) else getattr(av_sync, 'full_text', '')
+                if full_text:
+                    text_lengths.append(len(full_text))
+
+                # 获取产品首次提及时间
+                timeline_summary = av_sync.get('timeline_summary', {}) if isinstance(av_sync, dict) else getattr(av_sync, 'timeline_summary', None)
+                if timeline_summary:
+                    product_mention = timeline_summary.get('product_first_mention') if isinstance(timeline_summary, dict) else getattr(timeline_summary, 'product_first_mention', None)
+                    # 修复：product_mention >= 0（0秒是有效数据）
+                    if product_mention is not None and isinstance(product_mention, (int, float)) and product_mention >= 0:
+                        product_mentions.append(product_mention)
+                        asr_product_time = float(product_mention)
+
+        # 计算触达模式
+        if ai_product_time is not None and asr_product_time is not None:
+            diff = asr_product_time - ai_product_time
+            if diff < -5:
+                touch_modes['先口播后展示'] += 1
+            elif diff > 5:
+                touch_modes['先展示后介绍'] += 1
+            else:
+                touch_modes['视听同步'] += 1
+        elif ai_product_time is not None:
+            touch_modes['仅视觉'] += 1
+        elif asr_product_time is not None:
+            touch_modes['仅口播'] += 1
+
+    return {
+        'total_videos': total_videos,  # 所有视频数
+        'has_asr': has_asr,  # 有ASR数据的视频数
+        'success': success,  # ASR分析成功的视频数
+        'avg_text_len': sum(text_lengths) / len(text_lengths) if text_lengths else 0,
+        'avg_product_mention': sum(product_mentions) / len(product_mentions) if product_mentions else 0,
+        'touch_modes': touch_modes,
+    }
+
+
 def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
     """
     创建视频AI深度分析工作表（PRD对齐完整版）
 
     结构：
-    一、视频分析摘要（含PRD综合合规率）
+    一、视频分析摘要（含PRD综合合规率 + ASR统计）
     二、时间节点分析（PRD合规率明细）
     三、封面分析（图片类型、内容形式分布）
     四、标题分析（元素组合统计）
     五、切入方式分析
     六、产品植入分析（3个最佳策略）
-    七、单个视频详情
+    七、单个视频详情（含ASR列）
+    八、视频详细分析（含语音分析区块）
 
     Args:
         wb: Excel工作簿对象
@@ -2508,12 +2596,12 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
     try:
         ws = wb.create_sheet("视频AI深度分析")
 
-        # 设置列宽（扩展到M列，支持13列详细表格）
+        # 设置列宽（扩展到Q列，支持17列详细表格，含视听融合分析）
         column_widths = {
             'A': 30,  # 标题/视频标题
             'B': 12,  # 互动分
-            'C': 12,  # 产品出现
-            'D': 12,  # 干货开始
+            'C': 12,  # 产品出现(AI视觉) - 主指标
+            'D': 12,  # 干货开始(AI视觉)
             'E': 18,  # 大类-类型
             'F': 14,  # 切入方式
             'G': 14,  # 产品引出
@@ -2523,6 +2611,10 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
             'K': 35,  # 视频链接
             'L': 8,   # 状态
             'M': 20,  # 备注
+            'N': 12,  # 产品首触(融合) - min(AI, ASR)
+            'O': 14,  # 触达模式 - 先口播/先展示/同步
+            'P': 12,  # ASR产品提及(原始)
+            'Q': 40,  # 语音转录摘要
         }
         for col, width in column_widths.items():
             ws.column_dimensions[col].width = width
@@ -2569,7 +2661,44 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
         ws[f'C{row}'] = '基于产品出现、干货开始、产品讲解时间计算'
         ws[f'C{row}'].font = Font(size=9, italic=True, color="666666")
         ws.merge_cells(f'C{row}:F{row}')
-        row += 2
+        row += 1
+
+        # ASR语音分析统计（新增）
+        insights = video_ai_data.get('individual_insights', [])
+        asr_stats = _calculate_asr_stats(insights)
+        ws[f'A{row}'] = 'ASR语音分析'
+        ws[f'A{row}'].font = Font(bold=True, color="9B59B6")
+        if asr_stats['has_asr'] > 0:
+            # 显示: 成功数/总视频数（分母是所有视频，而非仅有ASR数据的）
+            total_videos = asr_stats['total_videos']
+            asr_rate = asr_stats['success'] / total_videos * 100 if total_videos > 0 else 0
+            ws[f'B{row}'] = f"{asr_stats['success']}/{total_videos} ({asr_rate:.0f}%)"
+            ws[f'B{row}'].font = Font(bold=True, size=12, color="00AA00" if asr_rate >= 50 else "FF8800")
+            ws[f'C{row}'] = f"平均转录 {asr_stats['avg_text_len']:.0f} 字 | 产品首提均值 {asr_stats['avg_product_mention']:.1f}s"
+        else:
+            ws[f'B{row}'] = '未启用'
+            ws[f'B{row}'].font = Font(color="999999", italic=True)
+            ws[f'C{row}'] = '启用方式: 设置 ENABLE_AV_SYNC=true'
+        ws[f'C{row}'].font = Font(size=9, italic=True, color="666666")
+        ws.merge_cells(f'C{row}:F{row}')
+        row += 1
+
+        # 触达模式分布（新增）
+        touch_modes = asr_stats.get('touch_modes', {})
+        total_touch = sum(touch_modes.values())
+        if total_touch > 0:
+            ws[f'A{row}'] = '触达模式分布'
+            ws[f'A{row}'].font = Font(bold=True, color="3498DB")
+            mode_parts = []
+            for mode, count in touch_modes.items():
+                if count > 0:
+                    pct = count / total_touch * 100
+                    mode_parts.append(f"{mode}:{count}({pct:.0f}%)")
+            ws[f'B{row}'] = ' | '.join(mode_parts)
+            ws[f'B{row}'].font = Font(size=9)
+            ws.merge_cells(f'B{row}:F{row}')
+            row += 1
+        row += 1
 
         # 核心发现
         insights_list = summary.get('insights', []) if isinstance(summary, dict) else []
@@ -2812,28 +2941,32 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                 row += 2
         row += 1
 
-        # ==================== 七、单个视频详情（13列拆分表格）====================
-        ws[f'A{row}'] = '【七、单个视频详情】'
+        # ==================== 七、单个视频详情（17列拆分表格，含视听融合分析）====================
+        ws[f'A{row}'] = '【七、单个视频详情】（含视听融合分析）'
         ws[f'A{row}'].font = Font(bold=True, size=13, color="FFFFFF")
         ws[f'A{row}'].fill = PatternFill(start_color="4472C4", fill_type="solid")
-        ws.merge_cells(f'A{row}:M{row}')
+        ws.merge_cells(f'A{row}:Q{row}')
         row += 2
 
-        # 表头（13列，拆分7个数据点+核心字段）
+        # 表头（17列，AI视觉为主 + 视听融合指标 + ASR原始数据）
         headers = [
-            '视频标题',    # A: note_title
-            '互动分',      # B: interaction_score
-            '产品出现',    # C: timeline_analysis.product_appear_time
-            '干货开始',    # D: timeline_analysis.content_start_time
-            '大类-类型',   # E: timeline_analysis.content_type
-            '切入方式',    # F: timeline_analysis.entry_point
-            '产品引出',    # G: timeline_analysis.product_intro_way
-            '植入方式',    # H: timeline_analysis.product_embed_way
-            '封面类型',    # I: cover_analysis
-            '标题类型',    # J: title_analysis
-            '视频链接',    # K: video_url
-            '状态',        # L: analysis_status
-            '备注'         # M: error or keywords
+            '视频标题',       # A: note_title
+            '互动分',         # B: interaction_score
+            '产品出现(AI)',   # C: timeline_analysis.product_appear_time（主指标）
+            '干货开始(AI)',   # D: timeline_analysis.content_start_time
+            '大类-类型',      # E: timeline_analysis.content_type
+            '切入方式',       # F: timeline_analysis.entry_point
+            '产品引出',       # G: timeline_analysis.product_intro_way
+            '植入方式',       # H: timeline_analysis.product_embed_way
+            '封面类型',       # I: cover_analysis
+            '标题类型',       # J: title_analysis
+            '视频链接',       # K: video_url
+            '状态',           # L: analysis_status
+            '备注',           # M: error or keywords
+            '🔗产品首触',     # N: min(AI视觉, ASR语音) 融合指标
+            '📊触达模式',     # O: 先口播/先展示/同步
+            '🎙ASR产品提及',  # P: ASR原始数据（供参考）
+            '🎙语音转录摘要'  # Q: av_sync_result.full_text (截断)
         ]
         for col, header in enumerate(headers, start=1):
             cell = ws.cell(row=row, column=col)
@@ -2988,19 +3121,120 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                 ws[f'M{row}'].font = Font(size=8, color='666666')
             ws[f'M{row}'].alignment = Alignment(wrap_text=True, vertical='center')
 
+            # N-Q: 视听融合分析数据
+            av_sync = insight.get('av_sync_result')
+
+            # 解析 AI 视觉的产品出现时间（从 timeline 中提取数字）
+            ai_product_time = None
+            if timeline:
+                ai_product_str = timeline.get('product_appear_time', '')
+                if ai_product_str and ai_product_str != '/':
+                    # 尝试从字符串中提取数字，如 "30秒" -> 30
+                    import re
+                    match = re.search(r'(\d+(?:\.\d+)?)', str(ai_product_str))
+                    if match:
+                        ai_product_time = float(match.group(1))
+
+            # 解析 ASR 的产品提及时间
+            asr_product_time = None
+            asr_full_text = ''
+            asr_status = ''
+            if av_sync:
+                asr_status = av_sync.get('status', '') if isinstance(av_sync, dict) else getattr(av_sync, 'status', '')
+                timeline_summary = av_sync.get('timeline_summary', {}) if isinstance(av_sync, dict) else getattr(av_sync, 'timeline_summary', None)
+                asr_full_text = av_sync.get('full_text', '') if isinstance(av_sync, dict) else getattr(av_sync, 'full_text', '')
+
+                # 修复：支持 success 和 partial 状态，允许 0 秒的有效数据
+                if asr_status in ('success', 'partial') and timeline_summary:
+                    product_mention = timeline_summary.get('product_first_mention') if isinstance(timeline_summary, dict) else getattr(timeline_summary, 'product_first_mention', None)
+                    # 修复：product_mention >= 0（0秒是有效数据，表示视频开头就提及产品）
+                    if product_mention is not None and isinstance(product_mention, (int, float)) and product_mention >= 0:
+                        asr_product_time = float(product_mention)
+
+            # N: 产品首触(融合) = min(AI视觉, ASR语音)
+            first_touch_time = None
+            first_touch_source = None
+            if ai_product_time is not None and asr_product_time is not None:
+                first_touch_time = min(ai_product_time, asr_product_time)
+                first_touch_source = 'AI' if ai_product_time <= asr_product_time else 'ASR'
+            elif ai_product_time is not None:
+                first_touch_time = ai_product_time
+                first_touch_source = 'AI'
+            elif asr_product_time is not None:
+                first_touch_time = asr_product_time
+                first_touch_source = 'ASR'
+
+            if first_touch_time is not None:
+                ws[f'N{row}'] = f"{first_touch_time:.0f}s({first_touch_source})"
+                ws[f'N{row}'].font = Font(size=9, color='0066CC', bold=True)
+            else:
+                ws[f'N{row}'] = '-'
+                ws[f'N{row}'].font = Font(size=9, color='999999')
+            ws[f'N{row}'].alignment = Alignment(horizontal='center', vertical='center')
+
+            # O: 触达模式（先口播/先展示/同步）
+            touch_mode = '-'
+            touch_mode_color = '999999'
+            if ai_product_time is not None and asr_product_time is not None:
+                diff = asr_product_time - ai_product_time
+                if diff < -5:  # ASR 早于 AI 5秒以上
+                    touch_mode = '先口播后展示'
+                    touch_mode_color = '9B59B6'  # 紫色
+                elif diff > 5:  # AI 早于 ASR 5秒以上
+                    touch_mode = '先展示后介绍'
+                    touch_mode_color = '27AE60'  # 绿色
+                else:
+                    touch_mode = '视听同步'
+                    touch_mode_color = '3498DB'  # 蓝色
+            elif ai_product_time is not None:
+                touch_mode = '仅视觉'
+                touch_mode_color = '666666'
+            elif asr_product_time is not None:
+                touch_mode = '仅口播'
+                touch_mode_color = '666666'
+
+            ws[f'O{row}'] = touch_mode
+            ws[f'O{row}'].font = Font(size=9, color=touch_mode_color, bold=(touch_mode not in ['-', '仅视觉', '仅口播']))
+            ws[f'O{row}'].alignment = Alignment(horizontal='center', vertical='center')
+
+            # P: ASR产品提及(原始数据)
+            if asr_product_time is not None:
+                ws[f'P{row}'] = f"{asr_product_time:.1f}s"
+                ws[f'P{row}'].font = Font(size=9, color='9B59B6')
+            elif av_sync and asr_status:
+                ws[f'P{row}'] = f'({asr_status})'
+                ws[f'P{row}'].font = Font(size=8, color='FF8800', italic=True)
+            else:
+                ws[f'P{row}'] = '-'
+                ws[f'P{row}'].font = Font(size=9, color='CCCCCC')
+            ws[f'P{row}'].alignment = Alignment(horizontal='center', vertical='center')
+
+            # Q: 语音转录摘要
+            if asr_full_text:
+                text_preview = asr_full_text[:80] + '...' if len(asr_full_text) > 80 else asr_full_text
+                ws[f'Q{row}'] = text_preview
+                ws[f'Q{row}'].font = Font(size=8, color='666666')
+            elif av_sync:
+                ws[f'Q{row}'] = '(无转录)' if asr_status == 'success' else f'(ASR{asr_status})'
+                ws[f'Q{row}'].font = Font(size=8, color='999999', italic=True)
+            else:
+                ws[f'Q{row}'] = '(未启用ASR)'
+                ws[f'Q{row}'].font = Font(size=8, color='CCCCCC', italic=True)
+            ws[f'Q{row}'].alignment = Alignment(wrap_text=True, vertical='center')
+
             # 设置行高和边框
             ws.row_dimensions[row].height = 35
-            for col in range(1, 14):  # A-M共13列
+            for col in range(1, 18):  # A-Q共17列
                 ws.cell(row=row, column=col).border = thin_border
 
             row += 1
 
-        # ==================== 八、视频详细分析（对齐图文笔记颗粒度）====================
+        # ==================== 八、视频详细分析（含语音分析，对齐图文笔记颗粒度）====================
         row += 2
-        ws[f'A{row}'] = '【八、视频详细分析】'
+        ws[f'A{row}'] = '【八、视频详细分析】（含语音转录）'
         ws[f'A{row}'].font = Font(bold=True, size=13, color="FFFFFF")
         ws[f'A{row}'].fill = PatternFill(start_color="5B9BD5", fill_type="solid")
-        ws.merge_cells(f'A{row}:M{row}')
+        ws.merge_cells(f'A{row}:Q{row}')
         row += 2
 
         for i, insight in enumerate(insights, 1):
@@ -3021,7 +3255,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
             ws[f'A{row}'].font = Font(bold=True, size=9)
             ws[f'B{row}'] = insight.get('note_title', '(无标题)')
             ws[f'B{row}'].font = Font(size=9)
-            ws.merge_cells(f'B{row}:M{row}')
+            ws.merge_cells(f'B{row}:Q{row}')
             row += 1
 
             # 分析状态检查 - P1-fix-1: 支持 partial 状态
@@ -3032,7 +3266,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                 error_msg = insight.get('error_message') or insight.get('error', '无法读取视频')
                 ws[f'B{row}'] = f"❌ 失败: {error_msg}"
                 ws[f'B{row}'].font = Font(color='FF0000', italic=True, size=9)
-                ws.merge_cells(f'B{row}:M{row}')
+                ws.merge_cells(f'B{row}:Q{row}')
                 row += 2
                 continue
 
@@ -3043,7 +3277,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                 error_msg = insight.get('error_message') or '部分分析失败'
                 ws[f'B{row}'] = f"⚠️ 部分成功: {error_msg}"
                 ws[f'B{row}'].font = Font(color='FF8800', italic=True, size=9)
-                ws.merge_cells(f'B{row}:M{row}')
+                ws.merge_cells(f'B{row}:Q{row}')
                 row += 1
 
             # 【基础信息】
@@ -3061,7 +3295,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                 ws[f'C{row}'].font = Font(size=9, color="666666")
                 ws[f'D{row}'] = str(value)
                 ws[f'D{row}'].font = Font(size=9)
-                ws.merge_cells(f'D{row}:M{row}')
+                ws.merge_cells(f'D{row}:Q{row}')
                 row += 1
 
             # 【封面分析】
@@ -3080,7 +3314,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                     ws[f'C{row}'].font = Font(size=9, color="666666")
                     ws[f'D{row}'] = str(value) if value else '-'
                     ws[f'D{row}'].font = Font(size=9)
-                    ws.merge_cells(f'D{row}:M{row}')
+                    ws.merge_cells(f'D{row}:Q{row}')
                     row += 1
 
             # 【标题分析】
@@ -3099,7 +3333,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                     ws[f'C{row}'].font = Font(size=9, color="666666")
                     ws[f'D{row}'] = str(value) if value else '-'
                     ws[f'D{row}'].font = Font(size=9)
-                    ws.merge_cells(f'D{row}:M{row}')
+                    ws.merge_cells(f'D{row}:Q{row}')
                     row += 1
 
             # 【时间轴分析】（7个数据点，应用清理函数过滤错误文本）
@@ -3122,7 +3356,7 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                     ws[f'C{row}'].font = Font(size=9, color="666666")
                     ws[f'D{row}'] = str(value) if value else '/'
                     ws[f'D{row}'].font = Font(size=9, bold=True)
-                    ws.merge_cells(f'D{row}:M{row}')
+                    ws.merge_cells(f'D{row}:Q{row}')
                     row += 1
 
             # 【成功要素总结】（AI分析结果）
@@ -3149,12 +3383,119 @@ def create_video_ai_analysis_sheet(wb: Workbook, data: Dict[str, Any]) -> None:
                     for line in display_lines:
                         ws[f'C{row}'] = line[:150]  # 每行最多150字符
                         ws[f'C{row}'].font = Font(size=9)
-                        ws.merge_cells(f'C{row}:M{row}')
+                        ws.merge_cells(f'C{row}:Q{row}')
                         row += 1
+
+            # 【语音分析】（ASR转录结果）- 新增
+            av_sync = insight.get('av_sync_result')
+            if av_sync:
+                av_status = av_sync.get('status', '') if isinstance(av_sync, dict) else getattr(av_sync, 'status', '')
+
+                # 修复：支持 success 和 partial 状态
+                if av_status in ('success', 'partial'):
+                    ws[f'B{row}'] = "【🎙语音分析】ASR转录结果"
+                    ws[f'B{row}'].font = Font(bold=True, color="9B59B6", size=10)
+                    row += 1
+
+                    # 提取 ASR 数据
+                    timeline_summary = av_sync.get('timeline_summary', {}) if isinstance(av_sync, dict) else getattr(av_sync, 'timeline_summary', None)
+                    full_text = av_sync.get('full_text', '') if isinstance(av_sync, dict) else getattr(av_sync, 'full_text', '')
+                    asr_provider = av_sync.get('asr_provider', '') if isinstance(av_sync, dict) else getattr(av_sync, 'asr_provider', '')
+                    video_duration = av_sync.get('video_duration', 0) if isinstance(av_sync, dict) else getattr(av_sync, 'video_duration', 0)
+
+                    # ASR 基本信息
+                    ws[f'C{row}'] = f"• ASR服务:"
+                    ws[f'C{row}'].font = Font(size=9, color="666666")
+                    ws[f'D{row}'] = asr_provider or '通义千问'
+                    ws[f'D{row}'].font = Font(size=9)
+                    ws[f'E{row}'] = f"• 视频时长:"
+                    ws[f'E{row}'].font = Font(size=9, color="666666")
+                    ws[f'F{row}'] = f"{video_duration:.1f}s" if video_duration else '-'
+                    ws[f'F{row}'].font = Font(size=9)
+                    row += 1
+
+                    # ASR 检测的关键时间点
+                    if timeline_summary:
+                        product_mention = timeline_summary.get('product_first_mention') if isinstance(timeline_summary, dict) else getattr(timeline_summary, 'product_first_mention', None)
+                        content_start = timeline_summary.get('content_start_time') if isinstance(timeline_summary, dict) else getattr(timeline_summary, 'content_start_time', None)
+                        product_use = timeline_summary.get('product_use_time') if isinstance(timeline_summary, dict) else getattr(timeline_summary, 'product_use_time', None)
+
+                        # 修复：product_mention >= 0（0秒是有效数据）
+                        ws[f'C{row}'] = f"• ASR产品首次提及:"
+                        ws[f'C{row}'].font = Font(size=9, color="666666")
+                        has_product_mention = product_mention is not None and isinstance(product_mention, (int, float)) and product_mention >= 0
+                        ws[f'D{row}'] = f"{product_mention:.1f}s" if has_product_mention else '未检测到'
+                        ws[f'D{row}'].font = Font(size=9, bold=True, color="9B59B6") if has_product_mention else Font(size=9, color="999999")
+                        row += 1
+
+                        ws[f'C{row}'] = f"• ASR内容开始时间:"
+                        ws[f'C{row}'].font = Font(size=9, color="666666")
+                        has_content_start = content_start is not None and isinstance(content_start, (int, float)) and content_start >= 0
+                        ws[f'D{row}'] = f"{content_start:.1f}s" if has_content_start else '未检测到'
+                        ws[f'D{row}'].font = Font(size=9, bold=True, color="9B59B6") if has_content_start else Font(size=9, color="999999")
+                        row += 1
+
+                        ws[f'C{row}'] = f"• ASR产品使用时间:"
+                        ws[f'C{row}'].font = Font(size=9, color="666666")
+                        has_product_use = product_use is not None and isinstance(product_use, (int, float)) and product_use >= 0
+                        ws[f'D{row}'] = f"{product_use:.1f}s" if has_product_use else '未检测到'
+                        ws[f'D{row}'].font = Font(size=9, bold=True, color="9B59B6") if has_product_use else Font(size=9, color="999999")
+                        row += 1
+
+                        # 关键事件列表
+                        key_events = timeline_summary.get('key_events', []) if isinstance(timeline_summary, dict) else getattr(timeline_summary, 'key_events', [])
+                        if key_events:
+                            ws[f'C{row}'] = f"• 检测到的关键事件 ({len(key_events)}个):"
+                            ws[f'C{row}'].font = Font(size=9, color="666666")
+                            row += 1
+                            for event in key_events[:5]:  # 最多显示5个事件
+                                if isinstance(event, dict):
+                                    event_time = event.get('timestamp', 0)
+                                    event_type = event.get('type', '')
+                                    event_text = event.get('text', '')[:50]
+                                else:
+                                    event_time = getattr(event, 'timestamp', 0)
+                                    event_type = getattr(event, 'type', '')
+                                    event_text = getattr(event, 'text', '')[:50]
+                                ws[f'D{row}'] = f"[{event_time:.1f}s] {event_type}: {event_text}"
+                                ws[f'D{row}'].font = Font(size=8, color="666666")
+                                ws.merge_cells(f'D{row}:Q{row}')
+                                row += 1
+
+                    # 完整转录文本
+                    if full_text:
+                        ws[f'C{row}'] = f"• 完整语音转录 ({len(full_text)}字):"
+                        ws[f'C{row}'].font = Font(size=9, color="666666", bold=True)
+                        row += 1
+
+                        # 按句子分段显示转录文本
+                        text_lines = full_text.replace('。', '。\n').replace('！', '！\n').replace('？', '？\n').split('\n')
+                        display_lines = [line.strip() for line in text_lines if line.strip()][:10]  # 最多显示10句
+                        for line in display_lines:
+                            ws[f'D{row}'] = line[:120]  # 每行最多120字
+                            ws[f'D{row}'].font = Font(size=8, color="444444")
+                            ws.merge_cells(f'D{row}:Q{row}')
+                            row += 1
+                        if len(text_lines) > 10:
+                            ws[f'D{row}'] = f"... (还有 {len(text_lines) - 10} 句，完整内容见JSON文件)"
+                            ws[f'D{row}'].font = Font(size=8, color="999999", italic=True)
+                            ws.merge_cells(f'D{row}:Q{row}')
+                            row += 1
+
+                elif av_status:
+                    # ASR 分析失败
+                    ws[f'B{row}'] = "【🎙语音分析】"
+                    ws[f'B{row}'].font = Font(bold=True, color="9B59B6", size=10)
+                    row += 1
+                    error_msg = av_sync.get('error_message', '') if isinstance(av_sync, dict) else getattr(av_sync, 'error_message', '')
+                    ws[f'C{row}'] = f"状态: {av_status}" + (f" - {error_msg}" if error_msg else '')
+                    ws[f'C{row}'].font = Font(size=9, color="FF8800", italic=True)
+                    ws.merge_cells(f'C{row}:Q{row}')
+                    row += 1
 
             row += 1  # 每个视频之间空一行
 
-        logger.info("视频AI分析工作表创建成功（PRD对齐完整版，含13列详情表格+详情展开）")
+        logger.info("视频AI分析工作表创建成功（PRD对齐完整版，含16列详情表格+语音分析）")
 
     except Exception as e:
         logger.error(f"创建视频AI分析工作表失败: {e}")
