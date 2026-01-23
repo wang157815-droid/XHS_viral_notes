@@ -4171,6 +4171,9 @@
 
             // 回车添加关键词，Delete/Backspace 删除最后一个
             input.addEventListener('keydown', (e) => {
+                // Mac 输入法兼容：组合状态下不处理按键，避免残留字符
+                if (e.isComposing) return;
+
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     addSearchKeyword(input.value.trim());
