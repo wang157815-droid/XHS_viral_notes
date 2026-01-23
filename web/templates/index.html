@@ -764,8 +764,7 @@
             width: 100%;
             height: 100%;
             background: rgba(0,0,0,0.4);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
+            /* 移除模糊效果，保持清晰背景 */
             opacity: 0;
             visibility: hidden;
             pointer-events: none;
@@ -785,6 +784,13 @@
             min-height: 100vh;
             margin-left: 0;
             transition: margin-left 0.3s ease, width 0.3s ease;
+        }
+
+        /* 仅搜索框模式：垂直居中 */
+        .main-wrapper.search-only-mode {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         /* 侧边栏打开时，主内容区被推挤 */
@@ -2035,34 +2041,362 @@
                 height: 52px;
             }
         }
+
+        /* ==================== 全屏登录页面样式 ==================== */
+        #loginPage {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 9999;
+            display: flex;
+            background: #ffffff;
+        }
+
+        #loginPage.hidden {
+            display: none;
+        }
+
+        /* 左侧品牌区域 */
+        .login-brand-section {
+            width: 45%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 背景装饰 */
+        .login-brand-section::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 30% 70%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
+                        radial-gradient(circle at 70% 30%, rgba(118, 75, 162, 0.15) 0%, transparent 50%);
+            animation: loginBgFloat 20s ease-in-out infinite;
+        }
+
+        @keyframes loginBgFloat {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            50% { transform: translate(2%, 2%) rotate(5deg); }
+        }
+
+        .login-brand-content {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            color: #ffffff;
+            max-width: 400px;
+        }
+
+        .login-brand-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .login-brand-logo img.logo-icon {
+            width: 56px;
+            height: 56px;
+            filter: brightness(1.1);
+        }
+
+        .login-brand-logo img.logo-text {
+            height: 36px;
+            width: auto;
+            filter: brightness(1.1);  /* 与 logo-icon 保持一致 */
+        }
+
+        .login-brand-tagline {
+            font-size: 1.5rem;
+            font-weight: 500;
+            line-height: 1.6;
+            margin-bottom: 60px;
+            opacity: 0.95;
+        }
+
+        .login-brand-features {
+            width: 100%;
+        }
+
+        .login-feature-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 24px;
+            text-align: left;
+            padding: 16px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s ease;
+        }
+
+        .login-feature-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+            transform: translateX(4px);
+        }
+
+        .login-feature-icon {
+            font-size: 1.5rem;
+            flex-shrink: 0;
+            width: 36px;
+            text-align: center;
+        }
+
+        .login-feature-text h4 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin: 0 0 4px 0;
+            color: #ffffff;
+        }
+
+        .login-feature-text p {
+            font-size: 0.875rem;
+            margin: 0;
+            opacity: 0.7;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        /* 右侧表单区域 */
+        .login-form-section {
+            width: 55%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px;
+            background: #ffffff;
+        }
+
+        .login-form-container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .login-form-header {
+            margin-bottom: 40px;
+        }
+
+        .login-form-header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #1a1a2e;
+            margin: 0 0 8px 0;
+        }
+
+        .login-form-header p {
+            font-size: 1rem;
+            color: #666;
+            margin: 0;
+        }
+
+        .login-form-group {
+            margin-bottom: 24px;
+        }
+
+        .login-form-group label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .login-form-group input {
+            width: 100%;
+            padding: 14px 16px;
+            font-size: 1rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: #fafafa;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+
+        .login-form-group input:focus {
+            border-color: #667eea;
+            background: #ffffff;
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+        }
+
+        .login-form-group input::placeholder {
+            color: #aaa;
+        }
+
+        #loginPageError {
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 0.875rem;
+            margin-bottom: 20px;
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+
+        #loginPageError.hidden {
+            display: none;
+        }
+
+        .login-submit-btn {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #ffffff;
+            background: var(--primary-gradient);
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .login-submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.35);
+        }
+
+        .login-submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .login-submit-btn i {
+            font-size: 1rem;
+        }
+
+        /* 响应式：移动端适配 */
+        @media (max-width: 992px) {
+            #loginPage {
+                flex-direction: column;
+            }
+
+            .login-brand-section {
+                width: 100%;
+                padding: 40px 30px;
+                min-height: auto;
+            }
+
+            .login-brand-tagline {
+                font-size: 1.25rem;
+                margin-bottom: 30px;
+            }
+
+            .login-brand-features {
+                display: none;
+            }
+
+            .login-form-section {
+                width: 100%;
+                flex: 1;
+                padding: 40px 30px;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .login-brand-section {
+                padding: 30px 20px;
+            }
+
+            .login-brand-logo img.logo-icon {
+                width: 40px;
+                height: 40px;
+            }
+
+            .login-brand-logo img.logo-text {
+                height: 28px;
+                width: auto;
+            }
+
+            .login-brand-tagline {
+                font-size: 1.1rem;
+            }
+
+            .login-form-section {
+                padding: 30px 20px;
+            }
+
+            .login-form-header h1 {
+                font-size: 1.5rem;
+            }
+        }
     </style>
 </head>
 <body>
-    <!-- 登录模态框 -->
-    <div class="modal fade" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header" style="background: var(--primary-gradient); color: white;">
-                    <h5 class="modal-title"><i class="fas fa-lock"></i> 登录</h5>
+    <!-- 全屏登录页面 -->
+    <div id="loginPage" class="hidden">
+        <!-- 左侧品牌区域 -->
+        <div class="login-brand-section">
+            <div class="login-brand-content">
+                <div class="login-brand-logo">
+                    <img src="/static/images/logo_icon.png" alt="Logo" class="logo-icon">
+                    <img src="/static/images/logo_text.png" alt="RED MUSE" class="logo-text">
                 </div>
-                <div class="modal-body">
-                    <form id="loginForm">
-                        <div class="mb-3">
-                            <label class="form-label">用户名</label>
-                            <input type="text" class="form-control" id="loginUsername" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">密码</label>
-                            <input type="password" class="form-control" id="loginPassword" required>
-                        </div>
-                        <div id="loginError" class="alert alert-danger d-none"></div>
-                        <div class="d-grid">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-sign-in-alt"></i> 登录
-                            </button>
-                        </div>
-                    </form>
+                <div class="login-brand-tagline">
+                    小红书爆款笔记分析<br>AI 驱动的内容洞察
                 </div>
+                <div class="login-brand-features">
+                    <div class="login-feature-item">
+                        <span class="login-feature-icon">&#128202;</span>
+                        <div class="login-feature-text">
+                            <h4>爆款分析</h4>
+                            <p>深度解析爆款笔记特征</p>
+                        </div>
+                    </div>
+                    <div class="login-feature-item">
+                        <span class="login-feature-icon">&#129302;</span>
+                        <div class="login-feature-text">
+                            <h4>AI 驱动</h4>
+                            <p>智能提取创作模型</p>
+                        </div>
+                    </div>
+                    <div class="login-feature-item">
+                        <span class="login-feature-icon">&#128274;</span>
+                        <div class="login-feature-text">
+                            <h4>数据安全</h4>
+                            <p>用户数据隔离存储</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧表单区域 -->
+        <div class="login-form-section">
+            <div class="login-form-container">
+                <div class="login-form-header">
+                    <h1>Welcome back</h1>
+                    <p>登录以访问您的分析数据</p>
+                </div>
+                <form id="loginForm">
+                    <div class="login-form-group">
+                        <label for="loginUsername">用户名</label>
+                        <input type="text" id="loginUsername" placeholder="请输入用户名" required>
+                    </div>
+                    <div class="login-form-group">
+                        <label for="loginPassword">密码</label>
+                        <input type="password" id="loginPassword" placeholder="请输入密码" required>
+                    </div>
+                    <div id="loginPageError" class="hidden"></div>
+                    <button type="submit" class="login-submit-btn">
+                        <i class="fas fa-sign-in-alt"></i>
+                        <span>登录</span>
+                    </button>
+                </form>
             </div>
         </div>
     </div>
@@ -2286,7 +2620,7 @@
     </div>
 
     <!-- 主内容区 -->
-    <div class="main-wrapper" id="mainWrapper">
+    <div class="main-wrapper search-only-mode" id="mainWrapper">
         <div class="container-main">
             <!-- 搜索配置卡片 -->
             <div class="card">
@@ -2385,6 +2719,9 @@
                                             </div>
                                             <div class="config-dropdown-item" data-value="0.25" onclick="selectConfigOption('viralRatio', '0.25', '前1/4', null, event)">
                                                 前1/4
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="0.2" onclick="selectConfigOption('viralRatio', '0.2', '前1/5', null, event)">
+                                                前1/5
                                             </div>
                                             <div class="config-dropdown-item" data-value="1" onclick="selectConfigOption('viralRatio', '1', '全部', null, event)">
                                                 全部（不筛选）
@@ -2976,12 +3313,10 @@
         // ==================== 认证管理 ====================
 
         let authToken = localStorage.getItem('token');
-        let loginModal = null;
         let changePasswordModal = null;
 
         // 初始化认证系统
         document.addEventListener('DOMContentLoaded', function() {
-            loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
             changePasswordModal = new bootstrap.Modal(document.getElementById('changePasswordModal'));
 
             // 加载用户头像
@@ -2996,8 +3331,10 @@
 
             // 检查是否已登录
             if (!authToken) {
-                showLoginModal();
+                showLoginPage();
             } else {
+                // 已登录，隐藏登录页，显示主内容
+                hideLoginPage();
                 // 验证 token 是否有效
                 verifyToken();
                 // 同步用户名和角色
@@ -3011,12 +3348,60 @@
             document.getElementById('changePasswordForm').addEventListener('submit', handleChangePassword);
         });
 
+        // 显示全屏登录页面
+        function showLoginPage() {
+            const loginPage = document.getElementById('loginPage');
+            const mainWrapper = document.getElementById('mainWrapper');
+            const menuToggleBtn = document.getElementById('menuToggleBtn');
+            const sidebarOverlay = document.getElementById('sidebarOverlay');
+            const logPanelFab = document.getElementById('logPanelFab');
+
+            // 完整关闭侧边栏（清理 body/mainWrapper 上的 sidebar-open class）
+            closeSidebar();
+            // 完整关闭日志面板（清理 body 上的 log-panel-open class）
+            closeLogPanel();
+
+            loginPage.classList.remove('hidden');
+            mainWrapper.style.display = 'none';
+            if (menuToggleBtn) menuToggleBtn.style.display = 'none';
+            if (sidebarOverlay) sidebarOverlay.style.display = 'none';
+            if (logPanelFab) logPanelFab.style.display = 'none';
+
+            // 清空表单
+            document.getElementById('loginUsername').value = '';
+            document.getElementById('loginPassword').value = '';
+            document.getElementById('loginPageError').classList.add('hidden');
+        }
+
+        // 隐藏登录页面，显示主内容
+        function hideLoginPage() {
+            const loginPage = document.getElementById('loginPage');
+            const mainWrapper = document.getElementById('mainWrapper');
+            const menuToggleBtn = document.getElementById('menuToggleBtn');
+            const sidebarOverlay = document.getElementById('sidebarOverlay');
+            const logPanelFab = document.getElementById('logPanelFab');
+
+            loginPage.classList.add('hidden');
+            mainWrapper.style.display = '';
+            if (menuToggleBtn) menuToggleBtn.style.display = '';
+            if (sidebarOverlay) sidebarOverlay.style.display = '';
+            if (logPanelFab) logPanelFab.style.display = '';
+        }
+
+        // 兼容旧的函数名
         function showLoginModal() {
-            loginModal.show();
+            showLoginPage();
         }
 
         function hideLoginModal() {
-            loginModal.hide();
+            hideLoginPage();
+        }
+
+        // 显示修改密码模态框
+        function showChangePasswordModal() {
+            if (changePasswordModal) {
+                changePasswordModal.show();
+            }
         }
 
         async function verifyToken() {
@@ -3043,7 +3428,10 @@
             e.preventDefault();
             const username = document.getElementById('loginUsername').value;
             const password = document.getElementById('loginPassword').value;
-            const errorDiv = document.getElementById('loginError');
+            const errorDiv = document.getElementById('loginPageError');
+
+            // 隐藏之前的错误
+            errorDiv.classList.add('hidden');
 
             try {
                 const response = await fetch('/api/auth/login', {
@@ -3062,7 +3450,7 @@
                     setSidebarUsername(data.username || username);
                     updateAdminUI(data.role);
                     loadUserAvatar();  // 加载该用户的头像
-                    hideLoginModal();
+                    hideLoginPage();
 
                     // 检查是否需要强制修改密码
                     if (data.must_change_password) {
@@ -3077,11 +3465,11 @@
                     }
                 } else {
                     errorDiv.textContent = data.detail || '登录失败';
-                    errorDiv.classList.remove('d-none');
+                    errorDiv.classList.remove('hidden');
                 }
             } catch (error) {
                 errorDiv.textContent = '网络错误：' + error.message;
-                errorDiv.classList.remove('d-none');
+                errorDiv.classList.remove('hidden');
             }
         }
 
@@ -3092,6 +3480,9 @@
             if (!confirm('确定要退出登录吗？')) {
                 return;
             }
+
+            // 关闭侧边栏
+            closeSidebar();
 
             // 关闭所有可能打开的模态框
             const openModals = document.querySelectorAll('.modal.show');
@@ -3111,8 +3502,8 @@
             // 重置头像为默认图标
             loadUserAvatar();
 
-            // 显示登录模态框
-            showLoginModal();
+            // 显示全屏登录页面
+            showLoginPage();
 
             // 清空敏感数据显示
             document.getElementById('sidebarUsername').textContent = '未登录';
@@ -3120,7 +3511,7 @@
             document.getElementById('cookieStatus').innerHTML = '';
             updateCookieIndicator(false);
 
-            console.log('✅ 已退出登录');
+            console.log('已退出登录');
         }
 
         async function handleChangePassword(e) {
@@ -4338,7 +4729,7 @@
             });
 
             // 更新爆款比例
-            const viralRatioMap = { '0.5': '前1/2', '0.33': '前1/3', '0.25': '前1/4', '1': '全部' };
+            const viralRatioMap = { '0.5': '前1/2', '0.33': '前1/3', '0.25': '前1/4', '0.2': '前1/5', '1': '全部' };
             if (viralRatioMap[viralRatioVal]) {
                 document.getElementById('viralRatioLabel').textContent = viralRatioMap[viralRatioVal];
             }
@@ -4391,6 +4782,8 @@
             collectionNoteType = formData.note_type;
 
             document.getElementById('progressResultCard').style.display = 'block';
+            // 退出搜索框居中模式，切换到正常布局
+            document.getElementById('mainWrapper').classList.remove('search-only-mode');
             // 开始采集时立即滚动到进度概览区域
             scrollToProgressCard();
             // 显示期望分析数量（用户关心的是最终分析多少，而非采集多少）
@@ -5141,6 +5534,8 @@
                 });
 
                 document.getElementById('progressResultCard').style.display = 'block';
+                // 退出搜索框居中模式
+                document.getElementById('mainWrapper').classList.remove('search-only-mode');
                 await loadAnalysisResults();
 
                 closeSidebar();

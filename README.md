@@ -1946,6 +1946,26 @@ python3 tests/test_knowledge_base.py
 </div>
 
 
+## 📝 更新日志
+
+### 2026-01-23 前端 UI 优化
+
+#### 🎨 登录页面 Logo 修复
+- **Logo 文字显示修复**：移除错误的 `filter: brightness(0) invert(1)` CSS 规则，让 "RED MUSE" 渐变文字正常显示
+- **Logo 色差修复**：统一 Logo 图标和文字的 `brightness(1.1)` filter，解决视觉色差问题
+- **Logo 背景透明化**：将 `logo_icon.png` 和 `logo_text.png` 的白色背景转换为透明，适配深色背景
+
+#### 🔧 登录状态管理优化
+- **Class 残留修复**：`showLoginPage()` 函数现在正确调用 `closeSidebar()` 和 `closeLogPanel()`，确保登出时完整清理 `body.sidebar-open`、`body.log-panel-open` 等残留 class
+
+#### 🖼️ 侧边栏优化
+- **移除背景模糊**：删除侧边栏遮罩层的 `backdrop-filter: blur(4px)` 效果，打开侧边栏时背景保持清晰可见
+
+#### 📐 布局调整
+- **搜索配置框居中**：将搜索配置框从页面中上位置调整到页面正中间（使用 Flexbox 垂直居中）
+
+---
+
 ## 📈 Star 趋势
 <a href="https://www.star-history.com/#cv-cat/Spider_XHS&Date">
  <picture>
