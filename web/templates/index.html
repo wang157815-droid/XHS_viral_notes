@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小红书爆文笔记生成Agent</title>
+    <title>RED MUSE</title>
+    <link rel="icon" type="image/png" href="/static/images/favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/main.css">
@@ -393,11 +394,210 @@
             background: var(--color-surface);
         }
 
-        /* 笔记类型和时间范围下拉框宽度自适应 */
-        #noteType,
-        #timeRange {
-            width: auto;
-            min-width: 90px;
+        /* ==================== 统一搜索框样式 ==================== */
+        .unified-search-box {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 16px;
+            padding: 16px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .unified-search-box:focus-within {
+            border-color: #667eea;
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.12);
+        }
+
+        /* 搜索框上半部分：关键词输入区 */
+        .search-input-area {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            min-height: 40px;
+        }
+
+        /* 分隔线 */
+        .search-divider {
+            height: 1px;
+            background: #e8e8e8;
+            margin: 12px 0;
+        }
+
+        /* 配置标签区域 */
+        .config-tags-area {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        /* 配置标签按钮 */
+        .config-tag {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: #f5f5f5;
+            border: 1px solid transparent;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #555;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            user-select: none;
+            white-space: nowrap;
+        }
+
+        .config-tag:hover {
+            background: #ebebeb;
+            border-color: #667eea;
+            color: #667eea;
+        }
+
+        .config-tag .tag-icon {
+            font-size: 0.95em;
+        }
+
+        .config-tag .tag-value {
+            font-weight: 600;
+        }
+
+        .config-tag .tag-arrow {
+            font-size: 0.7em;
+            margin-left: 2px;
+            opacity: 0.6;
+            transition: transform 0.2s;
+        }
+
+        .config-tag.dropdown-open .tag-arrow {
+            transform: rotate(180deg);
+        }
+
+        /* 下拉菜单样式 */
+        .config-dropdown {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            min-width: 140px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            padding: 6px;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-8px);
+            transition: all 0.2s ease;
+        }
+
+        .config-dropdown.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .config-dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #333;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .config-dropdown-item:hover {
+            background: #f5f5f5;
+        }
+
+        .config-dropdown-item.selected {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .config-dropdown-item .item-icon {
+            font-size: 1em;
+            opacity: 0.85;
+        }
+
+        /* 数值输入下拉框 */
+        .config-dropdown-input {
+            padding: 10px;
+        }
+
+        .config-dropdown-input input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            outline: none;
+            margin-bottom: 8px;
+            transition: border-color 0.2s;
+        }
+
+        .config-dropdown-input input:focus {
+            border-color: #667eea;
+        }
+
+        .config-dropdown-presets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .config-dropdown-preset {
+            padding: 5px 12px;
+            border-radius: 16px;
+            background: #f0f0f0;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .config-dropdown-preset:hover {
+            background: #e0e0e0;
+        }
+
+        .config-dropdown-preset.selected {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        /* 隐藏原始表单控件 */
+        .hidden-form-control {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+            width: 0;
+            height: 0;
+        }
+
+        /* 配置标签错误/警告状态 */
+        .config-tag.config-tag-error {
+            animation: tagShake 0.3s ease;
+            border-color: #dc3545 !important;
+        }
+
+        .config-tag.config-tag-warning {
+            animation: tagPulse 1.5s infinite;
+            border-color: #ffc107 !important;
+        }
+
+        @keyframes tagShake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-3px); }
+            40%, 80% { transform: translateX(3px); }
+        }
+
+        @keyframes tagPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
         }
 
         /* 按钮样式 */
@@ -568,14 +768,16 @@
             -webkit-backdrop-filter: blur(4px);
             opacity: 0;
             visibility: hidden;
+            pointer-events: none;
             transition: all var(--duration-medium) var(--ease-standard);
             z-index: 1040;
-            display: none;
+            display: block; /* 始终渲染，通过 opacity/visibility 控制显隐 */
         }
 
         .sidebar-overlay.show {
             opacity: 1;
             visibility: visible;
+            pointer-events: auto; /* 显示时可点击 */
         }
 
         /* ==================== 主内容区样式 ==================== */
@@ -597,9 +799,6 @@
             }
             .main-wrapper.sidebar-open {
                 margin-left: 0;  /* 移动端不推挤，使用遮罩覆盖模式 */
-            }
-            .sidebar-overlay {
-                display: block;
             }
         }
 
@@ -1039,23 +1238,6 @@
         }
 
         /* ==================== 多关键词标签输入样式 ==================== */
-        .keyword-tags-container {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            padding: 8px 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            background: white;
-            min-height: 50px;
-            transition: border-color 0.3s, box-shadow 0.3s;
-        }
-
-        .keyword-tags-container:focus-within {
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
-        }
-
         .keyword-tags {
             display: flex;
             flex-wrap: wrap;
@@ -1244,7 +1426,7 @@
         .sidebar-logo {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 0;
             margin-bottom: 12px;
             position: relative;
         }
@@ -1254,6 +1436,7 @@
             height: 40px;
             object-fit: contain;
             flex-shrink: 0;
+            margin-right: -25px; /* 抵消图片右侧白边 */
         }
 
         .sidebar-logo-text {
@@ -1261,6 +1444,14 @@
             font-size: 1rem;
             color: var(--color-on-surface);
             flex: 1;
+        }
+
+        /* 图片版 Logo 文字 */
+        .sidebar-logo-text-img {
+            height: 28px;
+            object-fit: contain;
+            flex: 1;
+            margin-left: -5px; /* 抵消图片左侧白边 */
         }
 
         .sidebar-logo-text small {
@@ -1533,133 +1724,141 @@
             display: block;
         }
 
-        /* ==================== 实时日志面板样式 ==================== */
+        /* ==================== 右侧日志面板样式 (Gemini 浅色风格) ==================== */
         .log-panel {
             position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 380px;
-            max-height: 340px;
+            top: 0;
+            right: 0;
+            width: 420px;
+            height: 100vh;
             background: var(--color-surface);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-3);
-            z-index: 1030;
+            box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
+            z-index: 1045; /* 高于侧边栏遮罩层(1040)，确保可交互 */
             display: flex;
             flex-direction: column;
-            transition: all var(--duration-medium) var(--ease-standard);
-            border: 1px solid var(--color-outline-variant);
-            overflow: hidden;
+            transform: translateX(100%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: var(--radius-lg) 0 0 var(--radius-lg);
         }
 
-        .log-panel.collapsed {
-            max-height: 48px;
-            width: 180px;
+        .log-panel.open {
+            transform: translateX(0);
+        }
+
+        /* 日志面板打开时主内容区被挤压 */
+        body.log-panel-open .main-wrapper {
+            margin-right: 420px;
+            transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .log-panel-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 12px 16px;
+            padding: 16px 20px;
             background: var(--gemini-gradient);
-            color: white;
-            cursor: pointer;
+            border-radius: var(--radius-lg) 0 0 0;
             flex-shrink: 0;
-            user-select: none;
-        }
-
-        .log-panel-header:hover {
-            opacity: 0.95;
         }
 
         .log-panel-title {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-weight: 500;
-            font-size: 0.9rem;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            color: #ffffff;
         }
 
         .log-panel-title i {
-            font-size: 1rem;
+            font-size: 1.1rem;
+            color: #ffffff;
         }
 
         .log-panel-badge {
-            background: #ff4757;
+            background: rgba(255, 255, 255, 0.25);
             color: white;
             font-size: 0.7rem;
-            padding: 2px 6px;
+            padding: 2px 8px;
             border-radius: 10px;
-            min-width: 18px;
+            min-width: 20px;
             text-align: center;
+            animation: badgePulse 1.5s ease-in-out infinite;
+            backdrop-filter: blur(4px);
+        }
+
+        .log-panel-badge.hidden {
             display: none;
-            animation: badgePulse 1s ease-in-out infinite;
         }
 
         @keyframes badgePulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
         }
 
-        .log-panel.collapsed .log-panel-badge.has-new {
-            display: inline-block;
-        }
-
-        .log-panel-toggle {
-            background: none;
+        .log-panel-close {
+            background: rgba(255, 255, 255, 0.15);
             border: none;
-            color: white;
+            color: #ffffff;
             cursor: pointer;
-            padding: 4px;
-            font-size: 0.9rem;
-            transition: transform var(--duration-short) var(--ease-standard);
+            padding: 8px;
+            font-size: 1.1rem;
+            border-radius: 8px;
+            transition: all 0.2s;
+            backdrop-filter: blur(4px);
         }
 
-        .log-panel.collapsed .log-panel-toggle {
-            transform: rotate(180deg);
+        .log-panel-close:hover {
+            background: rgba(255, 255, 255, 0.3);
+            color: #ffffff;
         }
 
         .log-panel-content {
             flex: 1;
             overflow-y: auto;
             padding: 0;
-            max-height: 280px;
-        }
-
-        .log-panel.collapsed .log-panel-content {
-            display: none;
+            background: var(--color-surface);
         }
 
         .log-panel-content::-webkit-scrollbar {
-            width: 6px;
+            width: 8px;
         }
 
         .log-panel-content::-webkit-scrollbar-track {
-            background: transparent;
+            background: var(--color-background);
         }
 
         .log-panel-content::-webkit-scrollbar-thumb {
-            background: var(--color-outline-variant);
-            border-radius: 3px;
+            background: #d1d5db;
+            border-radius: 4px;
+        }
+
+        .log-panel-content::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
         }
 
         .log-entry {
             display: flex;
-            gap: 10px;
-            padding: 10px 14px;
-            font-size: 0.82rem;
-            border-bottom: 1px solid var(--color-outline-variant);
-            animation: logSlideIn 0.2s ease;
+            gap: 12px;
+            padding: 12px 20px;
+            font-size: 0.85rem;
+            border-bottom: 1px solid #f0f0f0;
+            animation: logFadeIn 0.25s ease;
+            background: var(--color-surface);
         }
 
-        @keyframes logSlideIn {
+        .log-entry:hover {
+            background: var(--color-background);
+        }
+
+        @keyframes logFadeIn {
             from {
                 opacity: 0;
-                transform: translateX(10px);
+                transform: translateY(-5px);
             }
             to {
                 opacity: 1;
-                transform: translateX(0);
+                transform: translateY(0);
             }
         }
 
@@ -1668,47 +1867,172 @@
         }
 
         .log-entry .log-time {
-            color: var(--color-on-surface-variant);
-            font-family: 'Consolas', 'Monaco', monospace;
+            color: #9ca3af;
+            font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
             font-size: 0.75rem;
             flex-shrink: 0;
+            min-width: 65px;
         }
 
         .log-entry .log-message {
             flex: 1;
             word-break: break-word;
-            line-height: 1.4;
+            line-height: 1.5;
+            color: #4b5563;
         }
 
-        .log-entry.log-info .log-message { color: var(--color-on-surface); }
-        .log-entry.log-success .log-message { color: #2e7d32; }
-        .log-entry.log-warning .log-message { color: #ed6c02; }
-        .log-entry.log-error .log-message { color: #d32f2f; font-weight: 500; }
+        /* 日志级别颜色 - 浅色主题优化 */
+        .log-entry.log-info .log-message { color: #4b5563; }
+        .log-entry.log-success .log-message { color: #059669; }
+        .log-entry.log-warning .log-message { color: #d97706; }
+        .log-entry.log-error .log-message { color: #dc2626; font-weight: 500; }
+
+        /* 日志级别图标 */
+        .log-entry::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-top: 5px;
+        }
+        .log-entry.log-info::before { background: #9ca3af; }
+        .log-entry.log-success::before { background: #10b981; }
+        .log-entry.log-warning::before { background: #f59e0b; }
+        .log-entry.log-error::before { background: #ef4444; }
 
         .log-empty {
             text-align: center;
-            padding: 24px;
-            color: var(--color-on-surface-variant);
-            font-size: 0.85rem;
+            padding: 60px 20px;
+            color: #9ca3af;
+            font-size: 0.9rem;
         }
 
         .log-empty i {
-            font-size: 2rem;
-            margin-bottom: 8px;
+            font-size: 3rem;
+            margin-bottom: 16px;
             opacity: 0.5;
             display: block;
+            background: var(--gemini-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* 日志面板底部状态栏 */
+        .log-panel-footer {
+            padding: 12px 20px;
+            background: var(--color-background);
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: #6b7280;
+            border-radius: 0 0 0 var(--radius-lg);
+        }
+
+        .log-panel-footer button {
+            background: var(--primary-gradient);
+            border: none;
+            color: #ffffff;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+        }
+
+        .log-panel-footer button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+        }
+
+        /* 日志面板悬浮按钮 - 关闭后显示 */
+        .log-panel-fab {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: var(--gemini-gradient);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-3);
+            z-index: 1040;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0;
+            transform: scale(0.8) translateY(20px);
+            pointer-events: none;
+        }
+
+        .log-panel-fab.visible {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            pointer-events: auto;
+        }
+
+        .log-panel-fab:hover {
+            transform: scale(1.05) translateY(-2px);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+        }
+
+        .log-panel-fab:active {
+            transform: scale(0.98);
+        }
+
+        .log-panel-fab i {
+            font-size: 1.4rem;
+            color: #ffffff;
+        }
+
+        .log-panel-fab .fab-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            min-width: 20px;
+            height: 20px;
+            padding: 0 6px;
+            background: #ef4444;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 600;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 4px rgba(239, 68, 68, 0.4);
+        }
+
+        .log-panel-fab .fab-badge.hidden {
+            display: none;
         }
 
         /* 移动端适配 */
-        @media (max-width: 576px) {
+        @media (max-width: 768px) {
             .log-panel {
-                width: calc(100% - 40px);
-                right: 20px;
-                left: 20px;
+                width: 100%;
+                border-radius: var(--radius-lg) var(--radius-lg) 0 0;
             }
-            .log-panel.collapsed {
-                width: 160px;
-                left: auto;
+            .log-panel-header {
+                border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+            }
+            .log-panel-footer {
+                border-radius: 0;
+            }
+            body.log-panel-open .main-wrapper {
+                margin-right: 0;
+            }
+            .log-panel-fab {
+                bottom: 16px;
+                right: 16px;
+                width: 52px;
+                height: 52px;
             }
         }
     </style>
@@ -1800,9 +2124,7 @@
         <div class="sidebar-top">
             <div class="sidebar-logo">
                 <img src="/static/images/logo_icon.png" alt="Logo" class="sidebar-logo-icon">
-                <div class="sidebar-logo-text">
-                    爆文模型Agent
-                </div>
+                <img src="/static/images/logo_text.png" alt="RED MUSE" class="sidebar-logo-text-img">
                 <button class="sidebar-collapse-btn" onclick="closeSidebar()" title="收起侧边栏">
                     <i class="fas fa-chevron-left"></i>
                 </button>
@@ -1973,44 +2295,149 @@
                 </div>
                 <div class="card-body">
                     <form id="searchForm">
-                        <!-- 多关键词输入区域 -->
+                        <!-- 统一搜索框 -->
                         <div class="mb-3">
-                            <label class="form-label">
-                                搜索关键词
-                            </label>
-                            <div class="keyword-tags-container" id="keywordTagsContainer">
-                                <div class="keyword-tags" id="keywordTags">
-                                    <!-- 动态添加的关键词标签 -->
+                            <div class="unified-search-box" id="unifiedSearchBox">
+                                <!-- 上半部分：关键词输入区 -->
+                                <div class="search-input-area">
+                                    <div class="keyword-tags" id="keywordTags">
+                                        <!-- 动态添加的关键词标签 -->
+                                    </div>
+                                    <input type="text" class="keyword-input" id="keywordInput"
+                                           placeholder="输入关键词，按回车添加..." maxlength="30">
                                 </div>
-                                <input type="text" class="keyword-input" id="keywordInput"
-                                       placeholder="输入关键词，按回车添加" maxlength="30">
+
+                                <!-- 分隔线 -->
+                                <div class="search-divider"></div>
+
+                                <!-- 下半部分：配置标签区 -->
+                                <div class="config-tags-area">
+                                    <!-- 笔记类型 -->
+                                    <div class="config-tag" id="noteTypeTag" onclick="openConfigDropdown('noteType', event)">
+                                        <span class="tag-icon" id="noteTypeIcon">&#128249;</span>
+                                        <span class="tag-value" id="noteTypeLabel">视频</span>
+                                        <span class="tag-arrow">&#9660;</span>
+                                        <div class="config-dropdown" id="noteTypeDropdown">
+                                            <div class="config-dropdown-item selected" data-value="1" onclick="selectConfigOption('noteType', '1', '视频', '&#128249;', event)">
+                                                <span class="item-icon">&#128249;</span> 视频
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="2" onclick="selectConfigOption('noteType', '2', '图文', '&#128444;', event)">
+                                                <span class="item-icon">&#128444;</span> 图文
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="0" onclick="selectConfigOption('noteType', '0', '不限', '&#128196;', event)">
+                                                <span class="item-icon">&#128196;</span> 不限
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 时间范围 -->
+                                    <div class="config-tag" id="timeRangeTag" onclick="openConfigDropdown('timeRange', event)">
+                                        <span class="tag-icon">&#128197;</span>
+                                        <span class="tag-value" id="timeRangeLabel">半年内</span>
+                                        <span class="tag-arrow">&#9660;</span>
+                                        <div class="config-dropdown" id="timeRangeDropdown">
+                                            <div class="config-dropdown-item selected" data-value="3" onclick="selectConfigOption('timeRange', '3', '半年内', null, event)">
+                                                半年内
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="2" onclick="selectConfigOption('timeRange', '2', '一周内', null, event)">
+                                                一周内
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="1" onclick="selectConfigOption('timeRange', '1', '一天内', null, event)">
+                                                一天内
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="0" onclick="selectConfigOption('timeRange', '0', '不限', null, event)">
+                                                不限
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 目标数量 -->
+                                    <div class="config-tag" id="targetCountTag" onclick="openConfigDropdown('targetCount', event)">
+                                        <span class="tag-icon">&#127919;</span>
+                                        <span class="tag-value"><span id="targetCountLabel">100</span>条</span>
+                                        <span class="tag-arrow">&#9660;</span>
+                                        <div class="config-dropdown" id="targetCountDropdown">
+                                            <div class="config-dropdown-input">
+                                                <input type="number" id="targetCountInput" value="100" min="30" max="800"
+                                                       placeholder="30-800" onclick="event.stopPropagation()"
+                                                       oninput="updateTargetCountFromInput()">
+                                                <div class="config-dropdown-presets">
+                                                    <span class="config-dropdown-preset" onclick="selectTargetCount(50, event)">50</span>
+                                                    <span class="config-dropdown-preset selected" onclick="selectTargetCount(100, event)">100</span>
+                                                    <span class="config-dropdown-preset" onclick="selectTargetCount(200, event)">200</span>
+                                                    <span class="config-dropdown-preset" onclick="selectTargetCount(500, event)">500</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 爆款比例 -->
+                                    <div class="config-tag" id="viralRatioTag" onclick="openConfigDropdown('viralRatio', event)">
+                                        <span class="tag-icon">&#128293;</span>
+                                        <span class="tag-value" id="viralRatioLabel">前1/2</span>
+                                        <span class="tag-arrow">&#9660;</span>
+                                        <div class="config-dropdown" id="viralRatioDropdown">
+                                            <div class="config-dropdown-item selected" data-value="0.5" onclick="selectConfigOption('viralRatio', '0.5', '前1/2', null, event)">
+                                                前1/2（推荐）
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="0.33" onclick="selectConfigOption('viralRatio', '0.33', '前1/3', null, event)">
+                                                前1/3
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="0.25" onclick="selectConfigOption('viralRatio', '0.25', '前1/4', null, event)">
+                                                前1/4
+                                            </div>
+                                            <div class="config-dropdown-item" data-value="1" onclick="selectConfigOption('viralRatio', '1', '全部', null, event)">
+                                                全部（不筛选）
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- 最低样本 -->
+                                    <div class="config-tag" id="minSampleTag" onclick="openConfigDropdown('minSample', event)">
+                                        <span class="tag-icon">&#128202;</span>
+                                        <span class="tag-value">至少<span id="minSampleLabel">50</span>条</span>
+                                        <span class="tag-arrow">&#9660;</span>
+                                        <div class="config-dropdown" id="minSampleDropdown">
+                                            <div class="config-dropdown-input">
+                                                <input type="number" id="minSampleInput" value="50" min="5" max="200"
+                                                       placeholder="5-200" onclick="event.stopPropagation()"
+                                                       oninput="updateMinSampleFromInput()">
+                                                <div class="config-dropdown-presets">
+                                                    <span class="config-dropdown-preset" onclick="selectMinSample(30, event)">30</span>
+                                                    <span class="config-dropdown-preset selected" onclick="selectMinSample(50, event)">50</span>
+                                                    <span class="config-dropdown-preset" onclick="selectMinSample(100, event)">100</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             <div class="d-flex justify-content-end align-items-center mt-2">
                                 <small class="text-muted" id="keywordCount">已添加: 0/5</small>
                             </div>
                         </div>
-                        <!-- 采集配置（三列输入框样式） -->
-                        <div class="row mb-4">
-                            <div class="col-md-4">
-                                <label class="form-label">目标数量</label>
-                                <input type="number" class="form-control" id="targetCount" value="100" min="30" max="800">
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">爆款筛选比例</label>
-                                <select class="form-select" id="viralRatioSelect">
-                                    <option value="1">全部（不筛选）</option>
-                                    <option value="0.5" selected>前 1/2（推荐）</option>
-                                    <option value="0.33">前 1/3</option>
-                                    <option value="0.25">前 1/4</option>
-                                    <option value="0.2">前 1/5</option>
-                                </select>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">最低分析样本量</label>
-                                <input type="number" class="form-control" id="minSampleCount" value="50" min="5" max="200">
-                            </div>
-                        </div>
-                        <!-- 隐藏字段保持JS兼容 -->
+
+                        <!-- 隐藏的原始表单控件（保持JS兼容） -->
+                        <input type="number" class="hidden-form-control" id="targetCount" value="100" min="30" max="800">
+                        <select class="hidden-form-control" id="viralRatioSelect">
+                            <option value="1">全部（不筛选）</option>
+                            <option value="0.5" selected>前 1/2（推荐）</option>
+                            <option value="0.33">前 1/3</option>
+                            <option value="0.25">前 1/4</option>
+                            <option value="0.2">前 1/5</option>
+                        </select>
+                        <input type="number" class="hidden-form-control" id="minSampleCount" value="50" min="5" max="200">
+                        <select class="hidden-form-control" id="noteType">
+                            <option value="1" selected>视频</option>
+                            <option value="2">图文</option>
+                            <option value="0">不限</option>
+                        </select>
+                        <select class="hidden-form-control" id="timeRange">
+                            <option value="3" selected>半年内</option>
+                            <option value="2">一周内</option>
+                            <option value="1">一天内</option>
+                            <option value="0">不限</option>
+                        </select>
                         <input type="hidden" id="viralRatio" value="0.5">
                         <span id="estAnalysis" style="display:none">50-60</span>
                         <span id="estTime" style="display:none">~5分钟</span>
@@ -2018,29 +2445,7 @@
                         <span id="estCollect" style="display:none">~100条</span>
                         <span id="estDedupe" style="display:none">~70条</span>
                         <span id="estViral" style="display:none">~50条</span>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">笔记类型</label>
-                                    <select class="form-select" id="noteType">
-                                        <option value="1" selected>视频</option>
-                                        <option value="2">图文</option>
-                                        <option value="0">不限</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">时间范围</label>
-                                    <select class="form-select" id="timeRange">
-                                        <option value="3" selected>半年内</option>
-                                        <option value="2">一周内</option>
-                                        <option value="1">一天内</option>
-                                        <option value="0">不限</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
+
                         <!-- 配置验证提示区 -->
                         <div id="configValidationArea" class="mb-3" style="display: none;">
                             <!-- 错误提示（阻止提交） -->
@@ -2206,25 +2611,35 @@
         </div>
     </div>
 
-    <!-- 实时日志面板 -->
-    <div class="log-panel collapsed" id="logPanel">
-        <div class="log-panel-header" onclick="toggleLogPanel()">
+    <!-- 右侧执行日志面板 (Gemini 浅色风格) -->
+    <div class="log-panel" id="logPanel">
+        <div class="log-panel-header">
             <div class="log-panel-title">
                 <i class="fas fa-terminal"></i>
                 <span>执行日志</span>
-                <span class="log-panel-badge" id="logBadge">0</span>
+                <span class="log-panel-badge hidden" id="logBadge">0</span>
             </div>
-            <button class="log-panel-toggle" title="展开/折叠">
-                <i class="fas fa-chevron-up"></i>
+            <button class="log-panel-close" onclick="closeLogPanel()" title="关闭">
+                <i class="fas fa-times"></i>
             </button>
         </div>
         <div class="log-panel-content" id="logContent">
             <div class="log-empty">
-                <i class="fas fa-inbox"></i>
-                暂无日志，启动任务后将显示执行进度
+                <i class="fas fa-rocket"></i>
+                点击「开始采集」后<br>执行日志将在这里实时显示
             </div>
         </div>
+        <div class="log-panel-footer">
+            <span id="logCount">共 0 条日志</span>
+            <button onclick="clearLogs()"><i class="fas fa-trash-alt"></i> 清空</button>
+        </div>
     </div>
+
+    <!-- 日志面板悬浮按钮 - 关闭后显示 -->
+    <button class="log-panel-fab" id="logPanelFab" onclick="openLogPanel()" title="打开执行日志">
+        <i class="fas fa-terminal"></i>
+        <span class="fab-badge hidden" id="fabBadge">0</span>
+    </button>
 
     <!-- 知识库管理模态框 -->
     <div class="modal fade" id="knowledgeModal" tabindex="-1">
@@ -3363,12 +3778,20 @@
             const input = document.getElementById('keywordInput');
             const tagsContainer = document.getElementById('keywordTags');
 
-            // 回车添加关键词
+            // 回车添加关键词，Delete/Backspace 删除最后一个
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     addSearchKeyword(input.value.trim());
                     input.value = '';
+                }
+                // 输入框为空时，按 Delete 或 Backspace 删除最后一个关键词
+                if ((e.key === 'Delete' || e.key === 'Backspace') && input.value === '' && keywordList.length > 0) {
+                    e.preventDefault();
+                    keywordList.pop();
+                    renderKeywordTags();
+                    updateKeywordCount();
+                    updateSampleEstimate();
                 }
             });
 
@@ -3380,9 +3803,12 @@
                 }
             });
 
-            // 点击容器聚焦输入框
-            document.getElementById('keywordTagsContainer').addEventListener('click', () => {
-                input.focus();
+            // 点击搜索框上半部分聚焦输入框
+            document.querySelector('.search-input-area').addEventListener('click', (e) => {
+                // 不要在点击关键词删除按钮时聚焦
+                if (!e.target.closest('.tag-remove')) {
+                    input.focus();
+                }
             });
         }
 
@@ -3637,38 +4063,52 @@
         }
 
         /**
-         * 高亮显示有问题的输入框
+         * 高亮显示有问题的配置标签
          * @param {string[]} errorFieldIds - 错误字段（红色边框）
          * @param {string[]} warningFieldIds - 警告字段（黄色边框）
          */
         function highlightProblemInputs(errorFieldIds = [], warningFieldIds = []) {
-            // 所有可能需要高亮的字段
-            const allFields = ['targetCount', 'viralRatioSelect', 'minSampleCount', 'noteType', 'timeRange'];
+            // 字段ID到配置标签ID的映射
+            const fieldToTagMap = {
+                'targetCount': 'targetCountTag',
+                'viralRatioSelect': 'viralRatioTag',
+                'minSampleCount': 'minSampleTag',
+                'noteType': 'noteTypeTag',
+                'timeRange': 'timeRangeTag'
+            };
+
+            // 所有配置标签
+            const allTags = Object.values(fieldToTagMap);
 
             // 清除所有高亮
-            allFields.forEach(id => {
-                const el = document.getElementById(id);
+            allTags.forEach(tagId => {
+                const el = document.getElementById(tagId);
                 if (el) {
-                    el.classList.remove('is-invalid', 'border-warning', 'border-danger');
+                    el.classList.remove('config-tag-error', 'config-tag-warning');
                     el.style.boxShadow = '';
+                    el.style.borderColor = '';
                 }
             });
 
             // 添加错误高亮（红色，优先级最高）
             errorFieldIds.forEach(id => {
-                const el = document.getElementById(id);
+                const tagId = fieldToTagMap[id];
+                const el = tagId ? document.getElementById(tagId) : null;
                 if (el) {
-                    el.classList.add('border-danger');
-                    el.style.boxShadow = '0 0 0 0.2rem rgba(220, 53, 69, 0.25)';
+                    el.classList.add('config-tag-error');
+                    el.style.borderColor = '#dc3545';
+                    el.style.boxShadow = '0 0 0 2px rgba(220, 53, 69, 0.3)';
                 }
             });
 
             // 添加警告高亮（黄色，仅对非错误字段）
             warningFieldIds.forEach(id => {
-                const el = document.getElementById(id);
+                const tagId = fieldToTagMap[id];
+                const el = tagId ? document.getElementById(tagId) : null;
                 if (el && !errorFieldIds.includes(id)) {
-                    el.classList.add('border-warning');
-                    el.style.boxShadow = '0 0 0 0.2rem rgba(255, 193, 7, 0.25)';
+                    el.classList.add('config-tag-warning');
+                    el.style.borderColor = '#ffc107';
+                    el.style.boxShadow = '0 0 0 2px rgba(255, 193, 7, 0.3)';
                 }
             });
         }
@@ -3699,6 +4139,226 @@
 
         // 页面加载后初始化
         setTimeout(initKeywordInput, 100);
+
+        // ==================== 配置标签下拉菜单逻辑 ====================
+
+        // 当前打开的下拉菜单
+        let activeDropdown = null;
+        let activeTag = null;
+
+        // 打开配置下拉菜单
+        function openConfigDropdown(configType, event) {
+            event.stopPropagation();
+
+            const dropdownId = configType + 'Dropdown';
+            const tagId = configType + 'Tag';
+            const dropdown = document.getElementById(dropdownId);
+            const tag = document.getElementById(tagId);
+
+            if (!dropdown) return;
+
+            // 关闭其他下拉菜单
+            if (activeDropdown && activeDropdown !== dropdown) {
+                activeDropdown.classList.remove('show');
+                if (activeTag) activeTag.classList.remove('dropdown-open');
+            }
+
+            // 切换当前下拉菜单
+            if (dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+                tag.classList.remove('dropdown-open');
+                activeDropdown = null;
+                activeTag = null;
+            } else {
+                dropdown.classList.add('show');
+                tag.classList.add('dropdown-open');
+                activeDropdown = dropdown;
+                activeTag = tag;
+
+                // 如果有输入框，聚焦它
+                const input = dropdown.querySelector('input[type="number"]');
+                if (input) {
+                    setTimeout(() => input.focus(), 50);
+                }
+            }
+        }
+
+        // 选择配置选项（笔记类型、时间范围、爆款比例）
+        function selectConfigOption(configType, value, label, icon, event) {
+            event.stopPropagation();
+
+            // 更新隐藏表单控件
+            if (configType === 'noteType') {
+                document.getElementById('noteType').value = value;
+                document.getElementById('noteTypeLabel').textContent = label;
+                if (icon) document.getElementById('noteTypeIcon').innerHTML = icon;
+            } else if (configType === 'timeRange') {
+                document.getElementById('timeRange').value = value;
+                document.getElementById('timeRangeLabel').textContent = label;
+            } else if (configType === 'viralRatio') {
+                document.getElementById('viralRatioSelect').value = value;
+                document.getElementById('viralRatioLabel').textContent = label;
+            }
+
+            // 更新下拉菜单选中状态
+            const dropdown = document.getElementById(configType + 'Dropdown');
+            if (dropdown) {
+                dropdown.querySelectorAll('.config-dropdown-item').forEach(item => {
+                    item.classList.toggle('selected', item.dataset.value === value);
+                });
+            }
+
+            // 关闭下拉菜单
+            closeActiveDropdown();
+
+            // 触发验证更新
+            updateEstimateFlow();
+        }
+
+        // 选择目标数量
+        function selectTargetCount(value, event) {
+            event.stopPropagation();
+
+            document.getElementById('targetCount').value = value;
+            document.getElementById('targetCountLabel').textContent = value;
+            document.getElementById('targetCountInput').value = value;
+
+            // 更新预设按钮选中状态
+            updatePresetSelection('targetCountDropdown', value);
+
+            // 关闭下拉菜单
+            closeActiveDropdown();
+
+            // 触发验证更新
+            updateEstimateFlow();
+        }
+
+        // 从输入框更新目标数量
+        function updateTargetCountFromInput() {
+            const input = document.getElementById('targetCountInput');
+            const value = parseInt(input.value) || 100;
+
+            document.getElementById('targetCount').value = value;
+            document.getElementById('targetCountLabel').textContent = value;
+
+            // 更新预设按钮选中状态
+            updatePresetSelection('targetCountDropdown', value);
+
+            // 触发验证更新
+            updateEstimateFlow();
+        }
+
+        // 选择最低样本数
+        function selectMinSample(value, event) {
+            event.stopPropagation();
+
+            document.getElementById('minSampleCount').value = value;
+            document.getElementById('minSampleLabel').textContent = value;
+            document.getElementById('minSampleInput').value = value;
+
+            // 更新预设按钮选中状态
+            updatePresetSelection('minSampleDropdown', value);
+
+            // 关闭下拉菜单
+            closeActiveDropdown();
+
+            // 触发验证更新
+            updateEstimateFlow();
+        }
+
+        // 从输入框更新最低样本数
+        function updateMinSampleFromInput() {
+            const input = document.getElementById('minSampleInput');
+            const value = parseInt(input.value) || 50;
+
+            document.getElementById('minSampleCount').value = value;
+            document.getElementById('minSampleLabel').textContent = value;
+
+            // 更新预设按钮选中状态
+            updatePresetSelection('minSampleDropdown', value);
+
+            // 触发验证更新
+            updateEstimateFlow();
+        }
+
+        // 更新预设按钮选中状态
+        function updatePresetSelection(dropdownId, value) {
+            const dropdown = document.getElementById(dropdownId);
+            if (!dropdown) return;
+
+            dropdown.querySelectorAll('.config-dropdown-preset').forEach(preset => {
+                const presetValue = parseInt(preset.textContent);
+                preset.classList.toggle('selected', presetValue === value);
+            });
+        }
+
+        // 关闭当前打开的下拉菜单
+        function closeActiveDropdown() {
+            if (activeDropdown) {
+                activeDropdown.classList.remove('show');
+                if (activeTag) activeTag.classList.remove('dropdown-open');
+                activeDropdown = null;
+                activeTag = null;
+            }
+        }
+
+        // 点击页面其他位置关闭下拉菜单
+        document.addEventListener('click', function(e) {
+            if (activeDropdown && !e.target.closest('.config-tag')) {
+                closeActiveDropdown();
+            }
+        });
+
+        // 初始化配置标签显示
+        function initConfigTags() {
+            // 同步隐藏表单的初始值到标签显示和下拉菜单选中状态
+            const noteTypeVal = document.getElementById('noteType').value;
+            const timeRangeVal = document.getElementById('timeRange').value;
+            const viralRatioVal = document.getElementById('viralRatioSelect').value;
+            const targetCountVal = document.getElementById('targetCount').value;
+            const minSampleVal = document.getElementById('minSampleCount').value;
+
+            // 更新笔记类型
+            const noteTypeMap = { '1': { label: '视频', icon: '&#128249;' }, '2': { label: '图文', icon: '&#128444;' }, '0': { label: '不限', icon: '&#128196;' } };
+            if (noteTypeMap[noteTypeVal]) {
+                document.getElementById('noteTypeLabel').textContent = noteTypeMap[noteTypeVal].label;
+                document.getElementById('noteTypeIcon').innerHTML = noteTypeMap[noteTypeVal].icon;
+            }
+            document.getElementById('noteTypeDropdown')?.querySelectorAll('.config-dropdown-item').forEach(item => {
+                item.classList.toggle('selected', item.dataset.value === noteTypeVal);
+            });
+
+            // 更新时间范围
+            const timeRangeMap = { '3': '半年内', '2': '一周内', '1': '一天内', '0': '不限' };
+            if (timeRangeMap[timeRangeVal]) {
+                document.getElementById('timeRangeLabel').textContent = timeRangeMap[timeRangeVal];
+            }
+            document.getElementById('timeRangeDropdown')?.querySelectorAll('.config-dropdown-item').forEach(item => {
+                item.classList.toggle('selected', item.dataset.value === timeRangeVal);
+            });
+
+            // 更新爆款比例
+            const viralRatioMap = { '0.5': '前1/2', '0.33': '前1/3', '0.25': '前1/4', '1': '全部' };
+            if (viralRatioMap[viralRatioVal]) {
+                document.getElementById('viralRatioLabel').textContent = viralRatioMap[viralRatioVal];
+            }
+            document.getElementById('viralRatioDropdown')?.querySelectorAll('.config-dropdown-item').forEach(item => {
+                item.classList.toggle('selected', item.dataset.value === viralRatioVal);
+            });
+
+            // 更新目标数量
+            document.getElementById('targetCountLabel').textContent = targetCountVal;
+            document.getElementById('targetCountInput').value = targetCountVal;
+            updatePresetSelection('targetCountDropdown', parseInt(targetCountVal));
+
+            // 更新最低样本
+            document.getElementById('minSampleLabel').textContent = minSampleVal;
+            document.getElementById('minSampleInput').value = minSampleVal;
+            updatePresetSelection('minSampleDropdown', parseInt(minSampleVal));
+        }
+
+        // 页面加载后初始化配置标签
+        setTimeout(initConfigTags, 150);
 
         // ==================== 表单提交 ====================
 
@@ -3742,10 +4402,9 @@
             }
 
             try {
-                // 清空并展开日志面板
+                // 清空日志并打开右侧日志面板
                 clearLogs();
-                const logPanel = document.getElementById('logPanel');
-                logPanel.classList.remove('collapsed');
+                openLogPanel();
 
                 const response = await authFetch('/api/viral/search', {
                     method: 'POST',
@@ -5293,34 +5952,64 @@
             return div.innerHTML;
         }
 
-        // ==================== 实时日志面板 ====================
+        // ==================== 右侧执行日志面板 (Gemini 浅色风格) ====================
 
         let logCursor = 0;  // 日志游标，用于增量获取
-        let unreadLogCount = 0;  // 未读日志数量
+        let totalLogCount = 0;  // 总日志数量
 
-        // 切换日志面板展开/折叠
+        // 打开日志面板
+        function openLogPanel() {
+            const panel = document.getElementById('logPanel');
+            const fab = document.getElementById('logPanelFab');
+            panel.classList.add('open');
+            document.body.classList.add('log-panel-open');
+            // 隐藏悬浮按钮
+            if (fab) {
+                fab.classList.remove('visible');
+            }
+            // 自动滚动到底部
+            const content = document.getElementById('logContent');
+            content.scrollTop = content.scrollHeight;
+        }
+
+        // 关闭日志面板
+        function closeLogPanel() {
+            const panel = document.getElementById('logPanel');
+            const fab = document.getElementById('logPanelFab');
+            panel.classList.remove('open');
+            document.body.classList.remove('log-panel-open');
+            // 显示悬浮按钮
+            if (fab) {
+                fab.classList.add('visible');
+            }
+        }
+
+        // 切换日志面板（兼容旧调用）
         function toggleLogPanel() {
             const panel = document.getElementById('logPanel');
-            const badge = document.getElementById('logBadge');
+            if (panel.classList.contains('open')) {
+                closeLogPanel();
+            } else {
+                openLogPanel();
+            }
+        }
 
-            panel.classList.toggle('collapsed');
-
-            // 展开时清除未读角标
-            if (!panel.classList.contains('collapsed')) {
-                unreadLogCount = 0;
-                badge.textContent = '0';
-                badge.classList.remove('has-new');
-                // 自动滚动到底部
-                const content = document.getElementById('logContent');
-                content.scrollTop = content.scrollHeight;
+        // 更新悬浮按钮角标
+        function updateFabBadge() {
+            const fabBadge = document.getElementById('fabBadge');
+            if (fabBadge && totalLogCount > 0) {
+                fabBadge.textContent = totalLogCount > 99 ? '99+' : totalLogCount;
+                fabBadge.classList.remove('hidden');
+            } else if (fabBadge) {
+                fabBadge.classList.add('hidden');
             }
         }
 
         // 添加日志条目
         function addLogEntry(log) {
             const content = document.getElementById('logContent');
-            const panel = document.getElementById('logPanel');
             const badge = document.getElementById('logBadge');
+            const logCountEl = document.getElementById('logCount');
 
             // 清除"暂无日志"提示
             const emptyHint = content.querySelector('.log-empty');
@@ -5349,36 +6038,56 @@
             `;
             content.appendChild(entry);
 
-            // 保持最多显示50条（与后端一致）
-            while (content.children.length > 50) {
+            // 更新日志计数
+            totalLogCount++;
+            if (logCountEl) {
+                logCountEl.textContent = `共 ${totalLogCount} 条日志`;
+            }
+
+            // 保持最多显示100条
+            while (content.children.length > 100) {
                 content.removeChild(content.firstChild);
             }
 
             // 自动滚动到底部
             content.scrollTop = content.scrollHeight;
 
-            // 如果面板折叠，显示未读角标
-            if (panel.classList.contains('collapsed')) {
-                unreadLogCount++;
-                badge.textContent = unreadLogCount > 99 ? '99+' : unreadLogCount;
-                badge.classList.add('has-new');
+            // 更新角标（显示新日志数）
+            if (badge) {
+                badge.textContent = totalLogCount;
+                badge.classList.remove('hidden');
             }
+
+            // 同步更新悬浮按钮角标
+            updateFabBadge();
         }
 
         // 清空日志
         function clearLogs() {
             const content = document.getElementById('logContent');
             const badge = document.getElementById('logBadge');
+            const logCountEl = document.getElementById('logCount');
+            const fabBadge = document.getElementById('fabBadge');
             content.innerHTML = `
                 <div class="log-empty">
-                    <i class="fas fa-inbox"></i>
-                    暂无日志，启动任务后将显示执行进度
+                    <i class="fas fa-rocket"></i>
+                    点击「开始采集」后<br>执行日志将在这里实时显示
                 </div>
             `;
             logCursor = 0;
-            unreadLogCount = 0;
-            badge.textContent = '0';  // 重置角标文本
-            badge.classList.remove('has-new');
+            totalLogCount = 0;
+            if (logCountEl) {
+                logCountEl.textContent = '共 0 条日志';
+            }
+            if (badge) {
+                badge.textContent = '0';
+                badge.classList.add('hidden');
+            }
+            // 同步重置悬浮按钮角标
+            if (fabBadge) {
+                fabBadge.textContent = '0';
+                fabBadge.classList.add('hidden');
+            }
             // 重置 Cookie 过期提示标志，允许下次任务再次提示
             window._cookieExpiredAlerted = false;
         }
