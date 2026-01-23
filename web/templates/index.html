@@ -791,6 +791,18 @@
             display: flex;
             flex-direction: column;
             justify-content: center;
+            align-items: center;  /* 水平居中 */
+        }
+
+        /* 搜索框模式下，限制卡片宽度，高度自适应 */
+        .main-wrapper.search-only-mode .container-main {
+            width: 100%;
+            max-width: 1200px;
+            padding: 20px;
+        }
+
+        .main-wrapper.search-only-mode .container-main .card {
+            min-height: 420px;
         }
 
         /* 侧边栏打开时，主内容区被推挤 */
