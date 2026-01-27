@@ -3,7 +3,13 @@
 提供Web API接口和界面
 """
 import os
+import sys
 import asyncio
+
+# Windows 兼容性：设置正确的事件循环策略（支持子进程，Playwright需要）
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -2019,6 +2025,193 @@ async def cleanup_all_data(
         raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
 
 
+# ==================== 扫码登录API ====================
+
+@app.get("/api/qrcode/status")
+async def check_qrcode_feature(force: bool = False):
+    """
+    检查扫码登录功能是否可用
+
+    Args:
+        force: 是否强制重新检测
+
+    Returns:
+        available: 功能是否可用
+        message: 状态说明
+    """
+    try:
+        from viral_agent.services.auth import get_qrcode_login_service
+        service = get_qrcode_login_service()
+        available = await service.check_playwright_available(force_recheck=force)
+        return {
+            "available": available,
+            "message": "扫码登录功能已启用" if available else "扫码功能未启用，请安装: pip install playwright && playwright install chromium"
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "message": f"扫码功能不可用: {str(e)}"
+        }
+
+
+@app.post("/api/qrcode/session")
+async def create_qrcode_session(
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    创建扫码登录会话
+
+    使用 Playwright 浏览器获取二维码（优化版，约 10-15 秒）。
+    创建成功后需轮询 /api/qrcode/{session_id}/status 获取状态。
+
+    Returns:
+        session_id: 会话ID，用于后续状态查询
+        status: 当前状态
+    """
+    try:
+        from viral_agent.services.auth import get_qrcode_login_service
+        service = get_qrcode_login_service()
+        session = await service.create_session(username)
+
+        return {
+            "session_id": session.session_id,
+            "status": session.status.value,
+            "message": "正在启动浏览器获取二维码..."
+        }
+    except RuntimeError as e:
+        # 功能不可用或并发超限
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建扫码会话失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
+
+
+@app.get("/api/qrcode/{session_id}/status")
+async def get_qrcode_session_status(
+    session_id: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    获取扫码登录状态
+
+    前端应每1-2秒轮询此接口。
+
+    Returns:
+        status: 当前状态 (initializing/waiting_scan/scanned/confirmed/success/expired/error)
+        qrcode_base64: 二维码图片base64（仅在waiting_scan状态返回）
+        expires_at: 二维码过期时间
+        message: 错误信息（如有）
+    """
+    try:
+        from viral_agent.services.auth import get_qrcode_login_service
+        service = get_qrcode_login_service()
+        session = await service.get_session(session_id)
+
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+        # 验证会话归属
+        if session.username != username:
+            raise HTTPException(status_code=403, detail="无权访问此会话")
+
+        response = {
+            "session_id": session.session_id,
+            "status": session.status.value,
+            "expires_at": session.expires_at.isoformat() if session.expires_at else None,
+            "message": session.error_message,
+            "is_completed": session.is_completed,
+        }
+
+        # 在等待扫码和需要短信验证码状态下返回截图
+        from viral_agent.services.auth import QRLoginStatus
+        if session.status in (QRLoginStatus.WAITING_SCAN, QRLoginStatus.NEED_SMS_CODE):
+            response["qrcode_base64"] = session.qrcode_base64
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取扫码状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
+
+
+@app.delete("/api/qrcode/{session_id}")
+async def cancel_qrcode_session(
+    session_id: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    取消扫码登录会话
+
+    释放会话资源。
+    """
+    try:
+        from viral_agent.services.auth import get_qrcode_login_service
+        service = get_qrcode_login_service()
+        session = await service.get_session(session_id)
+
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        if session.username != username:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+
+        await service.cancel_session(session_id)
+        return {"status": "success", "message": "会话已取消"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消扫码会话失败: {e}")
+        raise HTTPException(status_code=500, detail=f"取消失败: {str(e)}")
+
+
+@app.post("/api/qrcode/{session_id}/sms")
+async def submit_qrcode_sms_code(
+    session_id: str,
+    request: Request,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    提交短信验证码
+
+    当扫码后需要短信验证时，通过此接口提交验证码。
+    """
+    try:
+        data = await request.json()
+        sms_code = data.get("sms_code", "").strip()
+
+        if not sms_code:
+            raise HTTPException(status_code=400, detail="验证码不能为空")
+
+        if not sms_code.isdigit() or len(sms_code) < 4:
+            raise HTTPException(status_code=400, detail="验证码格式不正确")
+
+        from viral_agent.services.auth import get_qrcode_login_service
+        service = get_qrcode_login_service()
+        session = await service.get_session(session_id)
+
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+        if session.username != username:
+            raise HTTPException(status_code=403, detail="无权操作此会话")
+
+        success = await service.submit_sms_code(session_id, sms_code)
+
+        if success:
+            return {"status": "success", "message": "验证码已提交"}
+        else:
+            raise HTTPException(status_code=400, detail="提交验证码失败，请重试")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"提交短信验证码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
+
+
 # ==================== 健康检查 ====================
 
 @app.get("/health")
@@ -2046,11 +2239,23 @@ if __name__ == "__main__":
     is_production = os.getenv("PRODUCTION", "false").lower() == "true"
     logger.info(f"启动小红书爆文Agent服务... (生产模式: {is_production})")
 
-    uvicorn.run(
-        "viral_app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=not is_production,  # 生产环境禁用热重载
-        log_level="info",
-        workers=1  # 单worker模式：任务状态存储在内存中，多worker会导致状态查询404
-    )
+    # Windows 兼容性配置
+    uvicorn_config = {
+        "host": "0.0.0.0",
+        "port": 8000,
+        "log_level": "info",
+        "workers": 1,  # 单worker模式：任务状态存储在内存中
+    }
+
+    if sys.platform == 'win32':
+        # Windows: 禁用 reload 以避免子进程事件循环问题
+        # Playwright 需要 ProactorEventLoop，但 reload 模式下子进程无法正确继承
+        uvicorn_config["reload"] = False
+        uvicorn_config["loop"] = "asyncio"
+        if not is_production:
+            logger.warning("Windows 下已禁用热重载（reload），修改代码后需手动重启服务")
+    else:
+        # Linux/Mac: 可以使用 reload
+        uvicorn_config["reload"] = not is_production
+
+    uvicorn.run("viral_app:app", **uvicorn_config)
