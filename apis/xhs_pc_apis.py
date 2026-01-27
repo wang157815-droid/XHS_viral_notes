@@ -979,6 +979,222 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, new_url
 
+    # ==================== 扫码登录相关 API ====================
+
+    @staticmethod
+    def generate_a1():
+        """生成临时的 a1 Cookie（18位十六进制 + 时间戳后缀）"""
+        import time
+        import secrets
+        # a1 格式：18位随机十六进制 + 13位时间戳
+        random_part = secrets.token_hex(9)  # 18位
+        timestamp = str(int(time.time() * 1000))[-13:]
+        return f"{random_part}{timestamp}"
+
+    @staticmethod
+    def get_initial_cookies(proxies: dict = None):
+        """
+        获取初始 Cookie（包括 a1）
+
+        通过多次请求尝试获取服务器生成的真实 a1 Cookie。
+
+        Returns:
+            success: 是否成功
+            msg: 错误信息
+            cookies_dict: Cookie 字典（包含 a1 等）
+            cookies_str: Cookie 字符串
+        """
+        try:
+            # 使用 Session 保持 Cookie
+            session = requests.Session()
+
+            # 第一步：访问首页获取初始 Cookie
+            headers = {
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "accept-language": "zh-CN,zh;q=0.9",
+                "cache-control": "no-cache",
+                "pragma": "no-cache",
+                "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-dest": "document",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "none",
+                "sec-fetch-user": "?1",
+                "upgrade-insecure-requests": "1",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+
+            response = session.get(
+                "https://www.xiaohongshu.com/explore",
+                headers=headers,
+                proxies=proxies,
+                timeout=15,
+                allow_redirects=True
+            )
+
+            cookies_dict = dict(session.cookies)
+            logger.debug(f"第一次请求获取的 Cookie: {list(cookies_dict.keys())}")
+
+            # 如果首页没有返回 a1，尝试访问登录相关页面
+            if 'a1' not in cookies_dict or not cookies_dict['a1']:
+                # 访问 edith 域名的接口触发 a1 生成
+                api_headers = get_request_headers_template()
+                api_headers['x-s'] = ''
+                api_headers['x-t'] = ''
+                api_headers['x-s-common'] = ''
+
+                session.get(
+                    "https://edith.xiaohongshu.com/api/sns/web/v1/homefeed/category",
+                    headers=api_headers,
+                    proxies=proxies,
+                    timeout=10
+                )
+                cookies_dict = dict(session.cookies)
+                logger.debug(f"第二次请求获取的 Cookie: {list(cookies_dict.keys())}")
+
+            # 如果还是没有 a1，生成一个临时的
+            if 'a1' not in cookies_dict or not cookies_dict['a1']:
+                generated_a1 = XHS_Apis.generate_a1()
+                cookies_dict['a1'] = generated_a1
+                logger.warning(f"无法获取服务器 a1，使用临时 a1: {generated_a1[:20]}...")
+            else:
+                logger.info(f"成功获取服务器 a1: {cookies_dict['a1'][:20]}...")
+
+            # 转换为 Cookie 字符串
+            cookies_str = '; '.join([f"{k}={v}" for k, v in cookies_dict.items()])
+
+            return True, "success", cookies_dict, cookies_str
+
+        except Exception as e:
+            logger.error(f"获取初始 Cookie 失败: {e}")
+            return False, str(e), None, None
+
+    def create_login_qrcode(self, cookies_str: str, proxies: dict = None):
+        """
+        创建扫码登录二维码
+
+        Args:
+            cookies_str: 初始 Cookie（必须包含 a1）
+
+        Returns:
+            success: 是否成功
+            msg: 错误信息
+            qrcode_data: 二维码数据（包含 url, qr_id, code 等）
+        """
+        try:
+            api = "/api/sns/web/v1/login/qrcode/create"
+            # 传入原始字典，generate_request_params 内部会进行 json.dumps
+            post_data_dict = {"qr_type": 1}
+            headers, cookies, data = generate_request_params(cookies_str, api, post_data_dict)
+
+            # 创建二维码需要用 POST 方法
+            response = requests.post(
+                self.base_url + api,
+                headers=headers,
+                cookies=cookies,
+                data=data,  # 使用处理后的 data
+                proxies=proxies,
+                timeout=DEFAULT_TIMEOUT
+            )
+
+            # 调试：记录响应状态和内容
+            logger.debug(f"二维码创建响应: status={response.status_code}, content={response.text[:200]}")
+
+            # 检查响应状态码
+            if response.status_code != 200:
+                return False, f"HTTP {response.status_code}: {response.text[:100]}", None
+
+            # 检查响应内容类型
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' not in content_type:
+                logger.warning(f"非 JSON 响应: Content-Type={content_type}")
+                # 可能是 HTML 错误页面
+                if '<html' in response.text.lower():
+                    return False, "服务器返回 HTML 页面，可能需要验证", None
+
+            # 处理可能的 CSRF 防护前缀（如 ")]}'）
+            text = response.text
+            if text.startswith(")]}'"):
+                text = text[4:]
+            elif text.startswith(")]}"):
+                text = text[3:]
+
+            res_json = json.loads(text)
+
+            if res_json.get("success"):
+                qrcode_data = res_json.get("data", {})
+                logger.info(f"创建二维码成功: qr_id={qrcode_data.get('qr_id', '')[:20]}...")
+                return True, "success", qrcode_data
+            else:
+                return False, res_json.get("msg", "创建二维码失败"), None
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON 解析失败: {e}, 响应内容: {response.text[:200]}")
+            return False, f"响应解析失败: {response.text[:100]}", None
+        except Exception as e:
+            logger.error(f"创建二维码失败: {e}")
+            return False, str(e), None
+
+    def check_qrcode_status(self, qr_id: str, code: str, cookies_str: str, proxies: dict = None):
+        """
+        检查二维码扫码状态
+
+        Args:
+            qr_id: 二维码 ID（从 create_login_qrcode 返回）
+            code: 二维码 code（从 create_login_qrcode 返回）
+            cookies_str: Cookie 字符串
+
+        Returns:
+            success: 是否成功
+            msg: 错误信息
+            status_data: 状态数据
+                - code_status: 状态码
+                    - 0: 等待扫码
+                    - 1: 已扫码，等待确认
+                    - 2: 登录成功
+                    - 3: 二维码过期
+            new_cookies: 登录成功时返回的新 Cookie（字典格式）
+        """
+        try:
+            api = "/api/sns/web/v1/login/qrcode/status"
+            params = {
+                "qr_id": qr_id,
+                "code": code
+            }
+            splice_api = splice_str(api, params)
+            headers, cookies, data = generate_request_params(cookies_str, splice_api)
+
+            response = requests.get(
+                self.base_url + splice_api,
+                headers=headers,
+                cookies=cookies,
+                proxies=proxies,
+                timeout=DEFAULT_TIMEOUT
+            )
+
+            res_json = response.json()
+
+            if res_json.get("success"):
+                status_data = res_json.get("data", {})
+                code_status = status_data.get("code_status", -1)
+
+                # 登录成功时，从响应中提取新的 Cookie
+                new_cookies = None
+                if code_status == 2:
+                    # 合并响应 Cookie 和原始 Cookie
+                    new_cookies = dict(response.cookies)
+                    logger.success(f"扫码登录成功！获取到 {len(new_cookies)} 个新 Cookie")
+
+                return True, "success", status_data, new_cookies
+            else:
+                return False, res_json.get("msg", "检查状态失败"), None, None
+
+        except Exception as e:
+            logger.error(f"检查二维码状态失败: {e}")
+            return False, str(e), None, None
+
+
 if __name__ == '__main__':
     """
         此文件为小红书api的使用示例

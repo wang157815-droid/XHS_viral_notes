@@ -2496,6 +2496,11 @@
                             <i class="fas fa-check"></i>
                         </button>
                     </div>
+                    <div class="mt-2">
+                        <button type="button" class="btn btn-outline-primary btn-sm w-100" onclick="openQRCodeLoginModal()" id="qrcodeLoginBtn">
+                            <i class="fas fa-qrcode"></i> 扫码登录（自动获取Cookie）
+                        </button>
+                    </div>
                     <div id="cookieStatus" class="mt-2 small"></div>
                 </div>
             </div>
@@ -2533,6 +2538,129 @@
                 <button class="sidebar-settings-btn" onclick="openSettingsModal()" title="设置">
                     <i class="fas fa-cog"></i>
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 扫码登录模态框 -->
+    <div class="modal fade" id="qrcodeLoginModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header" style="background: var(--primary-gradient); color: white;">
+                    <h5 class="modal-title">
+                        <i class="fas fa-qrcode me-2"></i>扫码登录小红书
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center py-4">
+                    <!-- 功能不可用提示 -->
+                    <div id="qrcode-unavailable" class="d-none py-4">
+                        <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+                        <p class="text-warning fw-bold">扫码功能未启用</p>
+                        <p class="text-muted small mb-3">扫码功能未启用，请使用手动输入Cookie</p>
+                        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                            关闭
+                        </button>
+                    </div>
+
+                    <!-- 初始化中 -->
+                    <div id="qrcode-initializing" class="py-5">
+                        <div class="spinner-border text-primary mb-3" role="status"></div>
+                        <p class="text-muted">正在打开浏览器窗口...</p>
+                        <p class="small text-secondary">请稍候</p>
+                    </div>
+
+                    <!-- 等待用户操作（桌面模式显示提示，服务器模式显示截图） -->
+                    <div id="qrcode-waiting" class="d-none py-3">
+                        <!-- 服务器模式：显示页面截图 -->
+                        <div id="server-mode-screenshot" class="d-none">
+                            <img id="qrcode-image" src="" alt="页面截图"
+                                 style="max-width: 100%; max-height: 400px; border: 2px solid #eee; border-radius: 8px;">
+                            <p class="mt-2 mb-1 text-muted small">请用 <strong>小红书APP</strong> 扫描上方二维码</p>
+                            <p class="text-muted small">扫码后请在手机上完成验证（如短信验证码）</p>
+                            <!-- 需要交互时的警告提示 -->
+                            <div id="interaction-warning" class="d-none alert alert-warning mt-2 py-2 px-3 small">
+                                <i class="fas fa-exclamation-triangle me-1"></i>
+                                <span id="interaction-warning-text"></span>
+                            </div>
+                        </div>
+                        <!-- 桌面模式：提示浏览器已打开 -->
+                        <div id="desktop-mode-hint">
+                            <i class="fas fa-external-link-alt fa-3x text-primary mb-3"></i>
+                            <p class="text-primary fw-bold">浏览器窗口已打开</p>
+                            <p class="text-muted">请在弹出的浏览器中完成登录<br>（扫码、短信验证等）</p>
+                        </div>
+                        <p id="qrcode-countdown" class="small text-secondary mt-3">
+                            <i class="fas fa-clock me-1"></i>剩余时间：<span id="countdown-value">180</span>秒
+                        </p>
+                        <div class="spinner-border spinner-border-sm text-primary mt-2" role="status"></div>
+                    </div>
+
+                    <!-- 需要输入短信验证码 -->
+                    <div id="qrcode-need-sms" class="d-none py-3">
+                        <!-- 继续显示截图 -->
+                        <img id="sms-screenshot" src="" alt="页面截图"
+                             style="max-width: 100%; max-height: 300px; border: 2px solid #eee; border-radius: 8px;">
+                        <div class="mt-3">
+                            <i class="fas fa-sms fa-2x text-warning mb-2"></i>
+                            <p class="text-warning fw-bold mb-2">请输入短信验证码</p>
+                            <p class="text-muted small mb-3">验证码已发送到您的手机</p>
+                            <div class="input-group" style="max-width: 200px; margin: 0 auto;">
+                                <input type="text" id="sms-code-input" class="form-control text-center"
+                                       placeholder="输入验证码" maxlength="6" pattern="[0-9]*"
+                                       style="font-size: 1.2rem; letter-spacing: 3px;">
+                                <button class="btn btn-primary" type="button" onclick="submitSmsCode()">
+                                    <i class="fas fa-check"></i>
+                                </button>
+                            </div>
+                            <p id="sms-error-msg" class="text-danger small mt-2 d-none"></p>
+                        </div>
+                        <p class="small text-secondary mt-3">
+                            <i class="fas fa-clock me-1"></i>剩余时间：<span id="sms-countdown-value">180</span>秒
+                        </p>
+                    </div>
+
+                    <!-- 检测到登录，验证中 -->
+                    <div id="qrcode-scanned" class="d-none py-4">
+                        <i class="fas fa-user-check fa-3x text-info mb-3"></i>
+                        <p class="text-info fw-bold">检测到登录操作</p>
+                        <p class="text-muted">正在验证 Cookie 有效性...</p>
+                        <div class="spinner-border spinner-border-sm text-info mt-2" role="status"></div>
+                    </div>
+
+                    <!-- 登录成功 -->
+                    <div id="qrcode-success" class="d-none py-4">
+                        <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                        <p class="text-success fw-bold">登录成功！</p>
+                        <p class="text-muted">Cookie 已验证有效并保存<br>2秒后关闭...</p>
+                    </div>
+
+                    <!-- 超时 -->
+                    <div id="qrcode-expired" class="d-none py-4">
+                        <i class="fas fa-clock fa-3x text-warning mb-3"></i>
+                        <p class="text-warning fw-bold">登录超时</p>
+                        <button class="btn btn-outline-primary" onclick="startQRCodeLogin()">
+                            <i class="fas fa-sync-alt me-1"></i>重新打开浏览器
+                        </button>
+                    </div>
+
+                    <!-- 错误状态 -->
+                    <div id="qrcode-error" class="d-none py-4">
+                        <i class="fas fa-exclamation-circle fa-3x text-danger mb-3"></i>
+                        <p class="text-danger fw-bold">登录失败</p>
+                        <p id="qrcode-error-msg" class="text-muted small"></p>
+                        <button class="btn btn-outline-primary" onclick="startQRCodeLogin()">
+                            <i class="fas fa-redo me-1"></i>重试
+                        </button>
+                    </div>
+                </div>
+                <div class="modal-footer justify-content-between">
+                    <small class="text-muted">
+                        <i class="fas fa-info-circle me-1"></i>
+                        扫码登录可自动获取最新Cookie
+                    </small>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">关闭</button>
+                </div>
             </div>
         </div>
     </div>
@@ -5651,6 +5779,303 @@
                 }
             }
         }
+
+        // ==================== 扫码登录功能 ====================
+
+        let qrcodeSessionId = null;
+        let qrcodePollingTimer = null;
+        let qrcodeCountdown = 180;  // 3分钟超时（用户需要时间完成验证）
+        let qrcodeCountdownTimer = null;
+
+        // 打开扫码登录模态框
+        async function openQRCodeLoginModal() {
+            const modal = new bootstrap.Modal(document.getElementById('qrcodeLoginModal'));
+            modal.show();
+
+            // 检查扫码功能是否可用
+            try {
+                const response = await authFetch('/api/qrcode/status');
+                const data = await response.json();
+
+                if (!data.available) {
+                    showQRCodeState('unavailable');
+                    return;
+                }
+            } catch (error) {
+                console.error('检查扫码功能失败:', error);
+                // 继续尝试，让后端处理错误
+            }
+
+            startQRCodeLogin();
+        }
+
+        // 开始扫码登录
+        async function startQRCodeLogin() {
+            // 重置UI状态
+            showQRCodeState('initializing');
+            qrcodeCountdown = 180;  // 3分钟
+            updateCountdownDisplay();
+
+            // 清除旧的轮询和倒计时
+            clearQRCodeTimers();
+
+            try {
+                // 创建扫码会话
+                const response = await authFetch('/api/qrcode/session', { method: 'POST' });
+
+                if (response.status === 503) {
+                    // 功能不可用
+                    const data = await response.json();
+                    showQRCodeState('unavailable');
+                    document.getElementById('qrcode-error-msg').textContent = data.detail || '扫码功能未启用';
+                    return;
+                }
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.detail || '创建会话失败');
+                }
+
+                const data = await response.json();
+                qrcodeSessionId = data.session_id;
+
+                // 开始轮询状态
+                qrcodePollingTimer = setInterval(pollQRCodeStatus, 1500);
+
+            } catch (error) {
+                showQRCodeState('error');
+                document.getElementById('qrcode-error-msg').textContent = error.message;
+            }
+        }
+
+        // 轮询扫码状态
+        async function pollQRCodeStatus() {
+            if (!qrcodeSessionId) return;
+
+            try {
+                const response = await authFetch(`/api/qrcode/${qrcodeSessionId}/status`);
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.detail || '获取状态失败');
+                }
+
+                const data = await response.json();
+
+                switch (data.status) {
+                    case 'initializing':
+                        showQRCodeState('initializing');
+                        break;
+
+                    case 'waiting_scan':
+                        // 显示等待状态
+                        showQRCodeState('waiting');
+
+                        // 根据是否有截图切换显示模式
+                        const screenshotDiv = document.getElementById('server-mode-screenshot');
+                        const desktopDiv = document.getElementById('desktop-mode-hint');
+                        const qrcodeImg = document.getElementById('qrcode-image');
+                        const interactionWarning = document.getElementById('interaction-warning');
+                        const interactionWarningText = document.getElementById('interaction-warning-text');
+
+                        if (data.qrcode_base64) {
+                            // 服务器模式：显示页面截图
+                            screenshotDiv.classList.remove('d-none');
+                            desktopDiv.classList.add('d-none');
+                            qrcodeImg.src = 'data:image/jpeg;base64,' + data.qrcode_base64;
+
+                            // 检测是否需要交互（短信/滑块验证）
+                            if (data.message && data.message.includes('手动复制')) {
+                                interactionWarning.classList.remove('d-none');
+                                interactionWarningText.textContent = data.message;
+                            } else {
+                                interactionWarning.classList.add('d-none');
+                            }
+                        } else {
+                            // 桌面模式：显示浏览器已打开提示
+                            screenshotDiv.classList.add('d-none');
+                            desktopDiv.classList.remove('d-none');
+                        }
+
+                        // 启动倒计时
+                        if (!qrcodeCountdownTimer) {
+                            qrcodeCountdownTimer = setInterval(() => {
+                                qrcodeCountdown--;
+                                updateCountdownDisplay();
+                                if (qrcodeCountdown <= 0) {
+                                    clearInterval(qrcodeCountdownTimer);
+                                    qrcodeCountdownTimer = null;
+                                }
+                            }, 1000);
+                        }
+                        break;
+
+                    case 'need_sms_code':
+                        // 需要输入短信验证码
+                        showQRCodeState('need-sms');
+                        // 更新截图
+                        if (data.qrcode_base64) {
+                            document.getElementById('sms-screenshot').src = 'data:image/jpeg;base64,' + data.qrcode_base64;
+                        }
+                        // 更新倒计时显示
+                        document.getElementById('sms-countdown-value').textContent = Math.max(0, qrcodeCountdown);
+                        // 聚焦输入框
+                        const smsInput = document.getElementById('sms-code-input');
+                        if (smsInput && !smsInput.value) {
+                            smsInput.focus();
+                        }
+                        break;
+
+                    case 'scanned':
+                        showQRCodeState('scanned');
+                        break;
+
+                    case 'confirmed':
+                    case 'success':
+                        showQRCodeState('success');
+                        clearQRCodeTimers();
+                        // 刷新Cookie状态
+                        setTimeout(() => {
+                            checkCookie();
+                            // 自动关闭模态框
+                            const modal = bootstrap.Modal.getInstance(document.getElementById('qrcodeLoginModal'));
+                            if (modal) modal.hide();
+                        }, 2000);
+                        break;
+
+                    case 'expired':
+                        showQRCodeState('expired');
+                        clearQRCodeTimers();
+                        break;
+
+                    case 'cancelled':
+                    case 'error':
+                        showQRCodeState('error');
+                        document.getElementById('qrcode-error-msg').textContent = data.message || '登录失败';
+                        clearQRCodeTimers();
+                        break;
+                }
+
+            } catch (error) {
+                console.error('轮询状态失败:', error);
+            }
+        }
+
+        // 显示对应状态的UI
+        function showQRCodeState(state) {
+            const states = ['unavailable', 'initializing', 'waiting', 'need-sms', 'scanned', 'success', 'expired', 'error'];
+            states.forEach(s => {
+                const el = document.getElementById(`qrcode-${s}`);
+                if (el) el.classList.toggle('d-none', s !== state);
+            });
+        }
+
+        // 更新倒计时显示
+        function updateCountdownDisplay() {
+            const el = document.getElementById('countdown-value');
+            if (el) el.textContent = Math.max(0, qrcodeCountdown);
+        }
+
+        // 清除所有定时器
+        function clearQRCodeTimers() {
+            if (qrcodePollingTimer) {
+                clearInterval(qrcodePollingTimer);
+                qrcodePollingTimer = null;
+            }
+            if (qrcodeCountdownTimer) {
+                clearInterval(qrcodeCountdownTimer);
+                qrcodeCountdownTimer = null;
+            }
+        }
+
+        // 提交短信验证码
+        async function submitSmsCode() {
+            const smsInput = document.getElementById('sms-code-input');
+            const errorMsg = document.getElementById('sms-error-msg');
+            const smsCode = smsInput.value.trim();
+
+            // 隐藏之前的错误
+            errorMsg.classList.add('d-none');
+
+            // 验证输入
+            if (!smsCode) {
+                errorMsg.textContent = '请输入验证码';
+                errorMsg.classList.remove('d-none');
+                smsInput.focus();
+                return;
+            }
+
+            if (!/^\d{4,6}$/.test(smsCode)) {
+                errorMsg.textContent = '验证码应为4-6位数字';
+                errorMsg.classList.remove('d-none');
+                smsInput.focus();
+                return;
+            }
+
+            if (!qrcodeSessionId) {
+                errorMsg.textContent = '会话已失效，请重新扫码';
+                errorMsg.classList.remove('d-none');
+                return;
+            }
+
+            try {
+                // 禁用输入框和按钮
+                smsInput.disabled = true;
+                const submitBtn = smsInput.nextElementSibling;
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+                const response = await authFetch(`/api/qrcode/${qrcodeSessionId}/sms`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sms_code: smsCode })
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.detail || '提交失败');
+                }
+
+                // 提交成功，清空输入框，等待状态轮询检测结果
+                smsInput.value = '';
+
+            } catch (error) {
+                errorMsg.textContent = error.message || '提交失败，请重试';
+                errorMsg.classList.remove('d-none');
+            } finally {
+                // 恢复输入框和按钮
+                smsInput.disabled = false;
+                const submitBtn = smsInput.nextElementSibling;
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-check"></i>';
+            }
+        }
+
+        // 监听验证码输入框回车事件
+        document.addEventListener('DOMContentLoaded', function() {
+            const smsInput = document.getElementById('sms-code-input');
+            if (smsInput) {
+                smsInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        submitSmsCode();
+                    }
+                });
+            }
+        });
+
+        // 模态框关闭时清理
+        document.addEventListener('DOMContentLoaded', function() {
+            const qrcodeModal = document.getElementById('qrcodeLoginModal');
+            if (qrcodeModal) {
+                qrcodeModal.addEventListener('hidden.bs.modal', function() {
+                    clearQRCodeTimers();
+                    // 取消会话
+                    if (qrcodeSessionId) {
+                        authFetch(`/api/qrcode/${qrcodeSessionId}`, { method: 'DELETE' }).catch(() => {});
+                        qrcodeSessionId = null;
+                    }
+                });
+            }
+        });
 
         // ==================== 知识库管理 ====================
 
