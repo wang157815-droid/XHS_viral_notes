@@ -520,30 +520,40 @@ class QRCodeLoginService:
                 return False
 
             # 查找并点击确认/提交按钮
-            # 注意：小红书按钮可能是 div/span 而非 button，使用通用选择器
+            # 注意：
+            # 1. 小红书按钮可能是 div/span 而非 button
+            # 2. 要排除"获取验证码"按钮，只匹配纯"验证"文字
+            # 3. :text-is() 精确匹配完整文本，:has-text() 包含匹配
             submit_selectors = [
-                ':has-text("验证")',         # 任意元素包含"验证"文字
-                'div:has-text("验证")',
-                'span:has-text("验证")',
-                'button:has-text("验证")',
-                ':has-text("确定")',
-                ':has-text("确认")',
-                ':has-text("登录")',
-                'button:has-text("确定")',
-                'button:has-text("确认")',
-                'button:has-text("登录")',
-                '[class*="submit"]',
+                # 精确匹配"验证"两个字（排除"获取验证码"）
+                ':text-is("验证")',
+                'button:text-is("验证")',
+                'div:text-is("验证")',
+                'span:text-is("验证")',
+                # 其他可能的提交按钮
+                ':text-is("确定")',
+                ':text-is("确认")',
+                ':text-is("登录")',
+                ':text-is("提交")',
+                'button:text-is("确定")',
+                'button:text-is("确认")',
+                # class 选择器
+                '[class*="submit"]:not([class*="code"])',   # 排除获取验证码
                 '[class*="confirm"]',
-                '[class*="verify"]',
-                '[class*="btn"]',
+                '[class*="verify-btn"]',
             ]
             button_clicked = False
             for selector in submit_selectors:
                 try:
                     btn = await page.query_selector(selector)
                     if btn and await btn.is_visible():
-                        await btn.click()
-                        logger.info(f"会话 {session_id}: 已点击确认按钮 (选择器: {selector})")
+                        # 获取按钮文本，确认不是"获取验证码"
+                        btn_text = await btn.inner_text()
+                        if '获取' in btn_text or '发送' in btn_text or '重新' in btn_text:
+                            logger.debug(f"会话 {session_id}: 跳过按钮 '{btn_text}'")
+                            continue
+                        await btn.click(force=True)
+                        logger.info(f"会话 {session_id}: 已点击确认按钮 '{btn_text}' (选择器: {selector})")
                         button_clicked = True
                         break
                 except Exception as e:
