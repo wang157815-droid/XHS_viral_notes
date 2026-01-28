@@ -33,8 +33,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 安装额外依赖（requirements.txt 中被注释或遗漏的）
 # - chromadb: RAG知识库向量检索
 # - opencv-python-headless: 视频帧提取分析（headless版无GUI依赖）
+# - playwright: 扫码登录需要浏览器自动化
 # 注：OCR 使用 AI 多模态 API（ai_ocr_service.py），无需本地 EasyOCR/PyTorch
-RUN pip install --no-cache-dir chromadb opencv-python-headless
+RUN pip install --no-cache-dir chromadb opencv-python-headless playwright
+
+# 安装 Playwright Chromium 浏览器及其系统依赖
+# --with-deps 会自动安装 libnss3, libatk1.0 等必要的系统库
+RUN playwright install chromium --with-deps
 
 COPY . .
 
