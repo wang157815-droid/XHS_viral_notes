@@ -443,20 +443,52 @@ class QRCodeLoginService:
             sms_selectors = [
                 'input[placeholder*="验证码"]',
                 'input[placeholder*="短信"]',
-                'input[class*="code-input"]',
+                'input[placeholder*="输入"]',
+                'input[class*="code"]',
                 'input[class*="sms"]',
+                'input[class*="verify"]',
+                'input[type="tel"]',           # 数字输入框常用 type=tel
+                'input[type="number"]',
+                'input[maxlength="4"]',        # 4位验证码
+                'input[maxlength="6"]',        # 6位验证码
+                '[class*="code"] input',       # 嵌套输入框
+                '[class*="sms"] input',
             ]
             input_filled = False
             for selector in sms_selectors:
                 try:
                     input_el = await page.query_selector(selector)
                     if input_el and await input_el.is_visible():
+                        # 先点击聚焦
+                        await input_el.click()
+                        await page.wait_for_timeout(100)
+                        # 清空已有内容
+                        await input_el.fill('')
+                        # 尝试 fill 方法
                         await input_el.fill(sms_code)
                         input_filled = True
-                        logger.info(f"会话 {session_id}: 已填入验证码")
+                        logger.info(f"会话 {session_id}: 已填入验证码 (选择器: {selector})")
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"会话 {session_id}: 输入框选择器 {selector} 失败: {e}")
                     continue
+
+            # 如果 fill 失败，尝试键盘逐字输入
+            if not input_filled:
+                logger.warning(f"会话 {session_id}: 标准输入框未找到，尝试键盘输入")
+                # 尝试点击页面上可能的输入区域
+                try:
+                    # 查找任何可聚焦的输入元素
+                    any_input = await page.query_selector('input:visible, [contenteditable="true"]')
+                    if any_input:
+                        await any_input.click()
+                        await page.wait_for_timeout(100)
+                except Exception:
+                    pass
+                # 直接用键盘输入验证码
+                await page.keyboard.type(sms_code, delay=50)
+                input_filled = True
+                logger.info(f"会话 {session_id}: 已通过键盘输入验证码")
 
             if not input_filled:
                 logger.error(f"会话 {session_id}: 未找到验证码输入框")
