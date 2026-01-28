@@ -464,12 +464,14 @@ class QRCodeLoginService:
 
             # 查找并点击确认/提交按钮
             submit_selectors = [
+                'button:has-text("验证")',  # 小红书短信验证按钮
                 'button:has-text("确定")',
                 'button:has-text("确认")',
                 'button:has-text("登录")',
                 'button:has-text("提交")',
                 '[class*="submit"]',
                 '[class*="confirm"]',
+                '[class*="verify"]',
             ]
             for selector in submit_selectors:
                 try:
