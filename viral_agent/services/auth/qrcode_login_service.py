@@ -466,9 +466,26 @@ class QRCodeLoginService:
                         await input_el.fill('')
                         # 尝试 fill 方法
                         await input_el.fill(sms_code)
-                        input_filled = True
-                        logger.info(f"会话 {session_id}: 已填入验证码 (选择器: {selector})")
-                        break
+
+                        # 验证是否真的输入了
+                        actual_value = await input_el.input_value()
+                        if actual_value == sms_code:
+                            input_filled = True
+                            logger.info(f"会话 {session_id}: 已填入验证码 '{sms_code}' (选择器: {selector})")
+                            break
+                        else:
+                            logger.warning(f"会话 {session_id}: fill() 后值不匹配，期望 '{sms_code}'，实际 '{actual_value}'")
+                            # fill 失败，尝试用 type 逐字输入
+                            await input_el.click(force=True, timeout=3000)
+                            await page.keyboard.press('Control+a')  # 全选
+                            await page.keyboard.type(sms_code, delay=50)
+                            actual_value = await input_el.input_value()
+                            if actual_value == sms_code:
+                                input_filled = True
+                                logger.info(f"会话 {session_id}: 已通过键盘输入验证码 '{sms_code}'")
+                                break
+                            else:
+                                logger.warning(f"会话 {session_id}: 键盘输入后值仍不匹配，实际 '{actual_value}'")
                 except Exception as e:
                     logger.debug(f"会话 {session_id}: 输入框选择器 {selector} 失败: {e}")
                     continue
