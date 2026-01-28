@@ -463,25 +463,40 @@ class QRCodeLoginService:
                 return False
 
             # 查找并点击确认/提交按钮
+            # 注意：小红书按钮可能是 div/span 而非 button，使用通用选择器
             submit_selectors = [
-                'button:has-text("验证")',  # 小红书短信验证按钮
+                ':has-text("验证")',         # 任意元素包含"验证"文字
+                'div:has-text("验证")',
+                'span:has-text("验证")',
+                'button:has-text("验证")',
+                ':has-text("确定")',
+                ':has-text("确认")',
+                ':has-text("登录")',
                 'button:has-text("确定")',
                 'button:has-text("确认")',
                 'button:has-text("登录")',
-                'button:has-text("提交")',
                 '[class*="submit"]',
                 '[class*="confirm"]',
                 '[class*="verify"]',
+                '[class*="btn"]',
             ]
+            button_clicked = False
             for selector in submit_selectors:
                 try:
                     btn = await page.query_selector(selector)
                     if btn and await btn.is_visible():
                         await btn.click()
-                        logger.info(f"会话 {session_id}: 已点击确认按钮")
+                        logger.info(f"会话 {session_id}: 已点击确认按钮 (选择器: {selector})")
+                        button_clicked = True
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"会话 {session_id}: 选择器 {selector} 失败: {e}")
                     continue
+
+            if not button_clicked:
+                logger.warning(f"会话 {session_id}: 未找到确认按钮，尝试按回车键提交")
+                # 尝试按回车键提交
+                await page.keyboard.press('Enter')
 
             # 等待页面响应
             await page.wait_for_timeout(2000)
