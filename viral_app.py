@@ -100,20 +100,27 @@ _log_id_counter = 0  # 日志ID计数器
 @app.on_event("startup")
 async def startup_warmup_browser():
     """
-    应用启动时预热浏览器
+    应用启动时后台预热浏览器（非阻塞）
 
     通过提前启动 Playwright 浏览器实例，将首次扫码登录时的等待时间
     从 13-24 秒优化到 6-8 秒（节省浏览器启动时间 3-5 秒）
+
+    使用 asyncio.create_task 确保不阻塞 FastAPI 启动，
+    避免影响健康检查和负载均衡器的就绪探测。
     """
-    try:
-        from viral_agent.services.auth import get_qrcode_login_service
-        service = get_qrcode_login_service()
-        logger.info("🚀 应用启动，开始预热 Playwright 浏览器...")
-        await service.warmup()
-        logger.info("✅ Playwright 浏览器预热完成，首次扫码登录将更快")
-    except Exception as e:
-        # 预热失败不影响应用启动，只记录警告
-        logger.warning(f"⚠️ 浏览器预热失败（不影响正常使用）: {e}")
+    async def _do_warmup():
+        try:
+            from viral_agent.services.auth import get_qrcode_login_service
+            service = get_qrcode_login_service()
+            logger.info("🚀 后台预热 Playwright 浏览器...")
+            await service.warmup()
+            logger.info("✅ Playwright 浏览器预热完成，首次扫码登录将更快")
+        except Exception as e:
+            # 预热失败不影响应用运行，只记录警告
+            logger.warning(f"⚠️ 浏览器预热失败（不影响正常使用）: {e}")
+
+    # 非阻塞：后台执行预热，不阻塞 FastAPI 启动
+    asyncio.create_task(_do_warmup())
 
 
 def verify_task_ownership(task_id: str, username: str) -> None:
