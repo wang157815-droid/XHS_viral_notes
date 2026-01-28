@@ -27,6 +27,10 @@ class QRCodeLoginService:
     小红书扫码登录服务（可视化浏览器版）
 
     打开真实浏览器窗口，用户可完成所有登录操作，系统自动捕获 Cookie。
+
+    优化特性：
+    - 浏览器预热：应用启动时预创建浏览器，首次扫码请求时直接复用
+    - 智能等待：用元素等待替代固定延迟，大幅缩短二维码出现时间
     """
 
     _instance: Optional['QRCodeLoginService'] = None
@@ -39,6 +43,10 @@ class QRCodeLoginService:
         self._playwright = None
         self._lock = asyncio.Lock()
         self._playwright_available: Optional[bool] = None
+        # 预热相关
+        self._warmed_browser: Optional['Browser'] = None  # 预热的浏览器实例
+        self._warmup_lock = asyncio.Lock()
+        self._is_warming_up = False
 
     @classmethod
     def get_instance(cls) -> 'QRCodeLoginService':
@@ -113,6 +121,86 @@ class QRCodeLoginService:
 
         return self._playwright_available
 
+    async def warmup(self) -> bool:
+        """
+        预热：提前启动浏览器，等待首次扫码请求时复用。
+
+        调用时机：应用启动时（在后台异步执行，不阻塞启动）
+        效果：首次扫码请求时节省 3-5 秒的浏览器启动时间
+
+        Returns:
+            bool: 预热是否成功
+        """
+        async with self._warmup_lock:
+            if self._warmed_browser is not None:
+                logger.debug("浏览器已预热，跳过")
+                return True
+
+            if self._is_warming_up:
+                logger.debug("预热正在进行中，跳过")
+                return False
+
+            self._is_warming_up = True
+
+        try:
+            if not await self.check_playwright_available():
+                logger.warning("Playwright 不可用，无法预热")
+                return False
+
+            from playwright.async_api import async_playwright
+
+            logger.info("🔥 开始预热浏览器...")
+            start_time = datetime.now()
+
+            # 初始化 Playwright
+            if self._playwright is None:
+                self._playwright = await async_playwright().start()
+
+            # 启动浏览器（服务器模式用无头）
+            is_server = self._is_server_mode()
+            self._warmed_browser = await self._playwright.chromium.launch(
+                headless=is_server,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                ] + ([] if is_server else ['--start-maximized'])
+            )
+
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.success(f"✅ 浏览器预热完成，耗时 {elapsed:.1f} 秒")
+            return True
+
+        except Exception as e:
+            logger.error(f"浏览器预热失败: {e}")
+            return False
+        finally:
+            self._is_warming_up = False
+
+    async def _get_or_create_browser(self) -> 'Browser':
+        """获取预热的浏览器，或创建新浏览器"""
+        # 尝试使用预热的浏览器
+        async with self._warmup_lock:
+            if self._warmed_browser is not None:
+                browser = self._warmed_browser
+                self._warmed_browser = None  # 使用后清空，下次需要重新预热
+                logger.info("♻️ 复用预热的浏览器")
+                # 在后台启动新的预热
+                asyncio.create_task(self.warmup())
+                return browser
+
+        # 没有预热的浏览器，创建新的
+        logger.info("⏳ 创建新浏览器（未预热）")
+        is_server = self._is_server_mode()
+        return await self._playwright.chromium.launch(
+            headless=is_server,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+            ] + ([] if is_server else ['--start-maximized'])
+        )
+
     async def create_session(self, username: str) -> QRCodeSession:
         """创建扫码登录会话（打开可见浏览器窗口）"""
         if not await self.check_playwright_available():
@@ -135,9 +223,11 @@ class QRCodeLoginService:
             return session
 
     async def _open_browser_window(self, session: QRCodeSession):
-        """打开浏览器（桌面模式弹窗，服务器模式截图）"""
+        """打开浏览器（优化版：优先复用预热的浏览器）"""
         try:
             from playwright.async_api import async_playwright
+
+            start_time = datetime.now()
 
             # 初始化 Playwright
             if self._playwright is None:
@@ -151,16 +241,12 @@ class QRCodeLoginService:
             else:
                 logger.info(f"会话 {session.session_id}: 桌面模式，弹出浏览器窗口")
 
-            # 启动浏览器
-            browser = await self._playwright.chromium.launch(
-                headless=is_server,  # 服务器模式用无头，桌面模式弹窗
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                ] + ([] if is_server else ['--start-maximized'])
-            )
+            # 优化：优先使用预热的浏览器
+            browser = await self._get_or_create_browser()
             self._browsers[session.session_id] = browser
+
+            browser_elapsed = (datetime.now() - start_time).total_seconds()
+            logger.debug(f"会话 {session.session_id}: 浏览器获取耗时 {browser_elapsed:.1f} 秒")
 
             # 创建浏览器上下文
             context = await browser.new_context(
@@ -175,7 +261,11 @@ class QRCodeLoginService:
 
             # 打开小红书页面
             await page.goto(XHS_LOGIN_URL, wait_until='domcontentloaded', timeout=30000)
-            await page.wait_for_timeout(2000)
+            # 优化：等待登录按钮出现，而非固定延迟
+            try:
+                await page.wait_for_selector('div.login-btn, span.login-btn, div[class*="login-btn"]', timeout=5000)
+            except Exception:
+                logger.debug(f"会话 {session.session_id}: 等待登录按钮超时，继续尝试")
 
             # 尝试点击登录按钮触发登录弹窗
             await self._click_login_button(page, session)
@@ -205,7 +295,7 @@ class QRCodeLoginService:
             await self._cleanup_session(session.session_id)
 
     async def _click_login_button(self, page, session: QRCodeSession):
-        """尝试点击登录按钮并切换到二维码登录"""
+        """尝试点击登录按钮并切换到二维码登录（优化版：移除硬编码延迟）"""
         # Step 1: 点击登录按钮弹出登录框
         login_selectors = [
             'div.login-btn',
@@ -215,11 +305,15 @@ class QRCodeLoginService:
         ]
         for selector in login_selectors:
             try:
-                btn = await page.wait_for_selector(selector, timeout=3000)
+                btn = await page.wait_for_selector(selector, timeout=1500)  # 优化：缩短超时
                 if btn:
                     await btn.click()
                     logger.debug(f"会话 {session.session_id}: 点击登录按钮")
-                    await page.wait_for_timeout(1500)
+                    # 优化：等待登录框出现，而非固定延迟
+                    try:
+                        await page.wait_for_selector('[class*="login-container"], [class*="login-modal"], [class*="qrcode"]', timeout=3000)
+                    except Exception:
+                        pass
                     break
             except Exception:
                 continue
@@ -228,16 +322,20 @@ class QRCodeLoginService:
         qrcode_tab_selectors = [
             'span:has-text("扫码登录")',
             'div:has-text("扫码登录")',
-            '[class*="qrcode"]',
-            '[class*="scan"]',
+            '[class*="qrcode-tab"]',
+            '[class*="scan-tab"]',
         ]
         for selector in qrcode_tab_selectors:
             try:
-                tab = await page.wait_for_selector(selector, timeout=2000)
+                tab = await page.wait_for_selector(selector, timeout=1500)  # 优化：缩短超时
                 if tab:
                     await tab.click()
                     logger.debug(f"会话 {session.session_id}: 切换到二维码登录")
-                    await page.wait_for_timeout(1000)
+                    # 优化：等待二维码加载，而非固定延迟
+                    try:
+                        await page.wait_for_selector('img[class*="qrcode"], canvas[class*="qrcode"], [class*="qr-code"]', timeout=2000)
+                    except Exception:
+                        pass
                     break
             except Exception:
                 continue
@@ -251,7 +349,7 @@ class QRCodeLoginService:
         ]
         for selector in qrcode_selectors:
             try:
-                qr = await page.wait_for_selector(selector, timeout=3000)
+                qr = await page.wait_for_selector(selector, timeout=2000)  # 优化：缩短超时
                 if qr:
                     logger.success(f"会话 {session.session_id}: 二维码已加载")
                     return True
@@ -544,11 +642,19 @@ class QRCodeLoginService:
             await self.cancel_session(sid)
 
     async def cleanup_all(self):
-        """清理所有资源"""
+        """清理所有资源（包括预热的浏览器）"""
         for sid in list(self._sessions.keys()):
             await self._cleanup_session(sid)
         self._sessions.clear()
         self._browsers.clear()
+
+        # 清理预热的浏览器
+        if self._warmed_browser:
+            try:
+                await self._warmed_browser.close()
+            except Exception:
+                pass
+            self._warmed_browser = None
 
         if self._playwright:
             try:

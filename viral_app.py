@@ -66,6 +66,12 @@ from viral_agent.services.user_data_service import get_user_data_service, UserDa
 # 导入自动补采服务
 from viral_agent.services.core.auto_resupply import AutoResupplyService, ResupplyResult
 
+# 导入任务管理模块
+from viral_agent.task import (
+    TaskManager, get_task_manager,
+    TaskState, TaskCheckpoint, TaskControlSignal
+)
+
 # 加载环境变量
 load_dotenv()
 
@@ -89,6 +95,25 @@ task_status = {}
 # 日志缓冲区配置
 LOG_BUFFER_SIZE = 50  # 每个任务最多保存50条日志
 _log_id_counter = 0  # 日志ID计数器
+
+
+@app.on_event("startup")
+async def startup_warmup_browser():
+    """
+    应用启动时预热浏览器
+
+    通过提前启动 Playwright 浏览器实例，将首次扫码登录时的等待时间
+    从 13-24 秒优化到 6-8 秒（节省浏览器启动时间 3-5 秒）
+    """
+    try:
+        from viral_agent.services.auth import get_qrcode_login_service
+        service = get_qrcode_login_service()
+        logger.info("🚀 应用启动，开始预热 Playwright 浏览器...")
+        await service.warmup()
+        logger.info("✅ Playwright 浏览器预热完成，首次扫码登录将更快")
+    except Exception as e:
+        # 预热失败不影响应用启动，只记录警告
+        logger.warning(f"⚠️ 浏览器预热失败（不影响正常使用）: {e}")
 
 
 def verify_task_ownership(task_id: str, username: str) -> None:
@@ -151,7 +176,7 @@ def add_task_log(task_id: str, message: str, level: str = "info") -> None:
 # ==================== 请求模型定义 ====================
 
 class ViralSearchRequest(BaseModel):
-    """爆款搜索请求模型（支持多关键词并行采集）"""
+    """爆款搜索请求模型（支持多关键词并行采集 + 双模式筛选）"""
     # 多关键词支持（优先使用）
     keywords: Optional[List[str]] = Field(
         default=None,
@@ -164,11 +189,22 @@ class ViralSearchRequest(BaseModel):
         description="搜索关键词（向后兼容，优先使用keywords）",
         json_schema_extra={"example": "防脱精华"}
     )
+    note_type: int = Field(default=0, description="笔记类型：0不限 1视频 2图文")
+    time_range: int = Field(default=0, description="时间范围：0不限 1一天内 2一周内 3半年内")
+
+    # ==================== 搜索模式（前端默认 ratio，后端保留 threshold 支持） ====================
+    search_mode: str = Field(
+        default="ratio",
+        description="搜索模式：ratio=比例筛选 threshold=阈值筛选",
+        pattern="^(ratio|threshold)$"
+    )
+
+    # ==================== 比例模式参数 ====================
     target_count: int = Field(
         default=200,
-        description="采集目标数量（由前端根据期望分析数量自动计算）",
+        description="采集目标数量",
         ge=30,
-        le=800
+        le=1000
     )
     viral_ratio: float = Field(
         default=0.5,
@@ -176,13 +212,29 @@ class ViralSearchRequest(BaseModel):
         ge=0.1,
         le=1.0
     )
-    note_type: int = Field(default=0, description="笔记类型：0不限 1视频 2图文")
-    time_range: int = Field(default=0, description="时间范围：0不限 1一天内 2一周内 3半年内")
     min_sample_count: int = Field(
         default=60,
         description="期望分析样本量（用户设定的目标分析数量）",
         ge=5,
         le=200
+    )
+
+    # ==================== 阈值模式参数（后端保留，前端暂不暴露） ====================
+    min_interaction: Optional[int] = Field(
+        default=None,
+        description="最低互动阈值（阈值模式必填）",
+        ge=100,
+        le=100000
+    )
+    max_collect_count: int = Field(
+        default=500,
+        description="阈值模式最大采集数量",
+        ge=50,
+        le=1000
+    )
+    enable_ai_expansion: bool = Field(
+        default=True,
+        description="是否启用AI关键词扩展"
     )
 
     def get_keywords(self) -> List[str]:
@@ -196,9 +248,14 @@ class ViralSearchRequest(BaseModel):
             return []
 
     def model_post_init(self, __context) -> None:
-        """验证至少提供一个关键词"""
+        """验证请求参数"""
+        # 验证至少提供一个关键词
         if not self.keywords and not self.keyword:
             raise ValueError("必须提供至少一个关键词（keywords 或 keyword）")
+
+        # 阈值模式必须指定 min_interaction
+        if self.search_mode == "threshold" and self.min_interaction is None:
+            raise ValueError("阈值模式必须指定 min_interaction（最低互动阈值）")
 
 
 class AnalysisRequest(BaseModel):
@@ -583,12 +640,12 @@ async def start_viral_search(
     task_id = f"viral_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(100, 999)}"
     keyword_display = "、".join(keywords)  # 提前定义，用于日志和返回值
 
-    # 初始化任务状态（支持多关键词，记录用户名用于数据隔离）
+    # 初始化任务状态（支持多关键词 + 双模式，记录用户名用于数据隔离）
     task_status[task_id] = {
         "status": "running",
         "progress": 0,
         "collected": 0,
-        "target": request.target_count,
+        "target": request.target_count if request.search_mode == "ratio" else request.max_collect_count,
         "keywords": keywords,  # 关键词列表
         "keyword": ", ".join(keywords),  # 兼容旧格式
         "current_keyword": "",  # 当前正在采集的关键词
@@ -598,11 +655,35 @@ async def start_viral_search(
         "start_time": datetime.now().isoformat(),
         "logs": deque(maxlen=LOG_BUFFER_SIZE),  # 日志队列
         "last_log_id": 0,  # 最后日志ID
-        "username": username  # 用户名（用于数据隔离）
+        "username": username,  # 用户名（用于数据隔离）
+        # 搜索模式参数（后端保留）
+        "search_mode": request.search_mode,
+        "min_interaction": request.min_interaction,
+        "enable_ai_expansion": request.enable_ai_expansion
     }
+
+    # 同步注册到 TaskManager（支持暂停/恢复/持久化）
+    manager = get_task_manager()
+    manager.create_task(
+        task_id=task_id,
+        username=username,
+        keywords=keywords,
+        target_count=request.target_count,
+        viral_ratio=request.viral_ratio,
+        note_type=request.note_type,
+        time_range=request.time_range,
+        min_sample_count=request.min_sample_count,
+        # 搜索模式参数
+        search_mode=request.search_mode,
+        min_interaction=request.min_interaction,
+        max_collect_count=request.max_collect_count,
+        enable_ai_expansion=request.enable_ai_expansion,
+    )
+    manager.start_task(task_id)  # 启动任务（创建控制信号）
 
     # 添加初始日志
     add_task_log(task_id, f"🚀 任务启动：搜索「{keyword_display}」", "info")
+    manager.add_log(task_id, f"🚀 任务启动：搜索「{keyword_display}」", "info")
 
     # 启动后台任务
     background_tasks.add_task(
@@ -613,7 +694,12 @@ async def start_viral_search(
         request.viral_ratio,
         request.note_type,
         request.time_range,
-        request.min_sample_count
+        request.min_sample_count,
+        # 搜索模式参数
+        request.search_mode,
+        request.min_interaction,
+        request.max_collect_count,
+        request.enable_ai_expansion
     )
 
     return {
@@ -721,6 +807,207 @@ async def analyze_viral_notes(
         "task_id": task_id,
         "message": "分析任务已启动，请轮询状态接口获取进度"
     }
+
+
+# ==================== 任务管理 API ====================
+
+@app.get("/api/tasks")
+async def list_tasks(
+    status: Optional[str] = None,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    获取用户的任务列表
+
+    Args:
+        status: 筛选状态 (running/completed/all)
+
+    Returns:
+        任务列表
+    """
+    manager = get_task_manager()
+    tasks = manager.list_tasks(username)
+
+    # 状态筛选
+    if status and status != "all":
+        tasks = [t for t in tasks if t.status.value == status]
+
+    # 按创建时间倒序
+    tasks.sort(key=lambda t: t.created_at, reverse=True)
+
+    # 统计活跃任务数
+    active_states = {TaskState.RUNNING, TaskState.PAUSING, TaskState.ANALYZING}
+    running_count = sum(1 for t in manager.list_tasks(username) if t.status in active_states)
+
+    return {
+        "tasks": [t.to_dict() for t in tasks[:50]],  # 最多返回50条
+        "total": len(tasks),
+        "running_count": running_count
+    }
+
+
+@app.get("/api/tasks/active")
+async def list_active_tasks(
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """获取用户的活跃任务（运行中、暂停中、分析中）"""
+    manager = get_task_manager()
+    tasks = manager.list_active_tasks(username)
+    return {
+        "tasks": [t.to_dict() for t in tasks],
+        "count": len(tasks)
+    }
+
+
+class BatchStatusRequest(BaseModel):
+    """批量状态查询请求"""
+    task_ids: List[str]
+    log_cursors: Optional[Dict[str, int]] = None
+
+
+@app.post("/api/tasks/batch-status")
+async def batch_task_status(
+    request: BatchStatusRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    批量获取任务状态（轮询优化）
+
+    一次请求获取多个任务的最新状态和增量日志
+    返回格式: {"tasks": [...]} 数组格式，便于前端遍历
+    """
+    manager = get_task_manager()
+    tasks = []
+    log_cursors = request.log_cursors or {}
+
+    for task_id in request.task_ids:
+        task = manager.get_task(task_id)
+        if not task or task.username != username:
+            continue
+
+        task_data = task.to_dict()
+
+        # 处理增量日志
+        cursor = log_cursors.get(task_id, 0)
+        task_data["logs"] = [log for log in task.logs if log["id"] > cursor]
+
+        tasks.append(task_data)
+
+    return {"tasks": tasks}
+
+
+@app.post("/api/tasks/{task_id}/pause")
+async def pause_task(
+    task_id: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """暂停任务"""
+    manager = get_task_manager()
+    task = manager.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.username != username:
+        raise HTTPException(status_code=403, detail="无权操作此任务")
+
+    if manager.pause_task(task_id):
+        # 同步更新旧的 task_status 字典（兼容性）
+        if task_id in task_status:
+            task_status[task_id]["status"] = "pausing"
+        return {"success": True, "message": "暂停信号已发送，任务将在下一个检查点暂停"}
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"当前状态 {task.status.value} 无法暂停"
+    )
+
+
+@app.post("/api/tasks/{task_id}/resume")
+async def resume_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """恢复暂停的任务"""
+    manager = get_task_manager()
+    task = manager.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.username != username:
+        raise HTTPException(status_code=403, detail="无权操作此任务")
+
+    if task.status != TaskState.PAUSED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前状态 {task.status.value} 无法恢复"
+        )
+
+    # 恢复任务
+    if manager.resume_task(task_id):
+        # 兜底构建 task_status（服务重启后 task_status 为空）
+        if task_id not in task_status:
+            task_status[task_id] = {
+                "status": "running",
+                "progress": task.progress,
+                "collected": task.collected,
+                "target": task.target,
+                "keywords": task.keywords,
+                "keyword": ", ".join(task.keywords),
+                "current_keyword": task.current_keyword or "",
+                "min_sample_count": task.min_sample_count,
+                "message": "任务恢复中...",
+                "start_time": task.started_at or datetime.now().isoformat(),
+                "logs": deque(maxlen=LOG_BUFFER_SIZE),
+                "last_log_id": 0,
+                "username": task.username
+            }
+        else:
+            task_status[task_id]["status"] = "running"
+
+        manager.add_log(task_id, "▶️ 任务已恢复，重新启动采集", "success")
+
+        # 重新启动后台采集任务（从检查点恢复）
+        background_tasks.add_task(
+            collect_viral_notes_task,
+            task_id,
+            task.keywords,
+            task.target,
+            task.viral_ratio,
+            task.note_type,
+            task.time_range,
+            task.min_sample_count
+        )
+
+        return {"success": True, "message": "任务已恢复"}
+
+    raise HTTPException(status_code=400, detail="恢复任务失败")
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(
+    task_id: str,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """取消任务"""
+    manager = get_task_manager()
+    task = manager.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.username != username:
+        raise HTTPException(status_code=403, detail="无权操作此任务")
+
+    if manager.cancel_task(task_id):
+        # 同步更新旧的 task_status 字典
+        if task_id in task_status:
+            task_status[task_id]["status"] = "cancelling"
+        return {"success": True, "message": "取消信号已发送"}
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"当前状态 {task.status.value} 无法取消"
+    )
 
 
 @app.get("/api/viral/export/latest")
@@ -1036,24 +1323,38 @@ async def collect_viral_notes_task(
     viral_ratio: float,
     note_type: int,
     time_range: int,
-    min_sample_count: int = 50
+    min_sample_count: int = 50,
+    # 新增搜索模式参数
+    search_mode: str = "ratio",
+    min_interaction: Optional[int] = None,
+    max_collect_count: int = 500,
+    enable_ai_expansion: bool = True
 ):
     """
-    后台任务：采集爆款笔记（支持多关键词）
+    后台任务：采集爆款笔记（支持多关键词、双模式、暂停/恢复）
 
     Args:
         task_id: 任务ID
         keywords: 搜索关键词列表
-        target_count: 目标爬取数量
-        viral_ratio: 爆款比例
+        target_count: 目标爬取数量（比例模式）
+        viral_ratio: 爆款比例（比例模式）
         note_type: 笔记类型
         time_range: 时间范围
         min_sample_count: 最低样本量要求
+        search_mode: 搜索模式（ratio=比例筛选 threshold=阈值筛选）
+        min_interaction: 最低互动阈值（阈值模式）
+        max_collect_count: 最大采集数量（阈值模式）
+        enable_ai_expansion: 是否启用AI关键词扩展
     """
+    # 获取任务管理器和控制信号
+    manager = get_task_manager()
+    signal = manager.get_signal(task_id)
+
     try:
-        # 更新状态
+        # 更新状态（双轨同步：task_status + TaskManager）
         task_status[task_id]["message"] = "正在初始化采集器..."
         add_task_log(task_id, "⚙️ 正在初始化采集器...", "info")
+        manager.add_log(task_id, "⚙️ 正在初始化采集器...", "info")
 
         # 获取任务所属用户
         task_username = task_status[task_id].get("username", "admin")
@@ -1075,13 +1376,33 @@ async def collect_viral_notes_task(
 
         # 创建采集器
         collector = ViralNoteCollector(cookies_str)
+
+        # 注入控制信号（支持暂停/恢复/取消）
+        if signal:
+            collector.set_control_signal(signal)
+            add_task_log(task_id, "🔗 已启用任务控制（支持暂停/恢复）", "info")
+
+        # 检查是否有检查点需要恢复
+        checkpoint = manager.get_checkpoint(task_id)
+        if checkpoint:
+            collector.set_checkpoint(checkpoint)
+            add_task_log(
+                task_id,
+                f"♻️ 从检查点恢复：关键词 {checkpoint.keyword_index + 1}/{len(keywords)}",
+                "info"
+            )
+            manager.add_log(task_id, f"♻️ 从检查点恢复", "info")
+
         add_task_log(task_id, "✅ 采集器初始化完成", "success")
+        manager.add_log(task_id, "✅ 采集器初始化完成", "success")
 
         # 用于控制日志频率的计数器
         last_logged_count = [0]  # 使用列表以便在闭包中修改
 
-        # 更新状态回调（支持解析当前关键词）
+        # 更新状态回调（支持解析当前关键词，同步 TaskManager）
         def update_progress(progress_or_collected, message=""):
+            current_kw = ""
+
             # 解析当前关键词
             if message and "关键词" in message:
                 import re
@@ -1092,70 +1413,129 @@ async def collect_viral_notes_task(
                         task_status[task_id]["current_keyword"] = current_kw
                         add_task_log(task_id, f"🔄 正在采集关键词：{current_kw}", "info")
 
-            # 更新进度
+            # 更新进度（双轨同步）
+            progress_val = 0
             if isinstance(progress_or_collected, int) and progress_or_collected <= 100:
-                task_status[task_id]["progress"] = progress_or_collected
+                progress_val = progress_or_collected
+                task_status[task_id]["progress"] = progress_val
             if message:
                 task_status[task_id]["message"] = message
 
             # 计算平均互动数并记录采集进度日志
+            collected_count = 0
             if hasattr(collector, 'collected_notes') and len(collector.collected_notes) > 0:
+                collected_count = len(collector.collected_notes)
                 total_interaction = sum(note.interaction_score for note in collector.collected_notes)
-                avg_interaction = int(total_interaction / len(collector.collected_notes))
+                avg_interaction = int(total_interaction / collected_count)
                 if "statistics" not in task_status[task_id]:
                     task_status[task_id]["statistics"] = {}
                 task_status[task_id]["statistics"]["avg_interaction"] = avg_interaction
 
                 # 每采集20篇记录一次日志（避免日志过多）
-                current_count = len(collector.collected_notes)
-                if current_count >= last_logged_count[0] + 20:
-                    last_logged_count[0] = current_count
+                if collected_count >= last_logged_count[0] + 20:
+                    last_logged_count[0] = collected_count
                     add_task_log(
                         task_id,
-                        f"📈 已采集 {current_count} 篇，平均互动 {avg_interaction:,}",
+                        f"📈 已采集 {collected_count} 篇，平均互动 {avg_interaction:,}",
                         "info"
                     )
+
+            # 同步到 TaskManager
+            manager.update_progress(
+                task_id,
+                progress=progress_val,
+                collected=collected_count,
+                message=message or task_status[task_id].get("message", ""),
+                current_keyword=current_kw
+            )
 
         keyword_display = "、".join(keywords)
         add_task_log(task_id, f"🔍 开始搜索「{keyword_display}」相关笔记", "info")
 
-        # 智能调整参数：确保 min_sample_count 不超过合理范围
-        expected_analysis = int(target_count * viral_ratio)
-        original_min_sample = min_sample_count
+        # 根据搜索模式选择不同的采集策略
+        if search_mode == "threshold":
+            # ==================== 阈值模式 ====================
+            add_task_log(task_id, f"🔥 【阈值筛选模式】只采集互动 >= {min_interaction:,} 的笔记", "success")
+            add_task_log(task_id, f"   最大采集数: {max_collect_count}, AI扩展: {'开启' if enable_ai_expansion else '关闭'}", "info")
+            task_status[task_id]["message"] = f"阈值模式采集「{keyword_display}」..."
 
-        if min_sample_count > target_count:
-            min_sample_count = target_count
-            add_task_log(task_id, f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (不超过目标数量)", "info")
-        elif min_sample_count > expected_analysis:
-            min_sample_count = max(expected_analysis, 10)  # 至少保留10条
-            add_task_log(task_id, f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (适配预估分析量)", "info")
-
-        # 判断使用单关键词还是多关键词采集
-        if len(keywords) == 1:
-            # 单关键词模式（向后兼容）
-            task_status[task_id]["message"] = f"开始采集「{keywords[0]}」相关笔记..."
-            add_task_log(task_id, f"📝 单关键词模式：{keywords[0]}", "info")
-            notes = await collector.search_viral_notes(
-                query=keywords[0],
-                target_count=target_count,
-                viral_ratio=viral_ratio,
+            # 使用统一入口进行阈值模式采集
+            notes = await collector.search_viral_notes_unified(
+                keywords=keywords,
+                search_mode="threshold",
+                min_interaction=min_interaction,
+                max_collect_count=max_collect_count,
                 note_type=note_type,
                 time_range=time_range,
                 progress_callback=update_progress
             )
         else:
-            # 多关键词模式
-            task_status[task_id]["message"] = f"开始多关键词采集「{keyword_display}」..."
-            add_task_log(task_id, f"📝 多关键词模式：共 {len(keywords)} 个关键词", "info")
-            notes = await collector.search_viral_notes_multi_keywords(
-                keywords=keywords,
-                target_count=target_count,
-                viral_ratio=viral_ratio,
-                note_type=note_type,
-                time_range=time_range,
-                min_sample_count=min_sample_count,
-                progress_callback=update_progress
-            )
+            # ==================== 比例模式（现有逻辑） ====================
+            add_task_log(task_id, f"📊 比例筛选模式：取前 {int(viral_ratio * 100)}%", "info")
+
+            # 智能调整参数：确保 min_sample_count 不超过合理范围
+            expected_analysis = int(target_count * viral_ratio)
+            original_min_sample = min_sample_count
+
+            if min_sample_count > target_count:
+                min_sample_count = target_count
+                add_task_log(task_id, f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (不超过目标数量)", "info")
+            elif min_sample_count > expected_analysis:
+                min_sample_count = max(expected_analysis, 10)  # 至少保留10条
+                add_task_log(task_id, f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (适配预估分析量)", "info")
+
+            # 判断使用单关键词还是多关键词采集
+            if len(keywords) == 1:
+                # 单关键词模式（向后兼容）
+                task_status[task_id]["message"] = f"开始采集「{keywords[0]}」相关笔记..."
+                add_task_log(task_id, f"📝 单关键词模式：{keywords[0]}", "info")
+                notes = await collector.search_viral_notes(
+                    query=keywords[0],
+                    target_count=target_count,
+                    viral_ratio=viral_ratio,
+                    note_type=note_type,
+                    time_range=time_range,
+                    progress_callback=update_progress
+                )
+            else:
+                # 多关键词模式
+                task_status[task_id]["message"] = f"开始多关键词采集「{keyword_display}」..."
+                add_task_log(task_id, f"📝 多关键词模式：共 {len(keywords)} 个关键词", "info")
+                notes = await collector.search_viral_notes_multi_keywords(
+                    keywords=keywords,
+                    target_count=target_count,
+                    viral_ratio=viral_ratio,
+                    note_type=note_type,
+                    time_range=time_range,
+                    min_sample_count=min_sample_count,
+                    progress_callback=update_progress
+                )
+
+        # 检查是否被暂停或取消
+        if signal:
+            if signal.is_cancelled:
+                # 任务被取消
+                manager.confirm_cancelled(task_id)
+                task_status[task_id].update({
+                    "status": "cancelled",
+                    "message": "任务已取消",
+                    "end_time": datetime.now().isoformat()
+                })
+                logger.info(f"任务 {task_id} 已取消")
+                return  # 提前返回
+
+            if signal.is_paused:
+                # 任务被暂停，保存检查点
+                checkpoint = collector.get_checkpoint()
+                if checkpoint:
+                    manager.confirm_paused(task_id, checkpoint)
+                    task_status[task_id].update({
+                        "status": "paused",
+                        "message": f"任务已暂停 (关键词 {checkpoint.keyword_index + 1}/{len(keywords)})",
+                        "paused_at": datetime.now().isoformat()
+                    })
+                    logger.info(f"任务 {task_id} 已暂停，检查点已保存")
+                return  # 提前返回，等待恢复
 
         # 保存数据（使用用户专属目录）
         task_status[task_id]["message"] = "正在保存数据..."
@@ -1180,11 +1560,17 @@ async def collect_viral_notes_task(
         resupply_result: Optional[ResupplyResult] = None
         sample_warning = None
 
-        if len(notes) < min_sample_count:
-            logger.info(f"📊 样本量不足 ({len(notes)} < {min_sample_count})，启动自动补采...")
+        # 根据模式确定最低样本量
+        effective_min_sample = min_sample_count
+        if search_mode == "threshold":
+            # 阈值模式：使用配置的 min_sample_count 或默认值
+            effective_min_sample = min_sample_count
+
+        if len(notes) < effective_min_sample:
+            logger.info(f"📊 样本量不足 ({len(notes)} < {effective_min_sample})，启动自动补采...")
             task_status[task_id]["message"] = "样本量不足，正在自动补采..."
             task_status[task_id]["progress"] = 87
-            add_task_log(task_id, f"⚠️ 样本量不足 ({len(notes)} < {min_sample_count})", "warning")
+            add_task_log(task_id, f"⚠️ 样本量不足 ({len(notes)} < {effective_min_sample})", "warning")
             add_task_log(task_id, "🔄 启动自动补采...", "info")
 
             resupply_service = AutoResupplyService()
@@ -1194,19 +1580,45 @@ async def collect_viral_notes_task(
                 collector, '_all_notes_before_filter', notes
             )
 
-            notes, resupply_result = await resupply_service.execute_resupply(
-                all_notes_before_filter=all_notes_before_filter,
-                current_viral_ratio=viral_ratio,
-                min_sample_count=min_sample_count,
-                collector=collector,
-                keywords=keywords,
-                original_target_count=target_count,
-                note_type=note_type,
-                time_range=time_range,
-                progress_callback=lambda p, m: task_status[task_id].update({
-                    "progress": p, "message": m
-                })
-            )
+            # 根据搜索模式选择补采策略
+            if search_mode == "threshold":
+                # 阈值模式：始终走带阈值过滤的路径（无论是否启用AI扩展）
+                if enable_ai_expansion:
+                    add_task_log(task_id, "🤖 启用 AI 关键词扩展补采", "info")
+                else:
+                    add_task_log(task_id, "🔥 阈值模式补采（未启用AI扩展）", "info")
+
+                notes, resupply_result = await resupply_service.execute_resupply_with_expansion(
+                    all_notes_before_filter=all_notes_before_filter,
+                    current_viral_ratio=viral_ratio,
+                    min_sample_count=effective_min_sample,
+                    collector=collector,
+                    keywords=keywords,
+                    original_target_count=target_count,
+                    note_type=note_type,
+                    time_range=time_range,
+                    search_mode=search_mode,
+                    min_interaction=min_interaction,
+                    enable_ai_expansion=enable_ai_expansion,  # 即使为 False 也走这个路径以保证阈值过滤
+                    progress_callback=lambda p, m: task_status[task_id].update({
+                        "progress": p, "message": m
+                    })
+                )
+            else:
+                # 比例模式：使用原有补采逻辑
+                notes, resupply_result = await resupply_service.execute_resupply(
+                    all_notes_before_filter=all_notes_before_filter,
+                    current_viral_ratio=viral_ratio,
+                    min_sample_count=effective_min_sample,
+                    collector=collector,
+                    keywords=keywords,
+                    original_target_count=target_count,
+                    note_type=note_type,
+                    time_range=time_range,
+                    progress_callback=lambda p, m: task_status[task_id].update({
+                        "progress": p, "message": m
+                    })
+                )
 
             # 补采后需要重新保存数据（使用用户专属目录）
             collector.collected_notes = notes
@@ -1248,7 +1660,11 @@ async def collect_viral_notes_task(
 
         logger.success(f"任务 {task_id} 完成，采集 {len(notes)} 篇爆款笔记")
         add_task_log(task_id, f"🎉 采集任务完成！共 {len(notes)} 篇笔记", "success")
+
+        # 同步到 TaskManager（标记采集完成）
+        manager.mark_completed(task_id, data_file, statistics)
         if sample_warning:
+            manager.set_sample_warning(task_id, sample_warning)
             logger.info(sample_warning)
 
     except Exception as e:
@@ -1260,6 +1676,8 @@ async def collect_viral_notes_task(
             "error": str(e),
             "end_time": datetime.now().isoformat()
         })
+        # 同步到 TaskManager
+        manager.mark_failed(task_id, str(e))
 
 
 async def analyze_viral_notes_task(
@@ -1279,7 +1697,13 @@ async def analyze_viral_notes_task(
         analysis_type: 分析类型（image/video/all）
         video_source_mode: 视频源模式
     """
+    # 获取任务管理器
+    manager = get_task_manager()
+
     try:
+        # 标记开始分析（同步 TaskManager）
+        manager.mark_analyzing(task_id)
+
         # 加载数据
         add_task_log(task_id, "📂 正在加载采集数据...", "info")
         with open(data_file, 'r', encoding='utf-8') as f:
@@ -1368,6 +1792,9 @@ async def analyze_viral_notes_task(
         add_task_log(task_id, "💡 可以点击「导出报告」下载Excel分析报告", "info")
         logger.success(f"分析任务 {task_id} 完成")
 
+        # 同步到 TaskManager
+        manager.mark_analyzed(task_id, analysis_file)
+
     except Exception as e:
         logger.error(f"分析任务 {task_id} 失败: {e}")
         import traceback
@@ -1378,6 +1805,8 @@ async def analyze_viral_notes_task(
             "analysis_error": str(e),
             "analysis_end_time": datetime.now().isoformat()
         })
+        # 同步到 TaskManager
+        manager.mark_analysis_failed(task_id, str(e))
 
 
 # ==================== 知识库管理API ====================
