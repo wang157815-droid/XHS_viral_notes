@@ -459,8 +459,8 @@ class QRCodeLoginService:
                 try:
                     input_el = await page.query_selector(selector)
                     if input_el and await input_el.is_visible():
-                        # 先点击聚焦
-                        await input_el.click()
+                        # 使用 force=True 强制点击（绕过遮挡元素）
+                        await input_el.click(force=True, timeout=3000)
                         await page.wait_for_timeout(100)
                         # 清空已有内容
                         await input_el.fill('')
@@ -472,6 +472,31 @@ class QRCodeLoginService:
                 except Exception as e:
                     logger.debug(f"会话 {session_id}: 输入框选择器 {selector} 失败: {e}")
                     continue
+
+            # 如果常规方法失败，尝试使用 JavaScript 直接操作
+            if not input_filled:
+                logger.warning(f"会话 {session_id}: 常规输入失败，尝试 JavaScript 直接操作")
+                try:
+                    # 使用 JS 查找输入框并填入值
+                    js_result = await page.evaluate(f'''() => {{
+                        // 查找所有可能的输入框
+                        const inputs = document.querySelectorAll('input[type="text"], input[type="tel"], input[type="number"], input:not([type])');
+                        for (const input of inputs) {{
+                            if (input.offsetParent !== null) {{  // 可见元素
+                                input.focus();
+                                input.value = "{sms_code}";
+                                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                return true;
+                            }}
+                        }}
+                        return false;
+                    }}''')
+                    if js_result:
+                        input_filled = True
+                        logger.info(f"会话 {session_id}: 已通过 JavaScript 填入验证码")
+                except Exception as e:
+                    logger.debug(f"会话 {session_id}: JavaScript 输入失败: {e}")
 
             # 如果 fill 失败，尝试键盘逐字输入
             if not input_filled:
