@@ -379,6 +379,8 @@ class QRCodeLoginService:
                         if session.status != QRLoginStatus.NEED_SMS_CODE:
                             session.status = QRLoginStatus.NEED_SMS_CODE
                             logger.info(f"会话 {session.session_id}: 需要输入短信验证码")
+                            # 自动点击"获取验证码"按钮发送短信
+                            await self._click_get_sms_code_button(page, session.session_id)
                     elif interaction_type == 'slider':
                         session.error_message = '需要滑块验证，请使用手动复制 Cookie 方式'
                         logger.warning(f"会话 {session.session_id}: 需要滑块验证")
@@ -424,6 +426,40 @@ class QRCodeLoginService:
                 continue
 
         return None
+
+    async def _click_get_sms_code_button(self, page, session_id: str):
+        """
+        自动点击"获取验证码"按钮发送短信
+        """
+        get_code_selectors = [
+            ':text-is("获取验证码")',
+            ':text-is("发送验证码")',
+            ':text-is("获取短信验证码")',
+            ':has-text("获取验证码")',
+            ':has-text("发送验证码")',
+            'button:has-text("获取")',
+            'div:has-text("获取验证码")',
+            'span:has-text("获取验证码")',
+            '[class*="get-code"]',
+            '[class*="send-code"]',
+        ]
+
+        for selector in get_code_selectors:
+            try:
+                btn = await page.query_selector(selector)
+                if btn and await btn.is_visible():
+                    btn_text = await btn.inner_text()
+                    # 确认是获取验证码按钮，不是其他按钮
+                    if '获取' in btn_text or '发送' in btn_text:
+                        await btn.click(force=True)
+                        logger.info(f"会话 {session_id}: 已点击'{btn_text}'按钮，等待短信")
+                        return True
+            except Exception as e:
+                logger.debug(f"会话 {session_id}: 获取验证码按钮选择器 {selector} 失败: {e}")
+                continue
+
+        logger.debug(f"会话 {session_id}: 未找到获取验证码按钮（可能已发送或不需要）")
+        return False
 
     async def submit_sms_code(self, session_id: str, sms_code: str) -> bool:
         """提交短信验证码"""
