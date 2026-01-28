@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RED MUSE</title>
+    <title>灵感缪斯</title>
     <link rel="icon" type="image/png" href="/static/images/favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
@@ -1444,17 +1444,18 @@
         .sidebar-logo {
             display: flex;
             align-items: center;
+            justify-content: flex-start; /* 左对齐 */
             gap: 0;
             margin-bottom: 12px;
             position: relative;
         }
 
         .sidebar-logo-icon {
-            width: 40px;
-            height: 40px;
+            width: auto;
+            height: 32px;
             object-fit: contain;
             flex-shrink: 0;
-            margin-right: -25px; /* 抵消图片右侧白边 */
+            margin-right: -8px; /* 负边距拉近 */
         }
 
         .sidebar-logo-text {
@@ -1469,7 +1470,14 @@
             height: 28px;
             object-fit: contain;
             flex: 1;
-            margin-left: -5px; /* 抵消图片左侧白边 */
+            margin-left: -10px; /* 负边距拉近 */
+        }
+
+        /* 合并版 Logo（RM + 灵感缪斯） */
+        .sidebar-logo-full {
+            height: 32px;
+            object-fit: contain;
+            flex-shrink: 0;
         }
 
         .sidebar-logo-text small {
@@ -1682,6 +1690,232 @@
             padding: 24px 16px;
             color: var(--color-on-surface-variant);
             font-size: 0.85rem;
+        }
+
+        /* ========== 多任务 Tab 切换样式 ========== */
+        .sidebar-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+            padding: 4px;
+            background: var(--color-surface-container);
+            border-radius: 10px;
+        }
+
+        .sidebar-tab {
+            flex: 1;
+            padding: 8px 12px;
+            border: none;
+            background: transparent;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--color-on-surface-variant);
+            cursor: pointer;
+            transition: all var(--duration-short) var(--ease-standard);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .sidebar-tab:hover {
+            color: var(--color-on-surface);
+            background: rgba(var(--color-primary-rgb), 0.05);
+        }
+
+        .sidebar-tab.active {
+            background: var(--color-primary);
+            color: white;
+            box-shadow: 0 2px 8px rgba(var(--color-primary-rgb), 0.3);
+        }
+
+        .sidebar-tab .badge {
+            background: rgba(255, 255, 255, 0.3);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            min-width: 18px;
+        }
+
+        .sidebar-tab.active .badge {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* ========== 任务卡片样式 ========== */
+        .task-card {
+            background: var(--color-surface-container);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all var(--duration-short) var(--ease-standard);
+            border: 2px solid transparent;
+            position: relative;
+        }
+
+        .task-card:hover {
+            background: var(--color-surface-container-high);
+            transform: translateY(-1px);
+        }
+
+        .task-card.active {
+            border-color: var(--color-primary);
+            background: rgba(var(--color-primary-rgb), 0.08);
+        }
+
+        .task-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .task-card-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .task-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .task-status-dot.running {
+            background: var(--color-primary);
+            animation: pulse 1.5s infinite;
+        }
+
+        .task-status-dot.paused {
+            background: #f59e0b;
+        }
+
+        .task-status-dot.completed {
+            background: #10b981;
+        }
+
+        .task-status-dot.failed {
+            background: #ef4444;
+        }
+
+        .task-status-dot.cancelled {
+            background: #6b7280;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.2); }
+        }
+
+        .task-card-keywords {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--color-on-surface);
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .task-card-time {
+            font-size: 0.7rem;
+            color: var(--color-on-surface-variant);
+        }
+
+        .task-card-progress {
+            margin-bottom: 8px;
+        }
+
+        .task-progress-bar {
+            height: 4px;
+            background: var(--color-surface-container-highest);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .task-progress-fill {
+            height: 100%;
+            background: var(--primary-gradient);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        .task-card-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75rem;
+            color: var(--color-on-surface-variant);
+            margin-bottom: 8px;
+        }
+
+        .task-card-actions {
+            display: flex;
+            gap: 6px;
+            justify-content: flex-end;
+        }
+
+        .task-action-btn {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all var(--duration-short) var(--ease-standard);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .task-action-btn.pause {
+            background: rgba(245, 158, 11, 0.1);
+            color: #f59e0b;
+        }
+
+        .task-action-btn.pause:hover {
+            background: rgba(245, 158, 11, 0.2);
+        }
+
+        .task-action-btn.resume {
+            background: rgba(16, 185, 129, 0.1);
+            color: #10b981;
+        }
+
+        .task-action-btn.resume:hover {
+            background: rgba(16, 185, 129, 0.2);
+        }
+
+        .task-action-btn.cancel {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+
+        .task-action-btn.cancel:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
+        .task-empty {
+            text-align: center;
+            padding: 24px 16px;
+            color: var(--color-on-surface-variant);
+            font-size: 0.85rem;
+        }
+
+        .task-empty i {
+            font-size: 2rem;
+            margin-bottom: 8px;
+            opacity: 0.5;
         }
 
         /* Cookie配置紧凑样式 */
@@ -2063,6 +2297,7 @@
             height: 100vh;
             z-index: 9999;
             display: flex;
+            flex-direction: column;
             background: #ffffff;
         }
 
@@ -2070,188 +2305,105 @@
             display: none;
         }
 
-        /* 左侧品牌区域 */
-        .login-brand-section {
-            width: 45%;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            padding: 60px;
+        /* 主内容区（紫色背景） */
+        .login-main-area {
+            flex: 1;
+            background: #b794f6;
             position: relative;
-            overflow: hidden;
+            padding: 24px 40px;
         }
 
-        /* 背景装饰 */
-        .login-brand-section::before {
-            content: '';
+        /* 左上角 Logo */
+        .login-top-logo {
+            display: flex;
+            align-items: center;
+            gap: 14px;
             position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle at 30% 70%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
-                        radial-gradient(circle at 70% 30%, rgba(118, 75, 162, 0.15) 0%, transparent 50%);
-            animation: loginBgFloat 20s ease-in-out infinite;
+            top: 32px;
+            left: 52px;
         }
 
-        @keyframes loginBgFloat {
-            0%, 100% { transform: translate(0, 0) rotate(0deg); }
-            50% { transform: translate(2%, 2%) rotate(5deg); }
-        }
-
-        .login-brand-content {
-            position: relative;
-            z-index: 1;
-            text-align: center;
-            color: #ffffff;
-            max-width: 400px;
-        }
-
-        .login-brand-logo {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 16px;
-            margin-bottom: 32px;
-        }
-
-        .login-brand-logo img.logo-icon {
-            width: 56px;
-            height: 56px;
-            filter: brightness(1.1);
-        }
-
-        .login-brand-logo img.logo-text {
-            height: 36px;
+        .login-top-logo img {
+            height: 52px;
             width: auto;
-            filter: brightness(1.1);  /* 与 logo-icon 保持一致 */
         }
 
-        .login-brand-tagline {
-            font-size: 1.5rem;
-            font-weight: 500;
-            line-height: 1.6;
-            margin-bottom: 60px;
-            opacity: 0.95;
-        }
-
-        .login-brand-features {
-            width: 100%;
-        }
-
-        .login-feature-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 16px;
-            margin-bottom: 24px;
+        /* 左侧品牌内容（与右侧卡片垂直对齐） */
+        .login-brand-content {
+            position: absolute;
+            top: 50%;
+            left: 60px;
+            transform: translateY(-50%);
+            z-index: 1;
             text-align: left;
-            padding: 16px 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            transition: all 0.3s ease;
-        }
-
-        .login-feature-item:hover {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: rgba(255, 255, 255, 0.15);
-            transform: translateX(4px);
-        }
-
-        .login-feature-icon {
-            font-size: 1.5rem;
-            flex-shrink: 0;
-            width: 36px;
-            text-align: center;
-        }
-
-        .login-feature-text h4 {
-            font-size: 1rem;
-            font-weight: 600;
-            margin: 0 0 4px 0;
             color: #ffffff;
+            max-width: 450px;
         }
 
-        .login-feature-text p {
-            font-size: 0.875rem;
-            margin: 0;
-            opacity: 0.7;
+        .login-brand-title {
+            font-size: 3.8rem;
+            font-weight: 700;
+            margin: 0 0 18px 0;
+            letter-spacing: 3px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .login-brand-subtitle {
+            font-size: 1.5rem;
+            font-weight: 400;
+            line-height: 1.6;
             color: rgba(255, 255, 255, 0.8);
         }
 
-        /* 右侧表单区域 */
-        .login-form-section {
-            width: 55%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            padding: 60px;
+        /* 右侧浮动登录卡片 */
+        .login-card {
+            position: absolute;
+            top: 50%;
+            right: 10%;
+            transform: translateY(-50%);
+            width: 420px;
             background: #ffffff;
+            padding: 44px 40px;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
 
-        .login-form-container {
-            width: 100%;
-            max-width: 400px;
+        /* 底部白色区域（已移除） */
+        .login-bottom-area {
+            display: none;
         }
 
-        .login-form-header {
-            margin-bottom: 40px;
-        }
-
-        .login-form-header h1 {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #1a1a2e;
-            margin: 0 0 8px 0;
-        }
-
-        .login-form-header p {
-            font-size: 1rem;
-            color: #666;
-            margin: 0;
-        }
-
+        /* 表单样式 */
         .login-form-group {
-            margin-bottom: 24px;
-        }
-
-        .login-form-group label {
-            display: block;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: #333;
-            margin-bottom: 8px;
+            margin-bottom: 20px;
         }
 
         .login-form-group input {
             width: 100%;
-            padding: 14px 16px;
-            font-size: 1rem;
-            border: 2px solid #e0e0e0;
-            border-radius: 12px;
-            background: #fafafa;
+            padding: 18px 20px;
+            font-size: 1.25rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            background: #ffffff;
             transition: all 0.3s ease;
             outline: none;
         }
 
         .login-form-group input:focus {
-            border-color: #667eea;
-            background: #ffffff;
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+            border-color: #b794f6;
+            box-shadow: 0 0 0 2px rgba(183, 148, 246, 0.2);
         }
 
         .login-form-group input::placeholder {
             color: #aaa;
+            font-size: 1.25rem;
         }
 
         #loginPageError {
-            padding: 12px 16px;
+            padding: 14px 18px;
             border-radius: 10px;
-            font-size: 0.875rem;
-            margin-bottom: 20px;
+            font-size: 1.1rem;
+            margin-bottom: 18px;
             background: #fef2f2;
             color: #dc2626;
             border: 1px solid #fecaca;
@@ -2263,60 +2415,73 @@
 
         .login-submit-btn {
             width: 100%;
-            padding: 14px 24px;
-            font-size: 1rem;
-            font-weight: 600;
+            padding: 18px 28px;
+            font-size: 1.3rem;
+            font-weight: 500;
             color: #ffffff;
-            background: var(--primary-gradient);
+            background: linear-gradient(90deg, #b794f6 0%, #d8a9f7 50%, #f0a5c8 100%);
             border: none;
-            border-radius: 12px;
+            border-radius: 10px;
             cursor: pointer;
             transition: all 0.3s ease;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
+            margin-top: 12px;
+            letter-spacing: 8px;
         }
 
         .login-submit-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.35);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(183, 148, 246, 0.4);
         }
 
         .login-submit-btn:active {
             transform: translateY(0);
         }
 
-        .login-submit-btn i {
-            font-size: 1rem;
-        }
-
         /* 响应式：移动端适配 */
         @media (max-width: 992px) {
-            #loginPage {
+            .login-main-area {
+                display: flex;
                 flex-direction: column;
+                align-items: center;
+                padding: 24px 20px;
             }
 
-            .login-brand-section {
-                width: 100%;
-                padding: 40px 30px;
-                min-height: auto;
-            }
-
-            .login-brand-tagline {
-                font-size: 1.25rem;
+            .login-top-logo {
+                position: relative;
+                top: auto;
+                left: auto;
                 margin-bottom: 30px;
             }
 
-            .login-brand-features {
-                display: none;
+            .login-brand-content {
+                position: relative;
+                bottom: auto;
+                left: auto;
+                text-align: center;
+                margin-bottom: 30px;
             }
 
-            .login-form-section {
-                width: 100%;
-                flex: 1;
-                padding: 40px 30px;
+            .login-brand-title {
+                font-size: 1.8rem;
             }
+
+            .login-brand-subtitle {
+                font-size: 0.95rem;
+            }
+
+            .login-card {
+                position: relative;
+                top: auto;
+                right: auto;
+                transform: none;
+                width: 100%;
+                max-width: 320px;
+            }
+
         }
 
         @media (max-width: 576px) {
@@ -2351,66 +2516,36 @@
 <body>
     <!-- 全屏登录页面 -->
     <div id="loginPage" class="hidden">
-        <!-- 左侧品牌区域 -->
-        <div class="login-brand-section">
-            <div class="login-brand-content">
-                <div class="login-brand-logo">
-                    <img src="/static/images/logo_icon.png" alt="Logo" class="logo-icon">
-                    <img src="/static/images/logo_text.png" alt="RED MUSE" class="logo-text">
-                </div>
-                <div class="login-brand-tagline">
-                    小红书爆款笔记分析<br>AI 驱动的内容洞察
-                </div>
-                <div class="login-brand-features">
-                    <div class="login-feature-item">
-                        <span class="login-feature-icon">&#128202;</span>
-                        <div class="login-feature-text">
-                            <h4>爆款分析</h4>
-                            <p>深度解析爆款笔记特征</p>
-                        </div>
-                    </div>
-                    <div class="login-feature-item">
-                        <span class="login-feature-icon">&#129302;</span>
-                        <div class="login-feature-text">
-                            <h4>AI 驱动</h4>
-                            <p>智能提取创作模型</p>
-                        </div>
-                    </div>
-                    <div class="login-feature-item">
-                        <span class="login-feature-icon">&#128274;</span>
-                        <div class="login-feature-text">
-                            <h4>数据安全</h4>
-                            <p>用户数据隔离存储</p>
-                        </div>
-                    </div>
-                </div>
+        <!-- 主内容区（紫色背景） -->
+        <div class="login-main-area">
+            <!-- 左上角 Logo -->
+            <div class="login-top-logo">
+                <img src="/static/images/logo_full.svg" alt="灵感缪斯">
             </div>
-        </div>
 
-        <!-- 右侧表单区域 -->
-        <div class="login-form-section">
-            <div class="login-form-container">
-                <div class="login-form-header">
-                    <h1>Welcome back</h1>
-                    <p>登录以访问您的分析数据</p>
-                </div>
+            <!-- 左侧品牌内容 -->
+            <div class="login-brand-content">
+                <h1 class="login-brand-title">灵感缪斯</h1>
+                <p class="login-brand-subtitle">洞察万千爆款，唤你一瞬灵感</p>
+            </div>
+
+            <!-- 右侧浮动登录卡片 -->
+            <div class="login-card">
                 <form id="loginForm">
                     <div class="login-form-group">
-                        <label for="loginUsername">用户名</label>
-                        <input type="text" id="loginUsername" placeholder="请输入用户名" required>
+                        <input type="text" id="loginUsername" placeholder="请输入账号名" required>
                     </div>
                     <div class="login-form-group">
-                        <label for="loginPassword">密码</label>
-                        <input type="password" id="loginPassword" placeholder="请输入密码" required>
+                        <input type="password" id="loginPassword" placeholder="请输入登录密码" required>
                     </div>
                     <div id="loginPageError" class="hidden"></div>
                     <button type="submit" class="login-submit-btn">
-                        <i class="fas fa-sign-in-alt"></i>
-                        <span>登录</span>
+                        <span>登 录</span>
                     </button>
                 </form>
             </div>
         </div>
+
     </div>
 
     <!-- 修改密码模态框 -->
@@ -2469,8 +2604,7 @@
         <!-- 顶部区域：Logo + Cookie配置 -->
         <div class="sidebar-top">
             <div class="sidebar-logo">
-                <img src="/static/images/logo_icon.png" alt="Logo" class="sidebar-logo-icon">
-                <img src="/static/images/logo_text.png" alt="RED MUSE" class="sidebar-logo-text-img">
+                <img src="/static/images/logo_full.svg" alt="灵感缪斯" class="sidebar-logo-full">
                 <button class="sidebar-collapse-btn" onclick="closeSidebar()" title="收起侧边栏">
                     <i class="fas fa-chevron-left"></i>
                 </button>
@@ -2506,18 +2640,42 @@
             </div>
         </div>
 
-        <!-- 中间区域：历史记录（滚动） -->
+        <!-- 中间区域：任务列表 + 历史记录（Tab 切换） -->
         <div class="sidebar-middle">
-            <div class="history-section-header">
-                <span class="history-section-title">
-                    <i class="fas fa-history"></i> 历史记录
-                </span>
-                <button class="history-refresh-btn" onclick="loadHistory()" title="刷新">
-                    <i class="fas fa-sync-alt"></i>
+            <!-- Tab 切换按钮 -->
+            <div class="sidebar-tabs">
+                <button class="sidebar-tab active" data-tab="running" onclick="switchSidebarTab('running')">
+                    <i class="fas fa-play-circle"></i> 进行中
+                    <span class="badge" id="runningTaskCount">0</span>
+                </button>
+                <button class="sidebar-tab" data-tab="history" onclick="switchSidebarTab('history')">
+                    <i class="fas fa-history"></i> 历史
                 </button>
             </div>
-            <div id="historyList">
-                <div class="history-empty">加载中...</div>
+
+            <!-- 进行中任务列表 -->
+            <div class="tab-content active" id="runningTasksTab">
+                <div id="runningTaskList">
+                    <div class="task-empty">
+                        <i class="fas fa-inbox"></i>
+                        <p>暂无进行中的任务</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 历史记录列表 -->
+            <div class="tab-content" id="historyTab">
+                <div class="history-section-header">
+                    <span class="history-section-title">
+                        <i class="fas fa-history"></i> 历史记录
+                    </span>
+                    <button class="history-refresh-btn" onclick="loadHistory()" title="刷新">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+                <div id="historyList">
+                    <div class="history-empty">加载中...</div>
+                </div>
             </div>
         </div>
 
@@ -3746,6 +3904,463 @@
         let analysisStartTime = null;  // 分析开始时间
         let collectedNoteCount = 0;  // 采集的笔记数量，用于分析时间估算
 
+        // ==================== 多任务管理变量 ====================
+        let activeTasks = new Map();  // 活跃任务 Map: taskId -> taskData
+        let multiTaskPollingTimer = null;  // 多任务批量轮询计时器
+        const MULTI_TASK_POLL_INTERVAL = 2000;  // 多任务轮询间隔 2 秒
+
+        // ==================== 多任务管理函数 ====================
+
+        /**
+         * 切换侧边栏 Tab
+         */
+        function switchSidebarTab(tabName) {
+            // 更新 Tab 按钮状态
+            document.querySelectorAll('.sidebar-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.tab === tabName);
+            });
+
+            // 更新 Tab 内容显示
+            document.getElementById('runningTasksTab').classList.toggle('active', tabName === 'running');
+            document.getElementById('historyTab').classList.toggle('active', tabName === 'history');
+
+            // 如果切换到历史记录，刷新历史
+            if (tabName === 'history') {
+                loadHistory();
+            }
+        }
+
+        /**
+         * 加载活跃任务列表
+         */
+        async function loadActiveTasks() {
+            try {
+                const response = await authFetch('/api/tasks/active');
+                if (!response.ok) return;
+
+                const data = await response.json();
+                const tasks = data.tasks || [];
+
+                // 更新活跃任务 Map
+                activeTasks.clear();
+                tasks.forEach(task => {
+                    activeTasks.set(task.task_id, task);
+                });
+
+                // 更新任务计数
+                document.getElementById('runningTaskCount').textContent = tasks.length;
+
+                // 渲染任务列表
+                renderTaskList(tasks);
+
+                // 如果有活跃任务，启动批量轮询
+                if (tasks.length > 0) {
+                    startMultiTaskPolling();
+                } else {
+                    stopMultiTaskPolling();
+                }
+            } catch (error) {
+                console.error('加载活跃任务失败:', error);
+            }
+        }
+
+        /**
+         * 渲染任务列表
+         */
+        function renderTaskList(tasks) {
+            const container = document.getElementById('runningTaskList');
+            if (!tasks || tasks.length === 0) {
+                container.innerHTML = `
+                    <div class="task-empty">
+                        <i class="fas fa-inbox"></i>
+                        <p>暂无进行中的任务</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => renderTaskCard(task)).join('');
+        }
+
+        /**
+         * 渲染单个任务卡片
+         */
+        function renderTaskCard(task) {
+            const keywords = task.keywords?.join('、') || task.keyword || '未知';
+            const statusClass = getStatusClass(task.status);
+            const statusText = getStatusText(task.status);
+            const isActive = task.task_id === currentTaskId;
+            const progress = task.progress || 0;
+            const collected = task.collected || 0;
+            const target = task.target || 100;
+            // 兼容 started_at（TaskManager）和 start_time（旧格式）
+            const timeStr = task.started_at || task.start_time;
+            const startTime = timeStr ? new Date(timeStr).toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit'
+            }) : '';
+
+            // 根据状态显示不同的操作按钮
+            let actionsHtml = '';
+            if (task.status === 'running') {
+                actionsHtml = `
+                    <button class="task-action-btn pause" onclick="event.stopPropagation(); pauseTask('${task.task_id}')" title="暂停">
+                        <i class="fas fa-pause"></i> 暂停
+                    </button>
+                    <button class="task-action-btn cancel" onclick="event.stopPropagation(); cancelTask('${task.task_id}')" title="取消">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
+            } else if (task.status === 'paused') {
+                actionsHtml = `
+                    <button class="task-action-btn resume" onclick="event.stopPropagation(); resumeTask('${task.task_id}')" title="恢复">
+                        <i class="fas fa-play"></i> 恢复
+                    </button>
+                    <button class="task-action-btn cancel" onclick="event.stopPropagation(); cancelTask('${task.task_id}')" title="取消">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
+            } else if (task.status === 'pausing' || task.status === 'cancelling') {
+                actionsHtml = `
+                    <span class="text-muted small"><i class="fas fa-spinner fa-spin"></i> 等待检查点...</span>
+                `;
+            }
+
+            return `
+                <div class="task-card ${isActive ? 'active' : ''}" data-task-id="${task.task_id}" onclick="selectTask('${task.task_id}')">
+                    <div class="task-card-header">
+                        <div class="task-card-status">
+                            <span class="task-status-dot ${statusClass}"></span>
+                            <span class="task-card-keywords" title="${keywords}">${keywords}</span>
+                        </div>
+                        <span class="task-card-time">${startTime}</span>
+                    </div>
+                    <div class="task-card-progress">
+                        <div class="task-progress-bar">
+                            <div class="task-progress-fill" style="width: ${progress}%"></div>
+                        </div>
+                    </div>
+                    <div class="task-card-info">
+                        <span>${statusText} · ${collected}/${target}</span>
+                        <span>${progress}%</span>
+                    </div>
+                    <div class="task-card-actions">
+                        ${actionsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * 获取状态对应的 CSS 类名
+         */
+        function getStatusClass(status) {
+            const statusMap = {
+                'running': 'running',
+                'pausing': 'running',
+                'paused': 'paused',
+                'completed': 'completed',
+                'analyzed': 'completed',
+                'analyzing': 'running',
+                'failed': 'failed',
+                'analysis_failed': 'failed',
+                'cancelled': 'cancelled',
+                'cancelling': 'running'
+            };
+            return statusMap[status] || 'running';
+        }
+
+        /**
+         * 获取状态文本
+         */
+        function getStatusText(status) {
+            const textMap = {
+                'running': '采集中',
+                'pausing': '暂停中',
+                'paused': '已暂停',
+                'completed': '采集完成',
+                'analyzing': '分析中',
+                'analyzed': '分析完成',
+                'failed': '失败',
+                'analysis_failed': '分析失败',
+                'cancelled': '已取消',
+                'cancelling': '取消中'
+            };
+            return textMap[status] || status;
+        }
+
+        /**
+         * 选择任务（点击任务卡片）
+         * 切换任务时需要：更新进度面板、重置日志、立即获取最新状态
+         */
+        function selectTask(taskId) {
+            // 如果点击的是当前任务，不做任何操作
+            if (currentTaskId === taskId) return;
+
+            currentTaskId = taskId;
+            const task = activeTasks.get(taskId);
+
+            // 1. 更新卡片激活状态
+            document.querySelectorAll('.task-card').forEach(card => {
+                card.classList.toggle('active', card.dataset.taskId === taskId);
+            });
+
+            // 2. 清空日志（会重置 logCursor、totalLogCount、角标等）
+            clearLogs();
+
+            // 3. 显示加载中的 spinner（使用正确的 .log-empty 类名）
+            const logContent = document.getElementById('logContent');
+            if (logContent) {
+                logContent.innerHTML = `
+                    <div class="log-empty">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        正在加载任务日志...
+                    </div>
+                `;
+            }
+
+            // 4. 立即用缓存数据更新进度面板
+            if (task) {
+                updateProgressDisplay(task);
+            }
+
+            // 5. 立即获取一次完整状态（不等轮询）
+            fetchTaskStatusOnce(taskId);
+
+            console.log('切换到任务:', taskId, task?.status);
+        }
+
+        /**
+         * 立即获取一次任务状态（用于切换任务时）
+         */
+        async function fetchTaskStatusOnce(taskId) {
+            try {
+                const response = await authFetch(`/api/viral/status/${taskId}`);
+                if (!response.ok) return;
+
+                const status = await response.json();
+
+                // 防止竞态条件：在 JSON 解析完成后再校验
+                // （用户可能在 fetch 或 json() 期间切换了任务）
+                if (currentTaskId !== taskId) {
+                    console.log('任务已切换，丢弃旧响应:', taskId);
+                    return;
+                }
+
+                // 更新全局 startTime（用于计算耗时显示）
+                const taskStartTime = status.started_at || status.start_time;
+                if (taskStartTime) {
+                    startTime = new Date(taskStartTime);
+                }
+
+                // 更新进度显示
+                updateProgressDisplay(status);
+
+                // 处理日志（完整日志，因为 logCursor 已重置为 0）
+                if (status.logs && status.logs.length > 0) {
+                    processIncrementalLogs(status.logs);
+                } else {
+                    // 没有日志，显示空状态（使用正确的 .log-empty 类名）
+                    const logContent = document.getElementById('logContent');
+                    if (logContent) {
+                        logContent.innerHTML = `
+                            <div class="log-empty">
+                                <i class="fas fa-clipboard-list"></i>
+                                暂无执行日志
+                            </div>
+                        `;
+                    }
+                }
+
+                // 更新 activeTasks 缓存
+                activeTasks.set(taskId, status);
+            } catch (error) {
+                console.error('获取任务状态失败:', error);
+            }
+        }
+
+        /**
+         * 暂停任务
+         */
+        async function pauseTask(taskId) {
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}/pause`, { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showToast('任务暂停信号已发送', 'info');
+                    // 立即刷新任务列表
+                    await loadActiveTasks();
+                } else {
+                    showToast(data.message || '暂停失败', 'error');
+                }
+            } catch (error) {
+                console.error('暂停任务失败:', error);
+                showToast('暂停任务失败', 'error');
+            }
+        }
+
+        /**
+         * 恢复任务
+         */
+        async function resumeTask(taskId) {
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}/resume`, { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showToast('任务已恢复', 'success');
+                    // 立即刷新任务列表
+                    await loadActiveTasks();
+                } else {
+                    showToast(data.message || '恢复失败', 'error');
+                }
+            } catch (error) {
+                console.error('恢复任务失败:', error);
+                showToast('恢复任务失败', 'error');
+            }
+        }
+
+        /**
+         * 取消任务
+         */
+        async function cancelTask(taskId) {
+            if (!confirm('确定要取消此任务吗？已采集的数据将被保留。')) {
+                return;
+            }
+
+            try {
+                const response = await authFetch(`/api/tasks/${taskId}/cancel`, { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showToast('任务取消信号已发送', 'info');
+                    // 立即刷新任务列表
+                    await loadActiveTasks();
+                } else {
+                    showToast(data.message || '取消失败', 'error');
+                }
+            } catch (error) {
+                console.error('取消任务失败:', error);
+                showToast('取消任务失败', 'error');
+            }
+        }
+
+        /**
+         * 启动多任务批量轮询
+         */
+        function startMultiTaskPolling() {
+            if (multiTaskPollingTimer) return;  // 已经在轮询
+
+            multiTaskPollingTimer = setInterval(async () => {
+                const taskIds = Array.from(activeTasks.keys());
+                if (taskIds.length === 0) {
+                    stopMultiTaskPolling();
+                    return;
+                }
+
+                try {
+                    const response = await authFetch('/api/tasks/batch-status', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ task_ids: taskIds })
+                    });
+
+                    if (!response.ok) return;
+
+                    const data = await response.json();
+                    const tasks = data.tasks || [];
+
+                    // 更新任务状态
+                    let hasActiveTask = false;
+                    tasks.forEach(task => {
+                        activeTasks.set(task.task_id, task);
+                        if (['running', 'pausing', 'paused', 'analyzing', 'cancelling'].includes(task.status)) {
+                            hasActiveTask = true;
+                        }
+                    });
+
+                    // 更新任务计数
+                    const activeCount = tasks.filter(t =>
+                        ['running', 'pausing', 'paused', 'analyzing', 'cancelling'].includes(t.status)
+                    ).length;
+                    document.getElementById('runningTaskCount').textContent = activeCount;
+
+                    // 重新渲染任务列表
+                    renderTaskList(tasks);
+
+                    // 如果没有活跃任务，停止轮询
+                    if (!hasActiveTask) {
+                        stopMultiTaskPolling();
+                        // 刷新历史记录
+                        loadHistory();
+                    }
+                } catch (error) {
+                    console.error('批量轮询失败:', error);
+                }
+            }, MULTI_TASK_POLL_INTERVAL);
+        }
+
+        /**
+         * 停止多任务批量轮询
+         */
+        function stopMultiTaskPolling() {
+            if (multiTaskPollingTimer) {
+                clearInterval(multiTaskPollingTimer);
+                multiTaskPollingTimer = null;
+            }
+        }
+
+        /**
+         * 显示 Toast 提示
+         */
+        function showToast(message, type = 'info') {
+            // 创建 Toast 容器（如果不存在）
+            let container = document.getElementById('toastContainer');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toastContainer';
+                container.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999;';
+                document.body.appendChild(container);
+            }
+
+            // 创建 Toast 元素
+            const toast = document.createElement('div');
+            const bgColors = {
+                'success': '#10b981',
+                'error': '#ef4444',
+                'warning': '#f59e0b',
+                'info': '#6366f1'
+            };
+            const icons = {
+                'success': 'fa-check-circle',
+                'error': 'fa-times-circle',
+                'warning': 'fa-exclamation-triangle',
+                'info': 'fa-info-circle'
+            };
+
+            toast.innerHTML = `<i class="fas ${icons[type] || icons.info} me-2"></i>${message}`;
+            toast.style.cssText = `
+                background: ${bgColors[type] || bgColors.info};
+                color: white;
+                padding: 12px 20px;
+                border-radius: 8px;
+                margin-bottom: 10px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                display: flex;
+                align-items: center;
+                animation: slideIn 0.3s ease;
+            `;
+
+            container.appendChild(toast);
+
+            // 3秒后自动移除
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
         // ==================== 侧边栏控制 ====================
 
         function openSidebar() {
@@ -4914,11 +5529,11 @@
 
             const formData = {
                 keywords: keywordList,  // 使用关键词列表
-                target_count: parseInt(document.getElementById('targetCount').value),
-                viral_ratio: parseFloat(document.getElementById('viralRatioSelect').value),
                 note_type: parseInt(document.getElementById('noteType').value),
                 time_range: parseInt(document.getElementById('timeRange').value),
-                min_sample_count: parseInt(document.getElementById('minSampleCount').value) || 50
+                min_sample_count: parseInt(document.getElementById('minSampleCount').value) || 50,
+                target_count: parseInt(document.getElementById('targetCount').value),
+                viral_ratio: parseFloat(document.getElementById('viralRatioSelect').value)
             };
 
             // 保存采集时的笔记类型，供自动分析使用
@@ -4960,6 +5575,10 @@
                     logCursor = 0;  // 重置日志游标
                     startGlobalTimer();  // 启动全局计时器
                     startStatusPolling();
+
+                    // 刷新活跃任务列表并切换到"进行中"Tab
+                    await loadActiveTasks();
+                    switchSidebarTab('running');
                 }
             } catch (error) {
                 alert('启动任务失败：' + error.message);
@@ -6977,6 +7596,7 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             loadHistory();
+            loadActiveTasks();  // 加载活跃任务列表
             checkCookie();  // 会自动处理 Cookie 配置区域的展开状态
             loadKnowledgeSummary();
             loadCleanupInfo();

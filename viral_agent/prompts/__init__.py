@@ -79,6 +79,13 @@ from .ocr_prompts import (
     get_image_text_practices
 )
 
+# 关键词扩展提示词（新增）
+from .keyword_expansion_prompts import (
+    KEYWORD_EXPANSION_SYSTEM_PROMPT,
+    KEYWORD_EXPANSION_USER_TEMPLATE,
+    build_keyword_expansion_prompt
+)
+
 __all__ = [
     # ==================== 视频分析 ====================
     'VIDEO_COVER_ANALYSIS_PROMPT',
@@ -133,5 +140,10 @@ __all__ = [
     'build_ocr_analysis_prompt',
     'get_ocr_system_prompt',
     'parse_ocr_analysis_response',
-    'get_image_text_practices'
+    'get_image_text_practices',
+
+    # ==================== 关键词扩展 ====================
+    'KEYWORD_EXPANSION_SYSTEM_PROMPT',
+    'KEYWORD_EXPANSION_USER_TEMPLATE',
+    'build_keyword_expansion_prompt',
 ]
