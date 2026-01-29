@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>灵感缪斯</title>
-    <link rel="icon" type="image/png" href="/static/images/favicon.png">
+    <link rel="icon" type="image/png" href="/static/images/favicon.png?v=5">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/main.css">
@@ -1451,18 +1451,19 @@
         }
 
         .sidebar-logo-icon {
-            width: auto;
-            height: 32px;
+            width: 36px;
+            height: 36px;
             object-fit: contain;
             flex-shrink: 0;
-            margin-right: -8px; /* 负边距拉近 */
+            border-radius: 8px;
+            margin-right: 4px;
         }
 
         .sidebar-logo-text {
-            font-weight: 600;
-            font-size: 1rem;
+            font-weight: 700;
+            font-size: 1.1rem;
             color: var(--color-on-surface);
-            flex: 1;
+            letter-spacing: 1px;
         }
 
         /* 图片版 Logo 文字 */
@@ -2317,42 +2318,54 @@
         .login-top-logo {
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 0;
             position: absolute;
-            top: 32px;
-            left: 52px;
+            top: 16px;
+            left: 24px;
         }
 
-        .login-top-logo img {
-            height: 52px;
-            width: auto;
+        .login-logo-icon {
+            height: 62px;
+            width: 62px;
+            object-fit: contain;
+            border-radius: 13px;
+            margin-right: 6px;
+        }
+
+        .login-logo-text {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            letter-spacing: 2px;
         }
 
         /* 左侧品牌内容（与右侧卡片垂直对齐） */
         .login-brand-content {
             position: absolute;
             top: 50%;
-            left: 60px;
+            left: 130px;
             transform: translateY(-50%);
             z-index: 1;
             text-align: left;
             color: #ffffff;
-            max-width: 450px;
+            max-width: 500px;
         }
 
         .login-brand-title {
-            font-size: 3.8rem;
+            font-size: 4.8rem;
             font-weight: 700;
-            margin: 0 0 18px 0;
+            margin: 0 0 20px 0;
             letter-spacing: 3px;
             color: rgba(255, 255, 255, 0.9);
         }
 
         .login-brand-subtitle {
-            font-size: 1.5rem;
+            font-size: 2.6rem;
             font-weight: 400;
             line-height: 1.6;
-            color: rgba(255, 255, 255, 0.8);
+            color: rgba(255, 255, 255, 0.85);
+            white-space: nowrap;
         }
 
         /* 右侧浮动登录卡片 */
@@ -2380,8 +2393,8 @@
 
         .login-form-group input {
             width: 100%;
-            padding: 18px 20px;
-            font-size: 1.25rem;
+            padding: 20px 22px;
+            font-size: 1.45rem;
             border: 1px solid #e0e0e0;
             border-radius: 10px;
             background: #ffffff;
@@ -2396,7 +2409,7 @@
 
         .login-form-group input::placeholder {
             color: #aaa;
-            font-size: 1.25rem;
+            font-size: 1.45rem;
         }
 
         #loginPageError {
@@ -2416,7 +2429,7 @@
         .login-submit-btn {
             width: 100%;
             padding: 18px 28px;
-            font-size: 1.3rem;
+            font-size: 1.5rem;
             font-weight: 500;
             color: #ffffff;
             background: linear-gradient(90deg, #b794f6 0%, #d8a9f7 50%, #f0a5c8 100%);
@@ -2520,12 +2533,13 @@
         <div class="login-main-area">
             <!-- 左上角 Logo -->
             <div class="login-top-logo">
-                <img src="/static/images/logo_full.svg" alt="灵感缪斯">
+                <img src="/static/images/logo_icon.png?v=3" alt="Logo" class="login-logo-icon">
+                <span class="login-logo-text">灵感缪斯</span>
             </div>
 
             <!-- 左侧品牌内容 -->
             <div class="login-brand-content">
-                <h1 class="login-brand-title">灵感缪斯</h1>
+                <h1 class="login-brand-title">RED MUSE</h1>
                 <p class="login-brand-subtitle">洞察万千爆款，唤你一瞬灵感</p>
             </div>
 
@@ -2604,7 +2618,8 @@
         <!-- 顶部区域：Logo + Cookie配置 -->
         <div class="sidebar-top">
             <div class="sidebar-logo">
-                <img src="/static/images/logo_full.svg" alt="灵感缪斯" class="sidebar-logo-full">
+                <img src="/static/images/logo_icon.png?v=3" alt="Logo" class="sidebar-logo-icon">
+                <span class="sidebar-logo-text">灵感缪斯</span>
                 <button class="sidebar-collapse-btn" onclick="closeSidebar()" title="收起侧边栏">
                     <i class="fas fa-chevron-left"></i>
                 </button>
