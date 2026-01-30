@@ -2687,7 +2687,7 @@ async def health_check():
     return {
         "status": "healthy",
         "version": "1.0.0",
-        "active_tasks": len([t for t in task_status.values() if t["status"] == "running"])
+        "active_tasks": len([t for t in task_status.values() if t.get("status") == "running"])
     }
 
 

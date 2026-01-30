@@ -36,6 +36,8 @@
 |    小红书PC    | ✅ 二维码登录<br/> ✅ 手机验证码登录<br/> ✅ 获取无水印图片<br/> ✅ 获取无水印视频<br/> ✅ 获取主页的所有频道<br/>✅ 获取主页推荐笔记<br/>✅ 获取某个用户的信息<br/>✅ 用户自己的信息<br/>✅ 获取某个用户上传的笔记<br/>✅ 获取某个用户所有的喜欢笔记<br/>✅ 获取某个用户所有的收藏笔记<br/>✅ 获取某个笔记的详细内容<br/>✅ 搜索笔记内容<br/>✅ 搜索用户内容<br/>✅ 获取某个笔记的评论<br/>✅ 获取未读消息信息<br/>✅ 获取收到的评论和@提醒信息<br/>✅ 获取收到的点赞和收藏信息<br/>✅ 获取新增关注信息|
 | 爆文分析系统 | ✅ 自动搜索爆款笔记<br/>✅ 多维度特征提取<br/>✅ 封面OCR文字识别<br/>✅ 产品植入时机分析<br/>✅ 营销场景识别<br/>✅ AI深度分析（支持国内大模型）<br/>✅ 生成爆文创作模型<br/>✅ Excel分析报告导出<br/>✅ Web可视化界面<br/>✅ 前端Cookie管理<br/>✅ 导出功能增强<br/>✅ **提示词模块化**（新增）<br/>✅ **RAG文档知识库**（新增）<br/>✅ **视频笔记深度分析**（新增）<br/>✅ **前端UI优化**（新增）：推挤式侧边栏、自动分析流程、预估剩余时间<br/>✅ **图文/视频分开导出**（新增）：支持独立Excel报告<br/>✅ **帧+ASR联合分析**（新增）：视频画面与语音语义配合分析<br/>✅ **目标导向参数系统**（新增）：只需选择期望分析数量，系统自动计算采集参数<br/>✅ **Google AI风格侧边栏**（新增）：Gemini渐变风格、Material Design 3设计<br/>✅ **视听融合分析**（新增）：AI视觉+ASR语音双轨分析，自动识别触达模式 |
 | 多用户系统（新增） | ✅ JWT Token认证<br/>✅ 用户数据隔离（每用户独立目录）<br/>✅ Cookie用户独立存储<br/>✅ 任务归属校验<br/>✅ 管理员用户管理界面<br/>✅ 退出登录功能<br/>✅ 搜索配置实时验证 |
+| 任务管理系统（新增） | ✅ 多任务并发执行<br/>✅ 暂停/恢复/取消生命周期控制<br/>✅ 检查点断点续传（关键词+维度+分页）<br/>✅ 分析阶段取消（BaseException穿透机制）<br/>✅ 多任务并行分析（线程池卸载）<br/>✅ SQLite持久化与服务重启恢复<br/>✅ 实时进度与日志推送 |
+| 扫码登录增强（新增） | ✅ 浏览器深度预热（QR码0-3秒就绪）<br/>✅ SMS验证码Vue兼容填入（nativeInputValueSetter）<br/>✅ 登录竞态条件防护（is_login_success）<br/>✅ 扫码成功自动收起配置面板<br/>✅ 自动点击获取验证码按钮 |
 
 
 ## 🌟 功能特性
@@ -1381,6 +1383,9 @@ Result_30s,60s,45s,干货教程-手法干货,眼部问题,自用分享,干货手
 - ✅ **短信验证码处理**：自动检测并支持在前端输入验证码
 - ✅ **Cookie 自动验证**：登录后自动调用 API 验证 Cookie 有效性
 - ✅ **智能环境检测**：自动识别运行环境（桌面/云服务器）
+- ✅ **浏览器深度预热**（新增）：启动时预加载登录页+二维码，首次扫码 0-3 秒就绪
+- ✅ **SMS 验证码 Vue 兼容**（新增）：使用 `nativeInputValueSetter` 绕过 Vue 属性劫持
+- ✅ **登录竞态条件防护**（新增）：防止验证码提交与登录监控之间的竞态问题
 
 ### 使用方式
 
@@ -1490,6 +1495,172 @@ A: 系统会自动将验证码填入网页并提交，然后继续监听 Cookie 
 
 **Q: 登录成功但 Cookie 无效？**
 A: 系统会调用 API 验证 Cookie 有效性，只有验证通过才会保存。如果失败，请重试或手动复制。
+
+### 浏览器深度预热（2026年1月新增）
+
+#### 优化效果
+
+将 `warmup()` 从"只启动浏览器"升级为"完成全部准备工作"，用户点击扫码时二维码几乎瞬间出现：
+
+| 场景 | 优化前 | 优化后 |
+|------|--------|--------|
+| 首次扫码 | **8-22秒**（页面加载+点击登录+切换二维码） | **0-3秒**（直接使用预热页面） |
+| QR码新鲜（<90s） | — | **<1秒** |
+| QR码过期（>90s） | — | **1-3秒**（自动刷新） |
+| 预热未就绪（极端） | 8-22秒 | 8-22秒（回退原逻辑） |
+
+#### 工作原理
+
+```
+当前浅预热                          优化后深度预热
+────────                           ────────────
+warmup():                          warmup():
+  ├─ 检测可用性(启动+关闭浏览器)      ├─ 启动浏览器 ←── 合并检测
+  └─ 启动浏览器                      ├─ 创建 context + page
+                                    ├─ goto 小红书页面
+用户点击扫码:                        ├─ 点击登录 + 切换二维码Tab
+  ├─ 取浏览器       ~0s              └─ 截图并缓存
+  ├─ 创建context    ~0.2s
+  ├─ goto页面       5-10s ← 瓶颈    用户点击扫码:
+  ├─ 点击登录       1-5s              ├─ 取走预热页面    ~0s
+  ├─ 切QR tab       1-3s              ├─ 刷新QR码(如需)  0-2s
+  └─ 截图           <1s               └─ 截图            <1s
+  ≈ 8-22秒                            ≈ 0-3秒
+```
+
+#### SMS 验证码 Vue 兼容
+
+小红书登录页使用 Vue 框架，其 `v-model` 数据绑定会劫持 input 元素的 value 属性。直接通过 `page.fill()` 或键盘事件输入验证码会导致 Vue 无法感知变化。
+
+**解决方案**：使用 `nativeInputValueSetter` 策略：
+```javascript
+// 获取原生 setter，绕过 Vue 劫持
+const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+).set;
+nativeInputValueSetter.call(input, code);
+input.dispatchEvent(new Event('input', { bubbles: true }));
+```
+
+#### 竞态条件防护
+
+`_monitor_login_status` 监控任务和 `submit_sms_code` 可能同时操作浏览器，新增 `is_login_success` 属性区分真正的登录成功和其他终态（过期/错误/取消），避免误判。
+
+## 📋 任务管理系统（2026年1月新增）
+
+### 功能概述
+
+支持多任务并发执行，提供完整的任务生命周期管理，包括暂停/恢复/取消控制、检查点断点续传、以及 SQLite 持久化。
+
+**核心特性**：
+- ✅ **协作式控制信号**：通过 `asyncio.Event` 实现非阻塞暂停/取消
+- ✅ **检查点断点续传**：保存关键词索引、维度索引、分页位置
+- ✅ **分析阶段取消**：`BaseException` 穿透 `except Exception` 块
+- ✅ **多任务并行分析**：`asyncio.to_thread()` 卸载到线程池
+- ✅ **服务重启恢复**：自动加载未完成任务并标记状态
+- ✅ **实时日志推送**：毫秒级时间戳，前端增量获取
+
+### 任务状态流转
+
+```
+PENDING → RUNNING → COMPLETED → ANALYZING → ANALYZED
+            ↓ ↑         ↓            ↓
+         PAUSING    (自动触发)   ANALYSIS_FAILED
+            ↓
+         PAUSED
+            ↓
+    CANCELLING → CANCELLED
+```
+
+| 状态 | 说明 | 可执行操作 |
+|------|------|-----------|
+| `pending` | 已创建，等待执行 | 启动 |
+| `running` | 采集运行中 | 暂停、取消 |
+| `pausing` | 等待到达检查点暂停 | — |
+| `paused` | 已暂停（保留检查点） | 恢复、取消 |
+| `completed` | 采集完成 | 开始分析 |
+| `analyzing` | AI 分析中 | **取消**（不支持暂停） |
+| `analyzed` | 分析完成 | 导出报告 |
+| `cancelling` | 等待到达检查点取消 | — |
+| `cancelled` | 已取消 | — |
+| `failed` | 采集失败 | — |
+| `analysis_failed` | 分析失败 | 重新分析 |
+
+### 协作式控制信号机制
+
+```
+用户点击暂停/取消
+    ↓
+TaskManager.pause_task() / cancel_task()
+    ↓ 设置信号
+TaskControlSignal (asyncio.Event)
+    ↓ 采集循环检查
+signal.check_pause_point()  ← 每页采集后调用
+    ↓ 检测到信号
+保存检查点 → confirm_paused() / confirm_cancelled()
+```
+
+**设计决策**：分析阶段只支持取消，不支持暂停。原因是 AI 分析没有可保存的检查点（不像采集有关键词/页码索引），暂停后无法从中断处恢复。
+
+### 分析阶段取消（BaseException 机制）
+
+`AnalysisCancelled` 异常继承自 `BaseException` 而非 `Exception`。这是因为分析步骤内部的 `try/except Exception` 块会捕获所有 `Exception` 子类，导致取消信号被吞没。`BaseException` 不会被 `except Exception` 捕获，与 `KeyboardInterrupt`、`asyncio.CancelledError` 同级。
+
+```python
+class AnalysisCancelled(BaseException):
+    """继承 BaseException 以穿透 except Exception"""
+    pass
+
+def analyze_viral_notes(self, ..., cancel_check=None):
+    def check_cancel():
+        if cancel_check and cancel_check():
+            raise AnalysisCancelled("分析被用户取消")
+
+    # 13个检查点分布在各分析步骤之间
+    check_cancel()  # 步骤1前
+    step_1_extract_features()
+    check_cancel()  # 步骤2前
+    step_2_analyze_covers()
+    ...
+```
+
+### 多任务并行分析
+
+`analyze_viral_notes()` 是同步阻塞函数（包含大量 HTTP API 调用），如果直接在 `async def` 中调用会阻塞事件循环，导致：
+- 其他任务无法响应
+- 取消信号无法投递
+- 前端轮询超时
+
+解决方案：`asyncio.to_thread()` 将同步分析卸载到线程池：
+
+```python
+result = await asyncio.to_thread(
+    analyzer.analyze_viral_notes,
+    notes=notes,
+    cancel_check=check_cancelled  # 线程安全的信号检查
+)
+```
+
+### 文件结构
+
+```
+viral_agent/task/
+├── __init__.py          # 模块入口，导出公共 API
+├── models.py            # 数据模型（TaskState/TaskCheckpoint/TaskControlSignal/TaskModel）
+├── manager.py           # 任务管理核心（生命周期/信号/状态）
+└── persistence.py       # SQLite 持久化服务
+```
+
+### 持久化与恢复
+
+任务数据保存在 `datas/tasks.db`（SQLite），服务重启时自动恢复：
+
+| 中断时状态 | 恢复后状态 | 说明 |
+|-----------|-----------|------|
+| `running` / `pausing` | `paused` | 需用户手动恢复 |
+| `analyzing` | `analysis_failed` | 需重新触发分析 |
+| `cancelling` | `cancelled` | 直接标记已取消 |
+| `pending` / `paused` | 保持不变 | 等待用户操作 |
 
 ## 🔐 安全特性（2025年12月新增）
 
@@ -2052,6 +2223,20 @@ python3 tests/test_knowledge_base.py
 | 26/01/20 | - **Bug修复：0秒边界条件** - `export_service.py` 中 `> 0` 改为 `>= 0`（0秒是有效数据，表示视频开头即提及产品） |
 | 26/01/20 | - **Bug修复：partial状态支持** - ASR分析状态 `partial` 现在也会正确显示数据，不再被当作失败处理 |
 | 26/01/20 | - 摘要统计分母修正：ASR成功率分母改用总视频数，避免 `8/8` 误导（实际应为 `8/10`） |
+| 26/01/23 | - **前端UI优化**：登录页Logo修复（渐变文字、色差、背景透明化）|
+| 26/01/23 | - 登录状态管理优化：退出时完整清理侧边栏/日志面板残留class |
+| 26/01/23 | - 侧边栏移除背景模糊、搜索配置框居中 |
+| 26/01/29 | - **多任务管理系统**：完整的任务生命周期管理（创建/启动/暂停/恢复/取消） |
+| 26/01/29 | - **SQLite持久化**：任务数据持久化存储，支持服务重启自动恢复 |
+| 26/01/29 | - **扫码登录增强**：Dockerfile添加Playwright Chromium、浏览器预热改为非阻塞 |
+| 26/01/29 | - **SMS验证码增强**：自动点击获取验证码按钮、精确选择器排除无关按钮 |
+| 26/01/29 | - 验证码Vue兼容填入（nativeInputValueSetter + InputEvent）|
+| 26/01/29 | - 登录页面UI重构并更新品牌Logo |
+| 26/01/30 | - **浏览器深度预热**：启动时预加载登录页+二维码，扫码速度从8-22秒降至0-3秒 |
+| 26/01/30 | - **分析任务取消支持**：AnalysisCancelled(BaseException)穿透except Exception块 |
+| 26/01/30 | - 分析阶段显示取消按钮（前端analyzing状态分支）|
+| 26/01/30 | - SMS验证码竞态条件修复：新增is_login_success属性，防止monitor与submit冲突 |
+| 26/01/30 | - **多任务并行分析**：asyncio.to_thread()卸载同步分析到线程池，多任务/多用户可同时分析 |
 
 
 ## 🧸额外说明
@@ -2084,6 +2269,47 @@ python3 tests/test_knowledge_base.py
 
 #### 📐 布局调整
 - **搜索配置框居中**：将搜索配置框从页面中上位置调整到页面正中间（使用 Flexbox 垂直居中）
+
+---
+
+### 2026-01-29 多任务管理系统 + 扫码登录增强
+
+#### 📋 任务管理系统
+- **多任务生命周期管理**：完整的创建、启动、暂停、恢复、取消控制流程
+- **协作式控制信号**：基于 `asyncio.Event` 的非阻塞暂停/取消机制
+- **检查点断点续传**：保存关键词索引、维度索引、分页位置，支持从中断处恢复
+- **SQLite 持久化**：任务状态存储在 `datas/tasks.db`，服务重启自动恢复
+- **实时日志推送**：毫秒级时间戳，前端增量获取（最近50条缓冲）
+
+#### 📱 扫码登录增强
+- **Dockerfile 集成**：添加 Playwright Chromium 浏览器安装
+- **非阻塞预热**：浏览器预热改为后台执行，不延迟 FastAPI 启动
+- **SMS 验证码自动点击**：检测到验证码界面时自动点击"获取验证码"按钮
+- **精确选择器**：排除"获取验证码"按钮，避免误点击
+- **Vue 兼容填入**：使用 `nativeInputValueSetter` + `InputEvent` 绕过 Vue `v-model` 劫持
+- **登录页面 UI**：重构登录页面设计并更新品牌 Logo
+
+---
+
+### 2026-01-30 深度预热 + 分析取消 + 并行分析
+
+#### ⚡ 浏览器深度预热
+- **深度预热机制**：启动时预加载小红书登录页、点击登录按钮、切换到二维码Tab、缓存截图
+- **扫码加速**：首次扫码耗时从 8-22 秒降至 0-3 秒
+- **QR码新鲜度检测**：超过90秒自动刷新二维码
+- **优雅降级**：深度预热失败时自动回退到原有完整流程
+- **扫码成功自动收起**：登录成功后自动折叠Cookie配置面板
+
+#### 🛑 分析阶段取消支持
+- **`AnalysisCancelled(BaseException)`**：继承 `BaseException` 而非 `Exception`，确保取消信号能穿透分析步骤内部的 `try/except Exception` 块
+- **13个取消检查点**：分布在分析流程的9个主要步骤和视频分析的4个内部步骤之间
+- **前端取消按钮**：分析阶段（`analyzing` 状态）显示独立的取消按钮
+- **SMS 竞态条件修复**：新增 `is_login_success` 属性，区分登录成功和其他终态（过期/错误/取消）
+
+#### 🔀 多任务并行分析
+- **`asyncio.to_thread()`**：将同步阻塞的 `analyze_viral_notes()` 卸载到线程池
+- **事件循环不阻塞**：多个用户/任务可以同时进行 AI 分析
+- **线程安全**：Python GIL 保护 dict/deque 原子操作，进度回调从工作线程安全调用
 
 ---
 

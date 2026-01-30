@@ -329,7 +329,8 @@ class ViralAnalyzer:
             multimodal_insights = self.multimodal_analyzer.analyze_notes_batch(
                 notes=notes,
                 sample_count=len(notes),  # 分析全部笔记
-                keyword=keyword
+                keyword=keyword,
+                cancel_check=cancel_check
             )
             viral_model['multimodal_insights'] = multimodal_insights
         else:

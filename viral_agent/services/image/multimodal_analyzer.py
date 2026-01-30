@@ -6,7 +6,7 @@ import json
 import os
 import base64
 import requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from io import BytesIO
 from loguru import logger
 from openai import OpenAI
@@ -199,7 +199,8 @@ class MultimodalAnalyzer:
         self,
         notes: List[ViralNote],
         sample_count: int = 3,
-        keyword: str = ""
+        keyword: str = "",
+        cancel_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
         """
         批量分析多篇笔记的图文联合特征
@@ -208,6 +209,7 @@ class MultimodalAnalyzer:
             notes: 爆款笔记列表
             sample_count: 分析的样本数量
             keyword: 搜索关键词
+            cancel_check: 取消检查回调，返回True表示已取消
 
         Returns:
             批量分析结果
@@ -223,6 +225,11 @@ class MultimodalAnalyzer:
         import time
         results = []
         for i, note in enumerate(notes[:sample_count], 1):
+            # 每篇笔记分析前检查取消信号
+            if cancel_check and cancel_check():
+                logger.info("🛑 多模态分析被取消")
+                break
+
             logger.info(f"分析第 {i}/{sample_count} 篇笔记...")
             result = self.analyze_note_with_images(note)
             if result['status'] == 'success':
@@ -233,6 +240,10 @@ class MultimodalAnalyzer:
                 })
             # 添加延迟避免API QPM限制（智谱API并发限制严格，需要更长延迟）
             if i < sample_count:
+                # 延迟前也检查取消信号，避免不必要的等待
+                if cancel_check and cancel_check():
+                    logger.info("🛑 多模态分析被取消")
+                    break
                 time.sleep(3.0)  # 增加到3秒，避免429错误
 
         # 生成综合洞察
