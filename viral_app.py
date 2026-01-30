@@ -38,7 +38,7 @@ from viral_agent.auth import (
 # 导入爆文Agent核心模块
 from viral_agent.services.core.viral_collector import ViralNoteCollector
 from viral_agent.services.core.feature_extractor import ViralFeatureExtractor
-from viral_agent.services.core.viral_analyzer import ViralAnalyzer
+from viral_agent.services.core.viral_analyzer import ViralAnalyzer, AnalysisCancelled
 from viral_agent.models.viral_note import ViralNote, ViralAnalysisResult
 
 # 导入视频分析模块
@@ -1704,10 +1704,22 @@ async def analyze_viral_notes_task(
         analysis_type: 分析类型（image/video/all）
         video_source_mode: 视频源模式
     """
-    # 获取任务管理器
+    # 获取任务管理器和控制信号
     manager = get_task_manager()
+    signal = manager.get_signal(task_id)
 
     try:
+        # 在分析开始前检查是否已被取消
+        if signal and signal.is_cancelled:
+            manager.confirm_cancelled(task_id)
+            task_status[task_id].update({
+                "status": "cancelled",
+                "message": "任务已取消",
+                "end_time": datetime.now().isoformat()
+            })
+            logger.info(f"分析任务 {task_id} 启动前已被取消")
+            return
+
         # 标记开始分析（同步 TaskManager）
         manager.mark_analyzing(task_id)
 
@@ -1751,14 +1763,19 @@ async def analyze_viral_notes_task(
             if progress is not None:
                 task_status[task_id]["analysis_progress"] = progress
 
-        # 执行完整分析（带进度回调）
+        # 定义取消检查函数，让分析器能感知取消信号
+        def check_cancelled() -> bool:
+            return signal is not None and signal.is_cancelled
+
+        # 执行完整分析（带进度回调和取消检查）
         result = analyzer.analyze_viral_notes(
             notes=notes,
             keyword=task_status[task_id]["keyword"],
             threshold=data.get('statistics', {}).get('viral_threshold', 5000),
             analysis_type=analysis_type,
             video_source_mode=video_source_mode,
-            progress_callback=analysis_progress_callback
+            progress_callback=analysis_progress_callback,
+            cancel_check=check_cancelled
         )
 
         task_status[task_id]["analysis_progress"] = 88
@@ -1801,6 +1818,17 @@ async def analyze_viral_notes_task(
 
         # 同步到 TaskManager
         manager.mark_analyzed(task_id, analysis_file)
+
+    except AnalysisCancelled:
+        # 分析过程中被用户取消
+        logger.info(f"分析任务 {task_id} 已被用户取消")
+        add_task_log(task_id, "🛑 分析已取消", "warning")
+        manager.confirm_cancelled(task_id)
+        task_status[task_id].update({
+            "status": "cancelled",
+            "message": "任务已取消",
+            "end_time": datetime.now().isoformat()
+        })
 
     except Exception as e:
         logger.error(f"分析任务 {task_id} 失败: {e}")

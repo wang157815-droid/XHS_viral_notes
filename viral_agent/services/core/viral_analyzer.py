@@ -16,6 +16,11 @@ from viral_agent.utils.async_utils import safe_nest_asyncio_apply
 safe_nest_asyncio_apply()
 
 from viral_agent.models.viral_note import ViralNote, ViralAnalysisResult
+
+
+class AnalysisCancelled(Exception):
+    """分析被用户取消时抛出的异常"""
+    pass
 from viral_agent.services.core.feature_extractor import ViralFeatureExtractor
 from viral_agent.services.image.product_analyzer import ProductAnalyzer
 from viral_agent.services.image.multimodal_analyzer import MultimodalAnalyzer
@@ -203,7 +208,8 @@ class ViralAnalyzer:
         threshold: int = 5000,
         analysis_type: str = "all",
         video_source_mode: Optional[str] = None,
-        progress_callback: Optional[Callable[[str, Optional[int]], None]] = None
+        progress_callback: Optional[Callable[[str, Optional[int]], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None
     ) -> ViralAnalysisResult:
         """
         分析爆款笔记并生成爆文模型
@@ -215,15 +221,24 @@ class ViralAnalyzer:
             analysis_type: 分析类型 ("image"=仅图文, "video"=仅视频, "all"=全部)
             video_source_mode: 视频源模式 ("url"=URL直传, "proxy"=本地下载)，None使用环境变量
             progress_callback: 进度回调函数，接收 (message: str, progress: int) 参数
+            cancel_check: 取消检查回调，返回 True 表示任务已被取消
 
         Returns:
             分析结果
+
+        Raises:
+            AnalysisCancelled: 分析被用户取消
         """
         def report_progress(message: str, progress: int = None):
             """内部进度报告函数"""
             logger.info(message)
             if progress_callback:
                 progress_callback(message, progress)
+
+        def check_cancel():
+            """检查是否被取消，是则抛出异常"""
+            if cancel_check and cancel_check():
+                raise AnalysisCancelled("分析被用户取消")
         # 保存视频源模式供后续使用
         self._video_source_mode = video_source_mode
         report_progress(f"开始分析 {len(notes)} 篇爆款笔记，分析类型: {analysis_type}", 50)
@@ -264,10 +279,12 @@ class ViralAnalyzer:
             )
 
         # 1. 提取特征
+        check_cancel()
         report_progress("📊 提取标题/内容/互动特征...", 52)
         features = self.feature_extractor.extract_all_features(notes)
 
         # 2. 场景方向分析（新增：在标题分析之前）
+        check_cancel()
         report_progress("🎬 开始场景方向分析...", 55)
         try:
             scene_features = self.scene_analyzer.analyze_scenes(notes, keyword)
@@ -278,6 +295,7 @@ class ViralAnalyzer:
             features['scene_features'] = {'status': 'error', 'message': str(e)}
 
         # 3. 分析产品引出特征
+        check_cancel()
         report_progress("📦 分析产品引出特征...", 60)
         product_features = self.product_analyzer.analyze_product_mentions(notes)
         features['product_features'] = product_features
@@ -291,11 +309,13 @@ class ViralAnalyzer:
             viral_model['scene_strategy'] = features['scene_features'].get('scene_strategy', {})
 
         # 5. 生成产品策略
+        check_cancel()
         report_progress("💡 生成产品策略...", 65)
         product_strategy = self.product_analyzer.generate_product_strategy(product_features)
         viral_model['product_strategy'] = product_strategy
 
         # 6. 使用AI深度分析（如果配置了API）
+        check_cancel()
         if self.api_key:
             report_progress("🤖 调用AI深度推理（耗时较长）...", 68)
             ai_insights = self._analyze_with_ai(notes, features, keyword)
@@ -303,6 +323,7 @@ class ViralAnalyzer:
             report_progress("✅ AI深度推理完成", 72)
 
         # 7. 使用多模态AI分析图文联合特征（如果配置了多模态模型）
+        check_cancel()
         if self.multimodal_analyzer:
             report_progress("🖼️ 开始多模态分析（图文联合理解）...", 75)
             multimodal_insights = self.multimodal_analyzer.analyze_notes_batch(
@@ -318,6 +339,7 @@ class ViralAnalyzer:
             }
 
         # 8. 视频AI深度分析（根据分析类型决定是否执行）
+        check_cancel()
         # 图文模式跳过视频分析，视频/全部模式执行视频分析
         if analysis_type == 'image':
             report_progress("📷 图文分析模式：跳过视频AI深度分析", 80)
@@ -357,6 +379,7 @@ class ViralAnalyzer:
         viral_model['analysis_type'] = analysis_type
 
         # 9. AI综合推理 - 基于所有分析结果生成最终爆文模型
+        check_cancel()
         report_progress("🧠 开始AI综合推理（生成最终爆文模型，可能需要30秒）...", 85)
         try:
             # 构建完整的分析数据供综合推理使用
@@ -396,6 +419,7 @@ class ViralAnalyzer:
             }
 
         # 10. 计算图文/视频分离特征（无论analysis_type是什么，都填充这些字段）
+        check_cancel()
         logger.info("📊 计算图文/视频分离特征...")
         image_notes_all = [n for n in all_notes_for_type_separation if n.note_type != '视频']
         video_notes_all = [n for n in all_notes_for_type_separation if n.note_type == '视频']

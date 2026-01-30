@@ -796,17 +796,30 @@ class QRCodeLoginService:
                 logger.error(f"会话 {session_id}: 所有输入方式均失败")
                 return False
 
+            # 填入验证码后，XHS 可能自动提交登录（无需点击按钮）。
+            # _monitor_login_status 可能已检测到 Cookie 有效并关闭了浏览器。
+            # 因此需要先检查页面/会话状态。
+            if page.is_closed() or session.is_completed:
+                logger.info(f"会话 {session_id}: 验证码填入后登录已自动完成，无需点击提交")
+                return True
+
             # 点击确认/提交按钮
             await self._click_submit_button(page, session_id)
 
             # 等待页面响应
-            await page.wait_for_timeout(2000)
+            if not page.is_closed():
+                await page.wait_for_timeout(2000)
 
             # 切换回等待状态，让监控逻辑继续检测登录结果
-            session.status = QRLoginStatus.WAITING_SCAN
+            if session.is_active:
+                session.status = QRLoginStatus.WAITING_SCAN
             return True
 
         except Exception as e:
+            # 如果是浏览器已关闭且登录已成功，不算失败
+            if session.is_completed:
+                logger.info(f"会话 {session_id}: 验证码提交过程中登录已完成")
+                return True
             logger.error(f"会话 {session_id}: 提交验证码失败 - {e}")
             return False
 
@@ -814,10 +827,10 @@ class QRCodeLoginService:
         """
         填入短信验证码（三重策略，兼容 Vue v-model）。
 
-        策略 1：模拟真人键盘 — click → 全选 → keyboard.type(delay=80)
-                触发完整键盘事件链（keydown/keypress/input/keyup），Vue v-model 能正确响应。
-        策略 2：增强 JavaScript — 使用 nativeInputValueSetter 绕过 Vue setter，
-                触发 InputEvent（非普通 Event），确保 Vue 2/3 都能捕获。
+        策略 1：增强 JavaScript — 使用 nativeInputValueSetter 绕过 Vue setter，
+                触发 InputEvent + change + compositionend，实测小红书最可靠。
+        策略 2：模拟真人键盘 — click → 全选 → keyboard.type(delay=80)
+                触发完整键盘事件链，部分框架场景下作为备选。
         策略 3：盲打兜底 — 点击任意可见输入框后直接键盘输入。
         """
         sms_selectors = [
@@ -835,7 +848,49 @@ class QRCodeLoginService:
             '[class*="sms"] input',
         ]
 
-        # 策略 1：模拟真人键盘输入（推荐，最可靠）
+        # 策略 1：增强版 JavaScript（实测小红书最可靠，绕过 Vue setter）
+        try:
+            js_result = await page.evaluate('''(code) => {
+                const selectors = [
+                    'input[placeholder*="验证码"]', 'input[placeholder*="短信"]',
+                    'input[placeholder*="输入"]',
+                    'input[class*="code"]', 'input[class*="sms"]',
+                    'input[type="tel"]', 'input[type="number"]',
+                    'input[maxlength="4"]', 'input[maxlength="6"]',
+                ];
+                for (const sel of selectors) {
+                    const input = document.querySelector(sel);
+                    if (!input || input.offsetParent === null) continue;
+
+                    input.focus();
+
+                    // 使用原生 setter 绕过 Vue 的 property 劫持
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    nativeSetter.call(input, code);
+
+                    // 触发 InputEvent（Vue 3 监听的事件类型）
+                    input.dispatchEvent(new InputEvent('input', {
+                        bubbles: true, inputType: 'insertText', data: code
+                    }));
+                    // 触发 change（Vue 2 的 lazy 模式和部分组件库需要）
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    // 触发 compositionend（中文输入法兼容）
+                    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+
+                    return input.value === code;
+                }
+                return false;
+            }''', sms_code)
+            if js_result:
+                logger.info(f"会话 {session_id}: ✅ JavaScript 填入验证码成功")
+                return True
+        except Exception as e:
+            logger.debug(f"会话 {session_id}: JavaScript 输入失败: {e}")
+
+        # 策略 2：模拟真人键盘输入（备选）
+        logger.warning(f"会话 {session_id}: JavaScript 输入失败，尝试键盘输入")
         for selector in sms_selectors:
             try:
                 input_el = await page.query_selector(selector)
@@ -871,46 +926,6 @@ class QRCodeLoginService:
             except Exception as e:
                 logger.debug(f"会话 {session_id}: 键盘输入选择器 {selector} 失败: {e}")
                 continue
-
-        # 策略 2：增强版 JavaScript（绕过 Vue setter，触发 InputEvent）
-        logger.warning(f"会话 {session_id}: 键盘输入失败，尝试增强 JavaScript")
-        try:
-            js_result = await page.evaluate('''(code) => {
-                const selectors = [
-                    'input[placeholder*="验证码"]', 'input[placeholder*="短信"]',
-                    'input[type="tel"]', 'input[type="number"]',
-                    'input[maxlength="4"]', 'input[maxlength="6"]',
-                ];
-                for (const sel of selectors) {
-                    const input = document.querySelector(sel);
-                    if (!input || input.offsetParent === null) continue;
-
-                    input.focus();
-
-                    // 使用原生 setter 绕过 Vue 的 property 劫持
-                    const nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value'
-                    ).set;
-                    nativeSetter.call(input, code);
-
-                    // 触发 InputEvent（Vue 3 监听的事件类型）
-                    input.dispatchEvent(new InputEvent('input', {
-                        bubbles: true, inputType: 'insertText', data: code
-                    }));
-                    // 触发 change（Vue 2 的 lazy 模式和部分组件库需要）
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    // 触发 compositionend（中文输入法兼容）
-                    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
-
-                    return input.value === code;
-                }
-                return false;
-            }''', sms_code)
-            if js_result:
-                logger.info(f"会话 {session_id}: ✅ JavaScript 填入验证码成功")
-                return True
-        except Exception as e:
-            logger.debug(f"会话 {session_id}: JavaScript 输入失败: {e}")
 
         # 策略 3：盲打兜底（聚焦任意可见输入框后直接键盘输入）
         logger.warning(f"会话 {session_id}: 所有定位失败，尝试盲打兜底")
