@@ -6573,6 +6573,11 @@
                             // 自动关闭模态框
                             const modal = bootstrap.Modal.getInstance(document.getElementById('qrcodeLoginModal'));
                             if (modal) modal.hide();
+                            // 自动收起Cookie配置区域
+                            const cookieCompact = document.getElementById('cookieCompact');
+                            if (cookieCompact && cookieCompact.classList.contains('expanded')) {
+                                cookieCompact.classList.remove('expanded');
+                            }
                         }, 2000);
                         break;
 
