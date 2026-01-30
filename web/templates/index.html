@@ -4026,6 +4026,12 @@
                         <i class="fas fa-times"></i>
                     </button>
                 `;
+            } else if (task.status === 'analyzing') {
+                actionsHtml = `
+                    <button class="task-action-btn cancel" onclick="event.stopPropagation(); cancelTask('${task.task_id}')" title="取消分析">
+                        <i class="fas fa-times"></i> 取消
+                    </button>
+                `;
             } else if (task.status === 'paused') {
                 actionsHtml = `
                     <button class="task-action-btn resume" onclick="event.stopPropagation(); resumeTask('${task.task_id}')" title="恢复">
