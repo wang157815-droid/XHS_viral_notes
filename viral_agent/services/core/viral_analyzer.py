@@ -16,11 +16,6 @@ from viral_agent.utils.async_utils import safe_nest_asyncio_apply
 safe_nest_asyncio_apply()
 
 from viral_agent.models.viral_note import ViralNote, ViralAnalysisResult
-
-
-class AnalysisCancelled(Exception):
-    """分析被用户取消时抛出的异常"""
-    pass
 from viral_agent.services.core.feature_extractor import ViralFeatureExtractor
 from viral_agent.services.image.product_analyzer import ProductAnalyzer
 from viral_agent.services.image.multimodal_analyzer import MultimodalAnalyzer
@@ -42,6 +37,11 @@ load_dotenv()
 # - 普通配置：设为3（默认）
 # - 高配置：设为4-5
 VIDEO_AI_MAX_CONCURRENT = int(os.getenv('VIDEO_AI_MAX_CONCURRENT', '3'))
+
+
+class AnalysisCancelled(BaseException):
+    """分析被用户取消时抛出的异常（继承 BaseException 以穿透 except Exception）"""
+    pass
 
 
 class ViralAnalyzer:
