@@ -1768,7 +1768,10 @@ async def analyze_viral_notes_task(
             return signal is not None and signal.is_cancelled
 
         # 执行完整分析（带进度回调和取消检查）
-        result = analyzer.analyze_viral_notes(
+        # 使用 asyncio.to_thread 卸载到线程池，避免同步 AI 调用阻塞事件循环
+        # 这样多任务可以并行分析，取消信号也能及时响应
+        result = await asyncio.to_thread(
+            analyzer.analyze_viral_notes,
             notes=notes,
             keyword=task_status[task_id]["keyword"],
             threshold=data.get('statistics', {}).get('viral_threshold', 5000),
