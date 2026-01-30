@@ -43,8 +43,11 @@ class QRCodeLoginService:
         self._playwright = None
         self._lock = asyncio.Lock()
         self._playwright_available: Optional[bool] = None
-        # 预热相关
-        self._warmed_browser: Optional['Browser'] = None  # 预热的浏览器实例
+        # 深度预热相关
+        self._warmed_browser: Optional['Browser'] = None
+        self._warmed_context: Optional['BrowserContext'] = None
+        self._warmed_page: Optional['Page'] = None
+        self._warmup_completed_at: Optional[datetime] = None
         self._warmup_lock = asyncio.Lock()
         self._is_warming_up = False
 
@@ -123,69 +126,216 @@ class QRCodeLoginService:
 
     async def warmup(self) -> bool:
         """
-        预热：提前启动浏览器，等待首次扫码请求时复用。
+        深度预热：提前启动浏览器并导航到二维码页面。
 
         调用时机：应用启动时（在后台异步执行，不阻塞启动）
-        效果：首次扫码请求时节省 3-5 秒的浏览器启动时间
+        效果：首次扫码请求时从 8-22 秒优化到 <3 秒
 
-        Returns:
-            bool: 预热是否成功
+        深度预热流程：启动浏览器 → 导航页面 → 点击登录 → 切换二维码 → 截图缓存
+        失败时自动降级为浅预热（仅启动浏览器）。
         """
         async with self._warmup_lock:
-            if self._warmed_browser is not None:
-                logger.debug("浏览器已预热，跳过")
+            if self._warmed_page is not None:
+                logger.debug("已有深度预热页面，跳过")
                 return True
-
+            if self._warmed_browser is not None:
+                logger.debug("已有浅预热浏览器，跳过")
+                return True
             if self._is_warming_up:
                 logger.debug("预热正在进行中，跳过")
                 return False
-
             self._is_warming_up = True
 
         try:
-            if not await self.check_playwright_available():
-                logger.warning("Playwright 不可用，无法预热")
-                return False
-
             from playwright.async_api import async_playwright
 
-            logger.info("🔥 开始预热浏览器...")
+            logger.info("🔥 开始深度预热（浏览器 + 页面导航 + 二维码）...")
             start_time = datetime.now()
 
             # 初始化 Playwright
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
 
-            # 启动浏览器（服务器模式用无头）
+            # 启动浏览器（合并了 check_playwright_available 的检测逻辑）
             is_server = self._is_server_mode()
-            self._warmed_browser = await self._playwright.chromium.launch(
-                headless=is_server,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                ] + ([] if is_server else ['--start-maximized'])
-            )
+            try:
+                browser = await self._playwright.chromium.launch(
+                    headless=is_server,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                    ] + ([] if is_server else ['--start-maximized'])
+                )
+            except Exception as e:
+                self._playwright_available = False
+                logger.warning(f"Chromium 启动失败: {e}")
+                # 关闭悬挂的 Playwright 驱动进程
+                if self._playwright:
+                    try:
+                        await self._playwright.stop()
+                    except Exception:
+                        pass
+                    self._playwright = None
+                return False
 
-            elapsed = (datetime.now() - start_time).total_seconds()
-            logger.success(f"✅ 浏览器预热完成，耗时 {elapsed:.1f} 秒")
-            return True
+            self._playwright_available = True
+            browser_elapsed = (datetime.now() - start_time).total_seconds()
+            logger.debug(f"浏览器启动耗时 {browser_elapsed:.1f} 秒")
 
+            # 深度预热：导航到二维码页面
+            try:
+                context = await browser.new_context(
+                    viewport={'width': 1200, 'height': 800},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    locale='zh-CN',
+                )
+                page = await context.new_page()
+
+                await page.goto(XHS_LOGIN_URL, wait_until='domcontentloaded', timeout=30000)
+                try:
+                    await page.wait_for_selector('div.login-btn, span.login-btn, div[class*="login-btn"]', timeout=5000)
+                except Exception:
+                    pass
+
+                # 预点击登录按钮 + 切换二维码 Tab
+                await self._warmup_click_to_qrcode(page)
+
+                # 验证二维码元素是否存在（深度预热成功的硬性标准）
+                qr_found = await self._verify_qrcode_visible(page)
+                if not qr_found:
+                    logger.warning("深度预热：二维码元素未找到，降级为浅预热")
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                    self._warmed_browser = browser
+                    self._warmed_context = None
+                    self._warmed_page = None
+                    self._warmup_completed_at = None
+                    return True
+
+                # 保存深度预热状态
+                self._warmed_browser = browser
+                self._warmed_context = context
+                self._warmed_page = page
+                self._warmup_completed_at = datetime.now()
+
+                total_elapsed = (datetime.now() - start_time).total_seconds()
+                logger.success(f"✅ 深度预热完成，耗时 {total_elapsed:.1f} 秒（浏览器+页面+二维码全部就绪）")
+                return True
+
+            except Exception as e:
+                # 深度预热失败，降级为浅预热（仅保留浏览器）
+                logger.warning(f"深度预热页面导航失败，降级为浅预热: {e}")
+                # 关闭已创建的 context/page，避免资源泄漏
+                if 'context' in locals() and context:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                self._warmed_browser = browser
+                self._warmed_context = None
+                self._warmed_page = None
+
+                self._warmup_completed_at = None
+                return True  # 浅预热仍算成功
+
+        except ImportError:
+            self._playwright_available = False
+            logger.warning("Playwright 未安装，无法预热")
+            return False
         except Exception as e:
-            logger.error(f"浏览器预热失败: {e}")
+            logger.error(f"预热失败: {e}")
+            # 如果 browser 已创建但未保存到实例变量，关闭它
+            if 'browser' in locals() and browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
             return False
         finally:
             self._is_warming_up = False
 
+    async def _warmup_click_to_qrcode(self, page):
+        """预热专用：点击登录按钮并切换到二维码（不需要 session 参数）"""
+        # 点击登录按钮
+        login_selectors = [
+            'div.login-btn', 'span.login-btn',
+            'div[class*="login-btn"]', 'button:has-text("登录")',
+        ]
+        for selector in login_selectors:
+            try:
+                btn = await page.wait_for_selector(selector, timeout=1500)
+                if btn:
+                    await btn.click()
+                    try:
+                        await page.wait_for_selector('[class*="login-container"], [class*="login-modal"], [class*="qrcode"]', timeout=3000)
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                continue
+
+        # 切换到二维码 Tab
+        qrcode_tab_selectors = [
+            'span:has-text("扫码登录")', 'div:has-text("扫码登录")',
+            '[class*="qrcode-tab"]', '[class*="scan-tab"]',
+        ]
+        for selector in qrcode_tab_selectors:
+            try:
+                tab = await page.wait_for_selector(selector, timeout=1500)
+                if tab:
+                    await tab.click()
+                    try:
+                        await page.wait_for_selector('img[class*="qrcode"], canvas[class*="qrcode"], [class*="qr-code"]', timeout=2000)
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                continue
+
+    async def _verify_qrcode_visible(self, page) -> bool:
+        """验证页面上二维码元素是否可见"""
+        qrcode_selectors = [
+            'img[class*="qrcode"]', 'canvas[class*="qrcode"]',
+            '[class*="qr-code"]', '[class*="QRCode"]',
+        ]
+        for selector in qrcode_selectors:
+            try:
+                el = await page.query_selector(selector)
+                if el and await el.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
     async def _get_or_create_browser(self) -> 'Browser':
-        """获取预热的浏览器，或创建新浏览器"""
-        # 尝试使用预热的浏览器
+        """获取预热的浏览器，或创建新浏览器（回退路径使用）"""
         async with self._warmup_lock:
             if self._warmed_browser is not None:
                 browser = self._warmed_browser
-                self._warmed_browser = None  # 使用后清空，下次需要重新预热
-                logger.info("♻️ 复用预热的浏览器")
-                # 在后台启动新的预热
+                warmed_page = self._warmed_page
+                warmed_context = self._warmed_context
+                # 先清空所有引用
+                self._warmed_browser = None
+                self._warmed_context = None
+                self._warmed_page = None
+
+                self._warmup_completed_at = None
+
+                # 按顺序关闭深度预热的资源（先 page 后 context）
+                if warmed_page:
+                    try:
+                        await warmed_page.close()
+                    except Exception:
+                        pass
+                if warmed_context:
+                    try:
+                        await warmed_context.close()
+                    except Exception:
+                        pass
+                logger.info("♻️ 复用预热的浏览器（回退到浅预热路径）")
                 asyncio.create_task(self.warmup())
                 return browser
 
@@ -200,6 +350,163 @@ class QRCodeLoginService:
                 '--disable-setuid-sandbox',
             ] + ([] if is_server else ['--start-maximized'])
         )
+
+    async def _try_use_warmed_page(self, session: QRCodeSession) -> bool:
+        """
+        尝试使用深度预热的页面（快速路径）。
+
+        如果深度预热就绪，直接取走预热的 browser/context/page，
+        用户点击扫码时 <1-3 秒即可看到二维码。
+
+        Returns:
+            bool: True 表示成功使用深度预热，False 表示需回退到完整流程
+        """
+        async with self._warmup_lock:
+            if self._warmed_page is None or self._warmed_browser is None:
+                return False
+
+            # 取走所有预热资源
+            browser = self._warmed_browser
+            context = self._warmed_context
+            page = self._warmed_page
+            warmup_time = self._warmup_completed_at
+
+            self._warmed_browser = None
+            self._warmed_context = None
+            self._warmed_page = None
+            self._warmup_completed_at = None
+
+        try:
+            # 检查页面是否仍然有效
+            if page.is_closed():
+                logger.warning("深度预热页面已关闭，回退到完整流程")
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                asyncio.create_task(self.warmup())
+                return False
+
+            # 注册到会话
+            self._browsers[session.session_id] = browser
+            self._contexts[session.session_id] = context
+            self._pages[session.session_id] = page
+
+            # 检查 QR 码新鲜度
+            age_seconds = (datetime.now() - warmup_time).total_seconds() if warmup_time else 999
+            if age_seconds > 90:
+                logger.info(f"⚡ 深度预热页面已就绪（QR码已 {age_seconds:.0f}s，尝试刷新）")
+                await self._refresh_qrcode(page)
+            else:
+                logger.info(f"⚡ 深度预热页面已就绪（QR码 {age_seconds:.0f}s，新鲜可用）")
+
+            # 验证二维码元素仍然可见（防止虚假成功）
+            if not await self._verify_qrcode_visible(page):
+                logger.warning("深度预热页面上二维码不可见，回退到完整流程")
+                # 资源保留在 session dict，由 _open_browser_window 的回退路径清理后重建
+                self._browsers.pop(session.session_id, None)
+                self._contexts.pop(session.session_id, None)
+                self._pages.pop(session.session_id, None)
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                if context:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                if browser:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                asyncio.create_task(self.warmup())
+                return False
+
+            # 更新会话状态
+            session.status = QRLoginStatus.WAITING_SCAN
+            session.expires_at = datetime.now() + timedelta(seconds=LOGIN_TIMEOUT_SECONDS)
+
+            # 重新截图
+            if self._is_server_mode():
+                screenshot = await page.screenshot(type='jpeg', quality=70)
+                session.qrcode_base64 = base64.b64encode(screenshot).decode('utf-8')
+                asyncio.create_task(self._update_screenshot(session))
+            else:
+                session.qrcode_base64 = None
+
+            # 启动登录状态监听
+            asyncio.create_task(self._monitor_login_status(session))
+
+            # 后台启动新一轮深度预热
+            asyncio.create_task(self.warmup())
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"使用深度预热页面失败: {e}")
+            # 先从 session dict 中移除（避免其他协程访问失效资源）
+            self._browsers.pop(session.session_id, None)
+            self._contexts.pop(session.session_id, None)
+            self._pages.pop(session.session_id, None)
+            # 按顺序独立关闭每个资源（任一关闭失败不影响其余）
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            asyncio.create_task(self.warmup())
+            return False
+
+    async def _refresh_qrcode(self, page):
+        """
+        在已有页面上刷新过期的二维码。
+
+        比全页面重新导航快得多（~1-2 秒 vs 5-10 秒）。
+        查找刷新/过期相关按钮并点击，或重新切换到二维码 Tab。
+        """
+        # 尝试点击刷新按钮（小红书 QR 过期后通常显示刷新按钮）
+        refresh_selectors = [
+            ':text-is("点击刷新")',
+            ':text-is("刷新二维码")',
+            ':has-text("刷新")',
+            ':has-text("重新获取")',
+            '[class*="refresh"]',
+            '[class*="expired"] >> button',
+        ]
+        for selector in refresh_selectors:
+            try:
+                btn = await page.query_selector(selector)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    logger.info(f"🔄 点击二维码刷新按钮")
+                    # 等待新二维码加载
+                    try:
+                        await page.wait_for_selector(
+                            'img[class*="qrcode"], canvas[class*="qrcode"], [class*="qr-code"]',
+                            timeout=3000
+                        )
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                continue
+
+        # 没找到刷新按钮，尝试重新切换 Tab 触发刷新
+        logger.debug("未找到刷新按钮，尝试重新切换二维码 Tab")
+        await self._warmup_click_to_qrcode(page)
 
     async def create_session(self, username: str) -> QRCodeSession:
         """创建扫码登录会话（打开可见浏览器窗口）"""
@@ -223,8 +530,16 @@ class QRCodeLoginService:
             return session
 
     async def _open_browser_window(self, session: QRCodeSession):
-        """打开浏览器（优化版：优先复用预热的浏览器）"""
+        """打开浏览器（优化版：优先使用深度预热页面，回退到完整流程）"""
         try:
+            # ⚡ 优先尝试使用深度预热的页面（<1-3 秒）
+            if await self._try_use_warmed_page(session):
+                elapsed = (datetime.now() - session.created_at).total_seconds()
+                logger.success(f"⚡ 会话 {session.session_id}: 使用深度预热，QR码就绪（{elapsed:.1f}s）")
+                return
+
+            # 回退到完整流程
+            logger.info(f"会话 {session.session_id}: 深度预热不可用，使用完整流程")
             from playwright.async_api import async_playwright
 
             start_time = datetime.now()
@@ -462,7 +777,7 @@ class QRCodeLoginService:
         return False
 
     async def submit_sms_code(self, session_id: str, sms_code: str) -> bool:
-        """提交短信验证码"""
+        """提交短信验证码（模拟真人键盘输入，兼容 Vue v-model）"""
         page = self._pages.get(session_id)
         session = self._sessions.get(session_id)
 
@@ -475,148 +790,14 @@ class QRCodeLoginService:
             return False
 
         try:
-            # 查找验证码输入框并填入
-            sms_selectors = [
-                'input[placeholder*="验证码"]',
-                'input[placeholder*="短信"]',
-                'input[placeholder*="输入"]',
-                'input[class*="code"]',
-                'input[class*="sms"]',
-                'input[class*="verify"]',
-                'input[type="tel"]',           # 数字输入框常用 type=tel
-                'input[type="number"]',
-                'input[maxlength="4"]',        # 4位验证码
-                'input[maxlength="6"]',        # 6位验证码
-                '[class*="code"] input',       # 嵌套输入框
-                '[class*="sms"] input',
-            ]
-            input_filled = False
-            for selector in sms_selectors:
-                try:
-                    input_el = await page.query_selector(selector)
-                    if input_el and await input_el.is_visible():
-                        # 使用 force=True 强制点击（绕过遮挡元素）
-                        await input_el.click(force=True, timeout=3000)
-                        await page.wait_for_timeout(100)
-                        # 清空已有内容
-                        await input_el.fill('')
-                        # 尝试 fill 方法
-                        await input_el.fill(sms_code)
-
-                        # 验证是否真的输入了
-                        actual_value = await input_el.input_value()
-                        if actual_value == sms_code:
-                            input_filled = True
-                            logger.info(f"会话 {session_id}: 已填入验证码 '{sms_code}' (选择器: {selector})")
-                            break
-                        else:
-                            logger.warning(f"会话 {session_id}: fill() 后值不匹配，期望 '{sms_code}'，实际 '{actual_value}'")
-                            # fill 失败，尝试用 type 逐字输入
-                            await input_el.click(force=True, timeout=3000)
-                            await page.keyboard.press('Control+a')  # 全选
-                            await page.keyboard.type(sms_code, delay=50)
-                            actual_value = await input_el.input_value()
-                            if actual_value == sms_code:
-                                input_filled = True
-                                logger.info(f"会话 {session_id}: 已通过键盘输入验证码 '{sms_code}'")
-                                break
-                            else:
-                                logger.warning(f"会话 {session_id}: 键盘输入后值仍不匹配，实际 '{actual_value}'")
-                except Exception as e:
-                    logger.debug(f"会话 {session_id}: 输入框选择器 {selector} 失败: {e}")
-                    continue
-
-            # 如果常规方法失败，尝试使用 JavaScript 直接操作
-            if not input_filled:
-                logger.warning(f"会话 {session_id}: 常规输入失败，尝试 JavaScript 直接操作")
-                try:
-                    # 使用 JS 查找输入框并填入值
-                    js_result = await page.evaluate(f'''() => {{
-                        // 查找所有可能的输入框
-                        const inputs = document.querySelectorAll('input[type="text"], input[type="tel"], input[type="number"], input:not([type])');
-                        for (const input of inputs) {{
-                            if (input.offsetParent !== null) {{  // 可见元素
-                                input.focus();
-                                input.value = "{sms_code}";
-                                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                return true;
-                            }}
-                        }}
-                        return false;
-                    }}''')
-                    if js_result:
-                        input_filled = True
-                        logger.info(f"会话 {session_id}: 已通过 JavaScript 填入验证码")
-                except Exception as e:
-                    logger.debug(f"会话 {session_id}: JavaScript 输入失败: {e}")
-
-            # 如果 fill 失败，尝试键盘逐字输入
-            if not input_filled:
-                logger.warning(f"会话 {session_id}: 标准输入框未找到，尝试键盘输入")
-                # 尝试点击页面上可能的输入区域
-                try:
-                    # 查找任何可聚焦的输入元素
-                    any_input = await page.query_selector('input:visible, [contenteditable="true"]')
-                    if any_input:
-                        await any_input.click()
-                        await page.wait_for_timeout(100)
-                except Exception:
-                    pass
-                # 直接用键盘输入验证码
-                await page.keyboard.type(sms_code, delay=50)
-                input_filled = True
-                logger.info(f"会话 {session_id}: 已通过键盘输入验证码")
+            input_filled = await self._fill_sms_input(page, session_id, sms_code)
 
             if not input_filled:
-                logger.error(f"会话 {session_id}: 未找到验证码输入框")
+                logger.error(f"会话 {session_id}: 所有输入方式均失败")
                 return False
 
-            # 查找并点击确认/提交按钮
-            # 注意：
-            # 1. 小红书按钮可能是 div/span 而非 button
-            # 2. 要排除"获取验证码"按钮，只匹配纯"验证"文字
-            # 3. :text-is() 精确匹配完整文本，:has-text() 包含匹配
-            submit_selectors = [
-                # 精确匹配"验证"两个字（排除"获取验证码"）
-                ':text-is("验证")',
-                'button:text-is("验证")',
-                'div:text-is("验证")',
-                'span:text-is("验证")',
-                # 其他可能的提交按钮
-                ':text-is("确定")',
-                ':text-is("确认")',
-                ':text-is("登录")',
-                ':text-is("提交")',
-                'button:text-is("确定")',
-                'button:text-is("确认")',
-                # class 选择器
-                '[class*="submit"]:not([class*="code"])',   # 排除获取验证码
-                '[class*="confirm"]',
-                '[class*="verify-btn"]',
-            ]
-            button_clicked = False
-            for selector in submit_selectors:
-                try:
-                    btn = await page.query_selector(selector)
-                    if btn and await btn.is_visible():
-                        # 获取按钮文本，确认不是"获取验证码"
-                        btn_text = await btn.inner_text()
-                        if '获取' in btn_text or '发送' in btn_text or '重新' in btn_text:
-                            logger.debug(f"会话 {session_id}: 跳过按钮 '{btn_text}'")
-                            continue
-                        await btn.click(force=True)
-                        logger.info(f"会话 {session_id}: 已点击确认按钮 '{btn_text}' (选择器: {selector})")
-                        button_clicked = True
-                        break
-                except Exception as e:
-                    logger.debug(f"会话 {session_id}: 选择器 {selector} 失败: {e}")
-                    continue
-
-            if not button_clicked:
-                logger.warning(f"会话 {session_id}: 未找到确认按钮，尝试按回车键提交")
-                # 尝试按回车键提交
-                await page.keyboard.press('Enter')
+            # 点击确认/提交按钮
+            await self._click_submit_button(page, session_id)
 
             # 等待页面响应
             await page.wait_for_timeout(2000)
@@ -628,6 +809,195 @@ class QRCodeLoginService:
         except Exception as e:
             logger.error(f"会话 {session_id}: 提交验证码失败 - {e}")
             return False
+
+    async def _fill_sms_input(self, page, session_id: str, sms_code: str) -> bool:
+        """
+        填入短信验证码（三重策略，兼容 Vue v-model）。
+
+        策略 1：模拟真人键盘 — click → 全选 → keyboard.type(delay=80)
+                触发完整键盘事件链（keydown/keypress/input/keyup），Vue v-model 能正确响应。
+        策略 2：增强 JavaScript — 使用 nativeInputValueSetter 绕过 Vue setter，
+                触发 InputEvent（非普通 Event），确保 Vue 2/3 都能捕获。
+        策略 3：盲打兜底 — 点击任意可见输入框后直接键盘输入。
+        """
+        sms_selectors = [
+            'input[placeholder*="验证码"]',
+            'input[placeholder*="短信"]',
+            'input[placeholder*="输入"]',
+            'input[class*="code"]',
+            'input[class*="sms"]',
+            'input[class*="verify"]',
+            'input[type="tel"]',
+            'input[type="number"]',
+            'input[maxlength="4"]',
+            'input[maxlength="6"]',
+            '[class*="code"] input',
+            '[class*="sms"] input',
+        ]
+
+        # 策略 1：模拟真人键盘输入（推荐，最可靠）
+        for selector in sms_selectors:
+            try:
+                input_el = await page.query_selector(selector)
+                if not input_el or not await input_el.is_visible():
+                    continue
+
+                # 步骤 1：点击聚焦（模拟真人点击输入框）
+                await input_el.click(force=True, timeout=3000)
+                await page.wait_for_timeout(200)
+
+                # 步骤 2：全选并清空已有内容
+                await page.keyboard.press('Control+a')
+                await page.keyboard.press('Backspace')
+                await page.wait_for_timeout(100)
+
+                # 步骤 3：逐字符键盘输入（触发 keydown/keypress/input/keyup 完整事件链）
+                await page.keyboard.type(sms_code, delay=80)
+                await page.wait_for_timeout(200)
+
+                # 步骤 4：触发 blur/change 事件（确保 Vue 更新绑定值）
+                await page.keyboard.press('Tab')
+                await page.wait_for_timeout(100)
+                # 重新聚焦回输入框（Tab 可能跳到下一个元素）
+                await input_el.click(force=True, timeout=1000)
+
+                # 步骤 5：验证输入值
+                actual_value = await input_el.input_value()
+                if actual_value == sms_code:
+                    logger.info(f"会话 {session_id}: ✅ 键盘输入验证码成功 (选择器: {selector})")
+                    return True
+                else:
+                    logger.warning(f"会话 {session_id}: 键盘输入后值不匹配，期望 '{sms_code}'，实际 '{actual_value}'")
+            except Exception as e:
+                logger.debug(f"会话 {session_id}: 键盘输入选择器 {selector} 失败: {e}")
+                continue
+
+        # 策略 2：增强版 JavaScript（绕过 Vue setter，触发 InputEvent）
+        logger.warning(f"会话 {session_id}: 键盘输入失败，尝试增强 JavaScript")
+        try:
+            js_result = await page.evaluate('''(code) => {
+                const selectors = [
+                    'input[placeholder*="验证码"]', 'input[placeholder*="短信"]',
+                    'input[type="tel"]', 'input[type="number"]',
+                    'input[maxlength="4"]', 'input[maxlength="6"]',
+                ];
+                for (const sel of selectors) {
+                    const input = document.querySelector(sel);
+                    if (!input || input.offsetParent === null) continue;
+
+                    input.focus();
+
+                    // 使用原生 setter 绕过 Vue 的 property 劫持
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    nativeSetter.call(input, code);
+
+                    // 触发 InputEvent（Vue 3 监听的事件类型）
+                    input.dispatchEvent(new InputEvent('input', {
+                        bubbles: true, inputType: 'insertText', data: code
+                    }));
+                    // 触发 change（Vue 2 的 lazy 模式和部分组件库需要）
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    // 触发 compositionend（中文输入法兼容）
+                    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+
+                    return input.value === code;
+                }
+                return false;
+            }''', sms_code)
+            if js_result:
+                logger.info(f"会话 {session_id}: ✅ JavaScript 填入验证码成功")
+                return True
+        except Exception as e:
+            logger.debug(f"会话 {session_id}: JavaScript 输入失败: {e}")
+
+        # 策略 3：盲打兜底（聚焦任意可见输入框后直接键盘输入）
+        logger.warning(f"会话 {session_id}: 所有定位失败，尝试盲打兜底")
+        try:
+            any_input = await page.query_selector('input:visible, [contenteditable="true"]')
+            if any_input:
+                await any_input.click(force=True)
+                await page.wait_for_timeout(200)
+            await page.keyboard.press('Control+a')
+            await page.keyboard.press('Backspace')
+            await page.keyboard.type(sms_code, delay=80)
+            logger.info(f"会话 {session_id}: 已通过盲打输入验证码")
+            return True
+        except Exception as e:
+            logger.debug(f"会话 {session_id}: 盲打输入失败: {e}")
+
+        return False
+
+    async def _click_submit_button(self, page, session_id: str):
+        """
+        在验证码弹窗容器内查找并点击确认按钮。
+
+        先定位弹窗容器，在容器范围内搜索按钮，避免误点页面上其他"登录"按钮。
+        """
+        # 先尝试定位验证码所在的弹窗/对话框容器
+        container_selectors = [
+            '[class*="login-container"]', '[class*="login-modal"]',
+            '[class*="verify-modal"]', '[class*="sms-modal"]',
+            '[class*="dialog"]', '[class*="modal"]',
+            '[role="dialog"]',
+        ]
+        container = None
+        for sel in container_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    container = el
+                    break
+            except Exception:
+                continue
+
+        # 在容器内（或全局回退）搜索提交按钮
+        submit_texts = ['验证', '确定', '确认', '登录', '提交']
+        exclude_texts = ['获取', '发送', '重新', '扫码']
+
+        search_scope = container if container else page
+        scope_label = "弹窗容器内" if container else "全局"
+
+        # 方法 1：在容器内按文本查找
+        for text in submit_texts:
+            try:
+                buttons = await search_scope.query_selector_all(
+                    f'button, [role="button"], div[class*="btn"], span[class*="btn"]'
+                )
+                for btn in buttons:
+                    if not await btn.is_visible():
+                        continue
+                    btn_text = (await btn.inner_text()).strip()
+                    if btn_text == text or (text in btn_text and len(btn_text) <= 6):
+                        if any(ex in btn_text for ex in exclude_texts):
+                            continue
+                        await btn.click(force=True)
+                        logger.info(f"会话 {session_id}: 已点击{scope_label}确认按钮 '{btn_text}'")
+                        return
+            except Exception:
+                continue
+
+        # 方法 2：class 选择器查找
+        class_selectors = [
+            '[class*="submit"]:not([class*="code"])',
+            '[class*="confirm"]', '[class*="verify-btn"]',
+        ]
+        for sel in class_selectors:
+            try:
+                btn = await search_scope.query_selector(sel)
+                if btn and await btn.is_visible():
+                    btn_text = (await btn.inner_text()).strip()
+                    if any(ex in btn_text for ex in exclude_texts):
+                        continue
+                    await btn.click(force=True)
+                    logger.info(f"会话 {session_id}: 已点击{scope_label}确认按钮 '{btn_text}'")
+                    return
+            except Exception:
+                continue
+
+        logger.warning(f"会话 {session_id}: 未找到确认按钮，按回车键提交")
+        await page.keyboard.press('Enter')
 
     async def _monitor_login_status(self, session: QRCodeSession):
         """监听登录状态（验证 Cookie 真正有效）"""
@@ -779,19 +1149,38 @@ class QRCodeLoginService:
             await self.cancel_session(sid)
 
     async def cleanup_all(self):
-        """清理所有资源（包括预热的浏览器）"""
+        """清理所有资源（包括深度预热的浏览器/页面）"""
         for sid in list(self._sessions.keys()):
             await self._cleanup_session(sid)
         self._sessions.clear()
         self._browsers.clear()
 
-        # 清理预热的浏览器
-        if self._warmed_browser:
+        # 在锁保护下取走深度预热的资源（防止与后台 warmup 竞态）
+        async with self._warmup_lock:
+            warmed_page = self._warmed_page
+            warmed_context = self._warmed_context
+            warmed_browser = self._warmed_browser
+            self._warmed_browser = None
+            self._warmed_context = None
+            self._warmed_page = None
+            self._warmup_completed_at = None
+
+        # 在锁外执行实际关闭操作（按顺序：page → context → browser）
+        if warmed_page:
             try:
-                await self._warmed_browser.close()
+                await warmed_page.close()
             except Exception:
                 pass
-            self._warmed_browser = None
+        if warmed_context:
+            try:
+                await warmed_context.close()
+            except Exception:
+                pass
+        if warmed_browser:
+            try:
+                await warmed_browser.close()
+            except Exception:
+                pass
 
         if self._playwright:
             try:
