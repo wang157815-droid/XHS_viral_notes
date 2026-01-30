@@ -356,7 +356,8 @@ class ViralAnalyzer:
                 try:
                     video_ai_insights = self._analyze_videos_with_ai(
                         video_notes,
-                        video_source_mode=self._video_source_mode
+                        video_source_mode=self._video_source_mode,
+                        cancel_check=cancel_check
                     )
                     viral_model['video_ai_insights'] = video_ai_insights
                     report_progress("✅ 视频AI深度分析完成", 85)
@@ -1036,7 +1037,8 @@ class ViralAnalyzer:
     def _analyze_videos_with_ai(
         self,
         video_notes: List[ViralNote],
-        video_source_mode: Optional[str] = None
+        video_source_mode: Optional[str] = None,
+        cancel_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
         """
         使用AI深度分析视频笔记（集成VideoEnhancedAnalyzer，包含封面、标题、时间轴分析）
@@ -1044,10 +1046,17 @@ class ViralAnalyzer:
         Args:
             video_notes: 视频笔记列表
             video_source_mode: 视频源模式 ("url"=URL直传, "proxy"=本地下载)
+            cancel_check: 取消检查回调
 
         Returns:
             视频AI分析结果（包含细粒度分析）
+
+        Raises:
+            AnalysisCancelled: 分析被用户取消
         """
+        def _check():
+            if cancel_check and cancel_check():
+                raise AnalysisCancelled("视频分析被用户取消")
         from viral_agent.services.video.video_enhanced_analyzer import VideoEnhancedAnalyzer
         import asyncio
 
@@ -1099,6 +1108,7 @@ class ViralAnalyzer:
                 }
 
             # 使用批量分析功能（支持并发）
+            _check()
             logger.info(f"开始批量分析...")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -1115,6 +1125,7 @@ class ViralAnalyzer:
                 loop.close()
 
             logger.success(f"批量分析完成: 成功 {batch_result.success_count}, 失败 {batch_result.failed_count}")
+            _check()
 
             # 整理分析结果（包含细粒度数据）
             insights = []
@@ -1212,6 +1223,7 @@ class ViralAnalyzer:
             product_analysis = None
             video_viral_model = None
 
+            _check()
             # 并行执行内容分析和产品分析（性能优化：从串行改为并行）
             async def _run_parallel_video_analysis():
                 """并行执行视频内容分析和产品分析"""
@@ -1274,6 +1286,7 @@ class ViralAnalyzer:
                     logger.warning(f"视频深度分析失败: {e}")
 
             # 视频爆文模型综合推理
+            _check()
             if self.synthesis_service:
                 try:
                     logger.info("执行视频爆文模型综合推理...")

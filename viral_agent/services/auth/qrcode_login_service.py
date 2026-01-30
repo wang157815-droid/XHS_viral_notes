@@ -799,7 +799,7 @@ class QRCodeLoginService:
             # 填入验证码后，XHS 可能自动提交登录（无需点击按钮）。
             # _monitor_login_status 可能已检测到 Cookie 有效并关闭了浏览器。
             # 因此需要先检查页面/会话状态。
-            if page.is_closed() or session.is_completed:
+            if page.is_closed() or session.is_login_success:
                 logger.info(f"会话 {session_id}: 验证码填入后登录已自动完成，无需点击提交")
                 return True
 
@@ -817,7 +817,7 @@ class QRCodeLoginService:
 
         except Exception as e:
             # 如果是浏览器已关闭且登录已成功，不算失败
-            if session.is_completed:
+            if session.is_login_success:
                 logger.info(f"会话 {session_id}: 验证码提交过程中登录已完成")
                 return True
             logger.error(f"会话 {session_id}: 提交验证码失败 - {e}")

@@ -56,6 +56,14 @@ class QRCodeSession:
             QRLoginStatus.ERROR
         )
 
+    @property
+    def is_login_success(self) -> bool:
+        """登录是否成功（仅 SUCCESS/CONFIRMED）"""
+        return self.status in (
+            QRLoginStatus.SUCCESS,
+            QRLoginStatus.CONFIRMED
+        )
+
     def to_dict(self) -> dict:
         """转换为字典，用于API响应"""
         return {
