@@ -43,17 +43,23 @@ class UserDataService:
     USERS_ROOT = DATA_ROOT / "users"
     # 共享资源目录
     SHARED_ROOT = DATA_ROOT / "shared"
-    # 默认用户名（向后兼容）
-    DEFAULT_USER = "admin"
+    @staticmethod
+    def get_default_user() -> str:
+        """获取默认用户名（初始管理员的当前用户名）"""
+        try:
+            from viral_agent.auth.auth_service import get_initial_admin_username
+            return get_initial_admin_username()
+        except ImportError:
+            return "admin"
 
     def __init__(self, username: Optional[str] = None):
         """
         初始化用户数据服务
 
         Args:
-            username: 用户名，为空时使用默认用户 admin
+            username: 用户名，为空时动态获取初始管理员用户名
         """
-        self.username = username or self.DEFAULT_USER
+        self.username = username or self.get_default_user()
         self._ensure_user_dirs()
 
     def _ensure_user_dirs(self) -> None:
@@ -290,7 +296,7 @@ class UserDataService:
 # 数据迁移工具
 # ========================
 
-def migrate_legacy_data(target_user: str = "admin") -> bool:
+def migrate_legacy_data(target_user: Optional[str] = None) -> bool:
     """
     将旧版数据迁移到用户目录
 
@@ -300,11 +306,12 @@ def migrate_legacy_data(target_user: str = "admin") -> bool:
     - datas/cover_cache/ → datas/users/{user}/cover_cache/
 
     Args:
-        target_user: 目标用户名，默认为 admin
+        target_user: 目标用户名，默认为初始管理员
 
     Returns:
         迁移是否成功
     """
+    target_user = target_user or UserDataService.get_default_user()
     data_root = Path("datas")
     user_service = UserDataService(target_user)
 
@@ -377,7 +384,7 @@ def get_user_data_service(username: Optional[str] = None) -> UserDataService:
     Returns:
         UserDataService 实例
     """
-    username = username or UserDataService.DEFAULT_USER
+    username = username or UserDataService.get_default_user()
     if username not in _user_services:
         _user_services[username] = UserDataService(username)
     return _user_services[username]

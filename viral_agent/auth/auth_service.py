@@ -1,5 +1,5 @@
 """
-认证服务 - 用户名密码 + JWT Token
+认证服务 - JWT Token 认证核心
 
 安全特性：
 - JWT_SECRET 必须从环境变量读取，缺失时拒绝启动
@@ -44,6 +44,7 @@ def init_auth() -> None:
     初始化认证系统
     - 检查 JWT_SECRET 是否配置
     - 首次运行时创建随机强密码的管理员账户
+    - 为已有用户迁移新字段
     """
     global JWT_SECRET
 
@@ -70,7 +71,9 @@ def init_auth() -> None:
                 "password": pwd_context.hash(random_password),
                 "role": "admin",
                 "must_change_password": True,
-                "created_at": datetime.now().isoformat()
+                "created_at": datetime.now().isoformat(),
+                "display_name": "澜斯",
+                "is_initial_admin": True
             }
         }
         USERS_FILE.write_text(
@@ -86,12 +89,37 @@ def init_auth() -> None:
         logger.warning("=" * 60)
         logger.warning("首次启动！已创建管理员账户：")
         logger.warning(f"  用户名: admin")
+        logger.warning(f"  显示名称: 澜斯")
         logger.warning(f"  密码: {random_password}")
         logger.warning("请登录后立即修改密码！")
         logger.warning("=" * 60)
 
+    # 为已有用户迁移新字段
+    _migrate_user_fields()
+
     logger.info("认证系统初始化完成")
 
+
+def _migrate_user_fields() -> None:
+    """为现有用户补充 display_name 和 is_initial_admin 字段（幂等）"""
+    users = load_users()
+    modified = False
+
+    for username, data in users.items():
+        if "display_name" not in data:
+            data["display_name"] = "澜斯" if username == "admin" else username
+            modified = True
+
+        if "is_initial_admin" not in data:
+            data["is_initial_admin"] = (username == "admin")
+            modified = True
+
+    if modified:
+        save_users(users)
+        logger.info("用户数据字段迁移完成（display_name, is_initial_admin）")
+
+
+# ==================== 底层工具函数 ====================
 
 def generate_random_password(length: int = 16) -> str:
     """生成随机强密码"""
@@ -119,6 +147,8 @@ def save_users(users: dict) -> None:
     except OSError:
         pass
 
+
+# ==================== 密码与认证 ====================
 
 def verify_password(username: str, password: str) -> bool:
     """验证用户密码（使用 bcrypt）"""
@@ -148,6 +178,8 @@ def change_password(username: str, new_password: str) -> bool:
     return True
 
 
+# ==================== JWT Token ====================
+
 def create_token(username: str) -> str:
     """创建 JWT Token"""
     if not JWT_SECRET:
@@ -164,7 +196,7 @@ def create_token(username: str) -> str:
 def verify_token(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> str:
-    """验证 JWT Token（FastAPI 依赖注入）- 仅验证 token 有效性"""
+    """验证 JWT Token + 校验用户是否仍然存在"""
     if not JWT_SECRET:
         raise RuntimeError("JWT_SECRET 未初始化")
 
@@ -184,6 +216,15 @@ def verify_token(
         username = payload.get("sub")
         if not username:
             raise HTTPException(status_code=401, detail="无效的 Token")
+
+        # 校验用户是否仍然存在（防止改名/删除后旧 Token 仍可访问）
+        users = load_users()
+        if username not in users:
+            raise HTTPException(
+                status_code=401,
+                detail="用户不存在或已被更改，请重新登录"
+            )
+
         return username
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token 已过期，请重新登录")
@@ -202,7 +243,6 @@ def verify_token_and_password_changed(
     """
     username = verify_token(credentials)
 
-    # 检查是否需要强制修改密码
     if check_must_change_password(username):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -213,7 +253,7 @@ def verify_token_and_password_changed(
     return username
 
 
-# ==================== 用户管理函数 ====================
+# ==================== 角色判断 ====================
 
 def is_admin(username: str) -> bool:
     """检查用户是否是管理员"""
@@ -223,163 +263,18 @@ def is_admin(username: str) -> bool:
     return users[username].get("role") == "admin"
 
 
-def create_user(
-    username: str,
-    password: str,
-    role: str = "user",
-    created_by: Optional[str] = None
-) -> dict:
-    """
-    创建新用户
-
-    Args:
-        username: 用户名（只能包含字母、数字、下划线）
-        password: 密码（至少8位）
-        role: 角色（admin/user）
-        created_by: 创建者用户名
-
-    Returns:
-        新用户信息
-
-    Raises:
-        ValueError: 用户名已存在或格式错误
-    """
-    import re
-
-    # 验证用户名格式
-    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{2,19}$', username):
-        raise ValueError("用户名必须以字母开头，只能包含字母、数字、下划线，长度3-20位")
-
-    # 验证密码长度
-    if len(password) < 8:
-        raise ValueError("密码长度至少8位")
-
-    users = load_users()
-    if username in users:
-        raise ValueError(f"用户名 '{username}' 已存在")
-
-    # 创建用户
-    users[username] = {
-        "password": pwd_context.hash(password),
-        "role": role if role in ("admin", "user") else "user",
-        "must_change_password": True,  # 新用户首次登录需改密
-        "created_at": datetime.now().isoformat(),
-        "created_by": created_by
-    }
-    save_users(users)
-
-    logger.info(f"用户创建成功: {username} (角色: {role}, 创建者: {created_by})")
-
-    return {
-        "username": username,
-        "role": users[username]["role"],
-        "created_at": users[username]["created_at"]
-    }
-
-
-def delete_user(username: str, deleted_by: str) -> bool:
-    """
-    删除用户
-
-    Args:
-        username: 要删除的用户名
-        deleted_by: 执行删除的用户名
-
-    Returns:
-        是否成功
-
-    Raises:
-        ValueError: 不能删除自己或admin账户
-    """
-    if username == "admin":
-        raise ValueError("不能删除 admin 账户")
-
-    if username == deleted_by:
-        raise ValueError("不能删除自己的账户")
-
+def is_initial_admin(username: str) -> bool:
+    """检查用户是否是初始管理员（不可删除、不可降级）"""
     users = load_users()
     if username not in users:
         return False
-
-    del users[username]
-    save_users(users)
-
-    logger.info(f"用户已删除: {username} (操作者: {deleted_by})")
-    return True
+    return users[username].get("is_initial_admin", False)
 
 
-def list_users() -> list:
-    """
-    获取所有用户列表（不含密码）
-
-    Returns:
-        用户信息列表
-    """
+def get_initial_admin_username() -> str:
+    """获取初始管理员的当前用户名（可能已被改名）"""
     users = load_users()
-    result = []
     for username, data in users.items():
-        result.append({
-            "username": username,
-            "role": data.get("role", "user"),
-            "created_at": data.get("created_at"),
-            "created_by": data.get("created_by"),
-            "must_change_password": data.get("must_change_password", False),
-            "password_changed_at": data.get("password_changed_at")
-        })
-    return result
-
-
-def get_user_info(username: str) -> Optional[dict]:
-    """
-    获取单个用户信息（不含密码）
-
-    Args:
-        username: 用户名
-
-    Returns:
-        用户信息字典，用户不存在返回 None
-    """
-    users = load_users()
-    if username not in users:
-        return None
-
-    data = users[username]
-    return {
-        "username": username,
-        "role": data.get("role", "user"),
-        "created_at": data.get("created_at"),
-        "created_by": data.get("created_by"),
-        "must_change_password": data.get("must_change_password", False),
-        "password_changed_at": data.get("password_changed_at")
-    }
-
-
-def update_user_role(username: str, new_role: str, updated_by: str) -> bool:
-    """
-    更新用户角色
-
-    Args:
-        username: 用户名
-        new_role: 新角色（admin/user）
-        updated_by: 操作者用户名
-
-    Returns:
-        是否成功
-    """
-    if username == "admin" and new_role != "admin":
-        raise ValueError("不能更改 admin 账户的角色")
-
-    if new_role not in ("admin", "user"):
-        raise ValueError("角色只能是 admin 或 user")
-
-    users = load_users()
-    if username not in users:
-        return False
-
-    users[username]["role"] = new_role
-    users[username]["role_updated_at"] = datetime.now().isoformat()
-    users[username]["role_updated_by"] = updated_by
-    save_users(users)
-
-    logger.info(f"用户角色已更新: {username} -> {new_role} (操作者: {updated_by})")
-    return True
+        if data.get("is_initial_admin", False):
+            return username
+    return "admin"  # 终极 fallback

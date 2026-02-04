@@ -1743,11 +1743,11 @@
             background: rgba(255, 255, 255, 0.3);
         }
 
-        .tab-content {
+        .sidebar-middle > .tab-content {
             display: none;
         }
 
-        .tab-content.active {
+        .sidebar-middle > .tab-content.active {
             display: block;
         }
 
@@ -2715,6 +2715,43 @@
         </div>
     </div>
 
+    <!-- 修改用户名模态框 -->
+    <div class="modal fade" id="changeUsernameModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header" style="background: var(--primary-gradient); color: white;">
+                    <h5 class="modal-title">
+                        <i class="fas fa-user-edit me-2"></i>修改登录用户名
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info small mb-3">
+                        <i class="fas fa-info-circle me-1"></i>
+                        修改用户名后需要重新登录。用户名只能包含英文字母、数字和下划线。
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small">新用户名</label>
+                        <input type="text" class="form-control" id="newUsernameInput"
+                               placeholder="以字母开头，3-20位" pattern="^[a-zA-Z][a-zA-Z0-9_]{2,19}$">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small">当前密码（安全验证）</label>
+                        <input type="password" class="form-control" id="usernameChangePassword"
+                               placeholder="请输入当前密码">
+                    </div>
+                    <div id="changeUsernameError" class="alert alert-danger small d-none"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="confirmChangeUsername()">
+                        <i class="fas fa-check me-1"></i>确认修改
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 扫码登录模态框 -->
     <div class="modal fade" id="qrcodeLoginModal" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
@@ -2911,6 +2948,42 @@
                             </button>
                         </div>
                         <div id="cleanupResult" class="mt-2 small" style="display:none;"></div>
+                    </div>
+
+                    <hr>
+
+                    <!-- 个人资料 -->
+                    <div class="mb-4">
+                        <h6 class="mb-3"><i class="fas fa-id-card text-primary"></i> 个人资料</h6>
+
+                        <!-- 显示名称 -->
+                        <div class="mb-2">
+                            <label class="form-label small text-muted mb-1">显示名称</label>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" id="editDisplayName"
+                                       maxlength="30" placeholder="设置显示名称">
+                                <button class="btn btn-outline-primary" onclick="saveDisplayName()">
+                                    <i class="fas fa-save"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 登录用户名 -->
+                        <div class="mb-2">
+                            <label class="form-label small text-muted mb-1">登录用户名</label>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" id="currentUsernameDisplay"
+                                       readonly disabled>
+                                <button class="btn btn-outline-secondary" onclick="showChangeUsernameModal()">
+                                    <i class="fas fa-edit"></i> 修改
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 修改密码快捷入口 -->
+                        <button class="btn btn-outline-warning btn-sm w-100" onclick="showChangePasswordFromSettings()">
+                            <i class="fas fa-key"></i> 修改密码
+                        </button>
                     </div>
 
                     <hr>
@@ -3760,7 +3833,8 @@
                     localStorage.setItem('token', authToken);
                     localStorage.setItem('username', data.username || username);
                     localStorage.setItem('userRole', data.role || 'user');
-                    setSidebarUsername(data.username || username);
+                    localStorage.setItem('displayName', data.display_name || '');
+                    setSidebarUsername(data.display_name || data.username || username);
                     updateAdminUI(data.role);
                     loadUserAvatar();  // 加载该用户的头像
                     hideLoginPage();
@@ -3810,6 +3884,7 @@
             localStorage.removeItem('token');
             localStorage.removeItem('username');
             localStorage.removeItem('userRole');
+            localStorage.removeItem('displayName');
             authToken = null;
 
             // 重置头像为默认图标
@@ -4528,9 +4603,12 @@
         }
 
         function loadSidebarUsername() {
-            const cached = localStorage.getItem('username');
-            if (cached) {
-                setSidebarUsername(cached);
+            const displayName = localStorage.getItem('displayName');
+            const username = localStorage.getItem('username');
+            if (displayName) {
+                setSidebarUsername(displayName);
+            } else if (username) {
+                setSidebarUsername(username);
             } else {
                 setSidebarUsername('未登录');
             }
@@ -4547,11 +4625,15 @@
                     const oldUsername = localStorage.getItem('username');
                     if (data.username) {
                         localStorage.setItem('username', data.username);
-                        setSidebarUsername(data.username);
-                        // 用户名变更时重新加载头像
                         if (oldUsername !== data.username) {
                             loadUserAvatar();
                         }
+                    }
+                    if (data.display_name) {
+                        localStorage.setItem('displayName', data.display_name);
+                        setSidebarUsername(data.display_name);
+                    } else {
+                        setSidebarUsername(data.username);
                     }
                     if (data.role) {
                         localStorage.setItem('userRole', data.role);
@@ -4586,26 +4668,161 @@
             settingsModal.show();
             loadKnowledgeSummary();
             loadCleanupInfo();
+            // 加载个人资料到表单
+            loadProfileToSettings();
+        }
+
+        // ==================== 个人资料管理 ====================
+
+        function loadProfileToSettings() {
+            const displayNameInput = document.getElementById('editDisplayName');
+            const usernameDisplay = document.getElementById('currentUsernameDisplay');
+            if (displayNameInput) {
+                displayNameInput.value = localStorage.getItem('displayName') || '';
+            }
+            if (usernameDisplay) {
+                usernameDisplay.value = localStorage.getItem('username') || '';
+            }
+        }
+
+        async function saveDisplayName() {
+            const input = document.getElementById('editDisplayName');
+            const newName = input ? input.value.trim() : '';
+            if (!newName) { alert('显示名称不能为空'); return; }
+            if (newName.length > 30) { alert('显示名称不能超过30个字符'); return; }
+
+            try {
+                const response = await authFetch('/api/auth/profile/display-name', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ display_name: newName })
+                });
+                const data = await response.json();
+                if (response.ok && data.status === 'success') {
+                    localStorage.setItem('displayName', newName);
+                    setSidebarUsername(newName);
+                    alert('显示名称修改成功');
+                } else {
+                    alert(data.detail || '修改失败');
+                }
+            } catch (error) {
+                alert('网络错误：' + error.message);
+            }
+        }
+
+        function showChangeUsernameModal() {
+            // 清空输入
+            const newInput = document.getElementById('newUsernameInput');
+            const pwdInput = document.getElementById('usernameChangePassword');
+            const errorDiv = document.getElementById('changeUsernameError');
+            if (newInput) newInput.value = '';
+            if (pwdInput) pwdInput.value = '';
+            if (errorDiv) errorDiv.classList.add('d-none');
+
+            closeSettingsAndThen(() => {
+                const modal = bootstrap.Modal.getOrCreateInstance(
+                    document.getElementById('changeUsernameModal')
+                );
+                modal.show();
+            });
+        }
+
+        function showChangePasswordFromSettings() {
+            closeSettingsAndThen(() => {
+                changePasswordModal.show();
+            });
+        }
+
+        async function confirmChangeUsername() {
+            const newUsername = document.getElementById('newUsernameInput').value.trim();
+            const password = document.getElementById('usernameChangePassword').value;
+            const errorDiv = document.getElementById('changeUsernameError');
+            errorDiv.classList.add('d-none');
+
+            if (!newUsername) {
+                errorDiv.textContent = '请输入新用户名';
+                errorDiv.classList.remove('d-none');
+                return;
+            }
+
+            if (!/^[a-zA-Z][a-zA-Z0-9_]{2,19}$/.test(newUsername)) {
+                errorDiv.textContent = '用户名必须以字母开头，只能包含字母、数字、下划线，长度3-20位';
+                errorDiv.classList.remove('d-none');
+                return;
+            }
+
+            if (!password) {
+                errorDiv.textContent = '请输入当前密码';
+                errorDiv.classList.remove('d-none');
+                return;
+            }
+
+            try {
+                const response = await authFetch('/api/auth/profile/username', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_username: newUsername, password })
+                });
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    // 迁移头像
+                    const oldUser = localStorage.getItem('username');
+                    const oldAvatar = oldUser ? localStorage.getItem('userAvatar_' + oldUser) : null;
+                    if (oldAvatar) {
+                        localStorage.setItem('userAvatar_' + data.new_username, oldAvatar);
+                        localStorage.removeItem('userAvatar_' + oldUser);
+                    }
+
+                    // 更新 Token 和用户信息
+                    authToken = data.new_token;
+                    localStorage.setItem('token', data.new_token);
+                    localStorage.setItem('username', data.new_username);
+                    localStorage.setItem('displayName', data.display_name || '');
+                    setSidebarUsername(data.display_name || data.new_username);
+                    loadUserAvatar();
+
+                    // 关闭模态框
+                    bootstrap.Modal.getInstance(document.getElementById('changeUsernameModal')).hide();
+                    // 更新设置面板中的用户名显示
+                    loadProfileToSettings();
+                    alert('用户名修改成功！');
+                } else {
+                    errorDiv.textContent = data.detail || '修改失败';
+                    errorDiv.classList.remove('d-none');
+                }
+            } catch (error) {
+                errorDiv.textContent = '网络错误：' + error.message;
+                errorDiv.classList.remove('d-none');
+            }
+        }
+
+        // 关闭设置弹窗后再执行回调（解决 Bootstrap 5 多 modal 冲突）
+        function closeSettingsAndThen(callback) {
+            closeSidebar();
+            const settingsModalEl = document.getElementById('settingsModal');
+            const settingsModal = bootstrap.Modal.getInstance(settingsModalEl);
+
+            if (settingsModal && settingsModalEl.classList.contains('show')) {
+                settingsModalEl.addEventListener('hidden.bs.modal', function handler() {
+                    settingsModalEl.removeEventListener('hidden.bs.modal', handler);
+                    callback();
+                });
+                settingsModal.hide();
+            } else {
+                callback();
+            }
         }
 
         // 打开知识库管理模态框
         function openKnowledgeManager() {
-            // 先关闭设置模态框（如果打开的话）
-            const settingsModalEl = document.getElementById('settingsModal');
-            const settingsModal = bootstrap.Modal.getInstance(settingsModalEl);
-            if (settingsModal) {
-                settingsModal.hide();
-            }
-            closeSidebar();
-
-            const knowledgeModalEl = document.getElementById('knowledgeModal');
-            if (!knowledgeModalEl) return;
-            if (knowledgeModalEl.classList.contains('show')) {
-                return;
-            }
-            const modal = bootstrap.Modal.getOrCreateInstance(knowledgeModalEl);
-            modal.show();
-            loadDomains();
+            closeSettingsAndThen(() => {
+                const knowledgeModalEl = document.getElementById('knowledgeModal');
+                if (!knowledgeModalEl || knowledgeModalEl.classList.contains('show')) return;
+                const modal = bootstrap.Modal.getOrCreateInstance(knowledgeModalEl);
+                modal.show();
+                loadDomains();
+            });
         }
 
         // ==================== 用户管理功能 ====================
@@ -4616,23 +4833,15 @@
 
         // 打开用户管理模态框
         function openUserManageModal() {
-            // 先关闭设置模态框（如果打开的话）
-            const settingsModalEl = document.getElementById('settingsModal');
-            const settingsModal = bootstrap.Modal.getInstance(settingsModalEl);
-            if (settingsModal) {
-                settingsModal.hide();
-            }
-            closeSidebar();
-
-            if (!userManageModal) {
-                userManageModal = new bootstrap.Modal(document.getElementById('userManageModal'));
-            }
-            const userManageModalEl = document.getElementById('userManageModal');
-            if (userManageModalEl && userManageModalEl.classList.contains('show')) {
-                return;
-            }
-            userManageModal.show();
-            loadUserList();
+            closeSettingsAndThen(() => {
+                if (!userManageModal) {
+                    userManageModal = new bootstrap.Modal(document.getElementById('userManageModal'));
+                }
+                const userManageModalEl = document.getElementById('userManageModal');
+                if (userManageModalEl && userManageModalEl.classList.contains('show')) return;
+                userManageModal.show();
+                loadUserList();
+            });
         }
 
         // 加载用户列表
@@ -4670,8 +4879,9 @@
                     <tr>
                         <td>
                             <i class="fas fa-user text-muted me-2"></i>
-                            <strong>${escapeHtml(user.username)}</strong>
-                            ${user.username === 'admin' ? '<span class="badge bg-warning text-dark ms-1">系统</span>' : ''}
+                            <strong>${escapeHtml(user.display_name || user.username)}</strong>
+                            <small class="text-muted ms-1">@${escapeHtml(user.username)}</small>
+                            ${user.is_initial_admin ? '<span class="badge bg-warning text-dark ms-1">系统</span>' : ''}
                         </td>
                         <td>
                             <span class="badge ${user.role === 'admin' ? 'bg-danger' : 'bg-secondary'}">
@@ -4681,10 +4891,10 @@
                         <td class="text-muted small">${formatDateTime(user.created_at)}</td>
                         <td class="small">${formatStorageSize(user.storage_used_bytes)}</td>
                         <td class="text-end">
-                            <button class="btn btn-outline-primary btn-sm me-1" onclick="showChangeRoleModal('${escapeHtml(user.username)}', '${user.role}')" ${user.username === 'admin' ? 'disabled' : ''}>
+                            <button class="btn btn-outline-primary btn-sm me-1" onclick="showChangeRoleModal('${escapeHtml(user.username)}', '${user.role}')" ${user.is_initial_admin ? 'disabled' : ''}>
                                 <i class="fas fa-user-tag"></i>
                             </button>
-                            <button class="btn btn-outline-danger btn-sm" onclick="confirmDeleteUser('${escapeHtml(user.username)}')" ${user.username === 'admin' ? 'disabled' : ''}>
+                            <button class="btn btn-outline-danger btn-sm" onclick="confirmDeleteUser('${escapeHtml(user.username)}')" ${user.is_initial_admin ? 'disabled' : ''}>
                                 <i class="fas fa-trash"></i>
                             </button>
                         </td>
@@ -4833,10 +5043,8 @@
 
         // 确认删除用户
         function confirmDeleteUser(username) {
-            if (username === 'admin') {
-                alert('系统管理员账户不可删除');
-                return;
-            }
+            // 后端已有 is_initial_admin 保护，这里做前端提示
+            // 按钮已通过 is_initial_admin 属性禁用，此处为双重保险
 
             if (!confirm(`确定要删除用户 "${username}" 吗？\n\n该操作将删除该用户的所有数据，不可恢复！`)) {
                 return;
@@ -7485,6 +7693,23 @@
             }
         }
 
+        // 将 ISO 时间戳转为本地时间显示（HH:MM:SS.mmm）
+        function formatLogTime(timeStr) {
+            try {
+                // 兼容旧格式 "HH:MM:SS.mmm"（本地时间，直接显示）
+                if (/^\d{2}:\d{2}:\d{2}\.\d{3}$/.test(timeStr)) return timeStr;
+                const date = new Date(timeStr);
+                if (isNaN(date.getTime())) return timeStr;
+                const h = String(date.getHours()).padStart(2, '0');
+                const m = String(date.getMinutes()).padStart(2, '0');
+                const s = String(date.getSeconds()).padStart(2, '0');
+                const ms = String(date.getMilliseconds()).padStart(3, '0');
+                return `${h}:${m}:${s}.${ms}`;
+            } catch (e) {
+                return timeStr;
+            }
+        }
+
         // 添加日志条目
         function addLogEntry(log) {
             const content = document.getElementById('logContent');
@@ -7513,7 +7738,7 @@
             const entry = document.createElement('div');
             entry.className = `log-entry log-${log.level || 'info'}`;
             entry.innerHTML = `
-                <span class="log-time">${log.time}</span>
+                <span class="log-time">${formatLogTime(log.time)}</span>
                 <span class="log-message">${escapeHtml(log.message)}</span>
             `;
             content.appendChild(entry);

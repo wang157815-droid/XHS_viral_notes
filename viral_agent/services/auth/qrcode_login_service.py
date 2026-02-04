@@ -15,6 +15,12 @@ from typing import Dict, Optional
 from loguru import logger
 
 from .qrcode_session import QRCodeSession, QRLoginStatus
+from .sms_verification import (
+    check_page_interaction,
+    fill_sms_input,
+    click_submit_button,
+    click_get_sms_code_button,
+)
 
 # 配置常量
 LOGIN_TIMEOUT_SECONDS = 180  # 3分钟超时（用户需要时间完成验证）
@@ -687,7 +693,7 @@ class QRCodeLoginService:
             try:
                 if not page.is_closed():
                     # 检测页面状态
-                    interaction_type = await self._check_page_interaction(page)
+                    interaction_type = await check_page_interaction(page)
 
                     if interaction_type == 'sms_code':
                         # 检测到短信验证码输入框
@@ -695,7 +701,7 @@ class QRCodeLoginService:
                             session.status = QRLoginStatus.NEED_SMS_CODE
                             logger.info(f"会话 {session.session_id}: 需要输入短信验证码")
                             # 自动点击"获取验证码"按钮发送短信
-                            await self._click_get_sms_code_button(page, session.session_id)
+                            await click_get_sms_code_button(page, session.session_id)
                     elif interaction_type == 'slider':
                         session.error_message = '需要滑块验证，请使用手动复制 Cookie 方式'
                         logger.warning(f"会话 {session.session_id}: 需要滑块验证")
@@ -708,73 +714,6 @@ class QRCodeLoginService:
                 break
 
             await asyncio.sleep(3)  # 每3秒更新一次截图
-
-    async def _check_page_interaction(self, page) -> Optional[str]:
-        """检测页面需要什么类型的交互"""
-        # 检测短信验证码输入框
-        sms_selectors = [
-            'input[placeholder*="验证码"]',
-            'input[placeholder*="短信"]',
-            'input[class*="code-input"]',
-            'input[class*="sms"]',
-        ]
-        for selector in sms_selectors:
-            try:
-                element = await page.query_selector(selector)
-                if element and await element.is_visible():
-                    return 'sms_code'
-            except Exception:
-                continue
-
-        # 检测滑块验证
-        slider_selectors = [
-            '[class*="slider"]',
-            '[class*="slide-verify"]',
-            '[class*="captcha"]',
-        ]
-        for selector in slider_selectors:
-            try:
-                element = await page.query_selector(selector)
-                if element and await element.is_visible():
-                    return 'slider'
-            except Exception:
-                continue
-
-        return None
-
-    async def _click_get_sms_code_button(self, page, session_id: str):
-        """
-        自动点击"获取验证码"按钮发送短信
-        """
-        get_code_selectors = [
-            ':text-is("获取验证码")',
-            ':text-is("发送验证码")',
-            ':text-is("获取短信验证码")',
-            ':has-text("获取验证码")',
-            ':has-text("发送验证码")',
-            'button:has-text("获取")',
-            'div:has-text("获取验证码")',
-            'span:has-text("获取验证码")',
-            '[class*="get-code"]',
-            '[class*="send-code"]',
-        ]
-
-        for selector in get_code_selectors:
-            try:
-                btn = await page.query_selector(selector)
-                if btn and await btn.is_visible():
-                    btn_text = await btn.inner_text()
-                    # 确认是获取验证码按钮，不是其他按钮
-                    if '获取' in btn_text or '发送' in btn_text:
-                        await btn.click(force=True)
-                        logger.info(f"会话 {session_id}: 已点击'{btn_text}'按钮，等待短信")
-                        return True
-            except Exception as e:
-                logger.debug(f"会话 {session_id}: 获取验证码按钮选择器 {selector} 失败: {e}")
-                continue
-
-        logger.debug(f"会话 {session_id}: 未找到获取验证码按钮（可能已发送或不需要）")
-        return False
 
     async def submit_sms_code(self, session_id: str, sms_code: str) -> bool:
         """提交短信验证码（模拟真人键盘输入，兼容 Vue v-model）"""
@@ -790,7 +729,7 @@ class QRCodeLoginService:
             return False
 
         try:
-            input_filled = await self._fill_sms_input(page, session_id, sms_code)
+            input_filled = await fill_sms_input(page, session_id, sms_code)
 
             if not input_filled:
                 logger.error(f"会话 {session_id}: 所有输入方式均失败")
@@ -804,7 +743,7 @@ class QRCodeLoginService:
                 return True
 
             # 点击确认/提交按钮
-            await self._click_submit_button(page, session_id)
+            await click_submit_button(page, session_id)
 
             # 等待页面响应
             if not page.is_closed():
@@ -822,197 +761,6 @@ class QRCodeLoginService:
                 return True
             logger.error(f"会话 {session_id}: 提交验证码失败 - {e}")
             return False
-
-    async def _fill_sms_input(self, page, session_id: str, sms_code: str) -> bool:
-        """
-        填入短信验证码（三重策略，兼容 Vue v-model）。
-
-        策略 1：增强 JavaScript — 使用 nativeInputValueSetter 绕过 Vue setter，
-                触发 InputEvent + change + compositionend，实测小红书最可靠。
-        策略 2：模拟真人键盘 — click → 全选 → keyboard.type(delay=80)
-                触发完整键盘事件链，部分框架场景下作为备选。
-        策略 3：盲打兜底 — 点击任意可见输入框后直接键盘输入。
-        """
-        sms_selectors = [
-            'input[placeholder*="验证码"]',
-            'input[placeholder*="短信"]',
-            'input[placeholder*="输入"]',
-            'input[class*="code"]',
-            'input[class*="sms"]',
-            'input[class*="verify"]',
-            'input[type="tel"]',
-            'input[type="number"]',
-            'input[maxlength="4"]',
-            'input[maxlength="6"]',
-            '[class*="code"] input',
-            '[class*="sms"] input',
-        ]
-
-        # 策略 1：增强版 JavaScript（实测小红书最可靠，绕过 Vue setter）
-        try:
-            js_result = await page.evaluate('''(code) => {
-                const selectors = [
-                    'input[placeholder*="验证码"]', 'input[placeholder*="短信"]',
-                    'input[placeholder*="输入"]',
-                    'input[class*="code"]', 'input[class*="sms"]',
-                    'input[type="tel"]', 'input[type="number"]',
-                    'input[maxlength="4"]', 'input[maxlength="6"]',
-                ];
-                for (const sel of selectors) {
-                    const input = document.querySelector(sel);
-                    if (!input || input.offsetParent === null) continue;
-
-                    input.focus();
-
-                    // 使用原生 setter 绕过 Vue 的 property 劫持
-                    const nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value'
-                    ).set;
-                    nativeSetter.call(input, code);
-
-                    // 触发 InputEvent（Vue 3 监听的事件类型）
-                    input.dispatchEvent(new InputEvent('input', {
-                        bubbles: true, inputType: 'insertText', data: code
-                    }));
-                    // 触发 change（Vue 2 的 lazy 模式和部分组件库需要）
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    // 触发 compositionend（中文输入法兼容）
-                    input.dispatchEvent(new Event('compositionend', { bubbles: true }));
-
-                    return input.value === code;
-                }
-                return false;
-            }''', sms_code)
-            if js_result:
-                logger.info(f"会话 {session_id}: ✅ JavaScript 填入验证码成功")
-                return True
-        except Exception as e:
-            logger.debug(f"会话 {session_id}: JavaScript 输入失败: {e}")
-
-        # 策略 2：模拟真人键盘输入（备选）
-        logger.warning(f"会话 {session_id}: JavaScript 输入失败，尝试键盘输入")
-        for selector in sms_selectors:
-            try:
-                input_el = await page.query_selector(selector)
-                if not input_el or not await input_el.is_visible():
-                    continue
-
-                # 步骤 1：点击聚焦（模拟真人点击输入框）
-                await input_el.click(force=True, timeout=3000)
-                await page.wait_for_timeout(200)
-
-                # 步骤 2：全选并清空已有内容
-                await page.keyboard.press('Control+a')
-                await page.keyboard.press('Backspace')
-                await page.wait_for_timeout(100)
-
-                # 步骤 3：逐字符键盘输入（触发 keydown/keypress/input/keyup 完整事件链）
-                await page.keyboard.type(sms_code, delay=80)
-                await page.wait_for_timeout(200)
-
-                # 步骤 4：触发 blur/change 事件（确保 Vue 更新绑定值）
-                await page.keyboard.press('Tab')
-                await page.wait_for_timeout(100)
-                # 重新聚焦回输入框（Tab 可能跳到下一个元素）
-                await input_el.click(force=True, timeout=1000)
-
-                # 步骤 5：验证输入值
-                actual_value = await input_el.input_value()
-                if actual_value == sms_code:
-                    logger.info(f"会话 {session_id}: ✅ 键盘输入验证码成功 (选择器: {selector})")
-                    return True
-                else:
-                    logger.warning(f"会话 {session_id}: 键盘输入后值不匹配，期望 '{sms_code}'，实际 '{actual_value}'")
-            except Exception as e:
-                logger.debug(f"会话 {session_id}: 键盘输入选择器 {selector} 失败: {e}")
-                continue
-
-        # 策略 3：盲打兜底（聚焦任意可见输入框后直接键盘输入）
-        logger.warning(f"会话 {session_id}: 所有定位失败，尝试盲打兜底")
-        try:
-            any_input = await page.query_selector('input:visible, [contenteditable="true"]')
-            if any_input:
-                await any_input.click(force=True)
-                await page.wait_for_timeout(200)
-            await page.keyboard.press('Control+a')
-            await page.keyboard.press('Backspace')
-            await page.keyboard.type(sms_code, delay=80)
-            logger.info(f"会话 {session_id}: 已通过盲打输入验证码")
-            return True
-        except Exception as e:
-            logger.debug(f"会话 {session_id}: 盲打输入失败: {e}")
-
-        return False
-
-    async def _click_submit_button(self, page, session_id: str):
-        """
-        在验证码弹窗容器内查找并点击确认按钮。
-
-        先定位弹窗容器，在容器范围内搜索按钮，避免误点页面上其他"登录"按钮。
-        """
-        # 先尝试定位验证码所在的弹窗/对话框容器
-        container_selectors = [
-            '[class*="login-container"]', '[class*="login-modal"]',
-            '[class*="verify-modal"]', '[class*="sms-modal"]',
-            '[class*="dialog"]', '[class*="modal"]',
-            '[role="dialog"]',
-        ]
-        container = None
-        for sel in container_selectors:
-            try:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    container = el
-                    break
-            except Exception:
-                continue
-
-        # 在容器内（或全局回退）搜索提交按钮
-        submit_texts = ['验证', '确定', '确认', '登录', '提交']
-        exclude_texts = ['获取', '发送', '重新', '扫码']
-
-        search_scope = container if container else page
-        scope_label = "弹窗容器内" if container else "全局"
-
-        # 方法 1：在容器内按文本查找
-        for text in submit_texts:
-            try:
-                buttons = await search_scope.query_selector_all(
-                    f'button, [role="button"], div[class*="btn"], span[class*="btn"]'
-                )
-                for btn in buttons:
-                    if not await btn.is_visible():
-                        continue
-                    btn_text = (await btn.inner_text()).strip()
-                    if btn_text == text or (text in btn_text and len(btn_text) <= 6):
-                        if any(ex in btn_text for ex in exclude_texts):
-                            continue
-                        await btn.click(force=True)
-                        logger.info(f"会话 {session_id}: 已点击{scope_label}确认按钮 '{btn_text}'")
-                        return
-            except Exception:
-                continue
-
-        # 方法 2：class 选择器查找
-        class_selectors = [
-            '[class*="submit"]:not([class*="code"])',
-            '[class*="confirm"]', '[class*="verify-btn"]',
-        ]
-        for sel in class_selectors:
-            try:
-                btn = await search_scope.query_selector(sel)
-                if btn and await btn.is_visible():
-                    btn_text = (await btn.inner_text()).strip()
-                    if any(ex in btn_text for ex in exclude_texts):
-                        continue
-                    await btn.click(force=True)
-                    logger.info(f"会话 {session_id}: 已点击{scope_label}确认按钮 '{btn_text}'")
-                    return
-            except Exception:
-                continue
-
-        logger.warning(f"会话 {session_id}: 未找到确认按钮，按回车键提交")
-        await page.keyboard.press('Enter')
 
     async def _monitor_login_status(self, session: QRCodeSession):
         """监听登录状态（验证 Cookie 真正有效）"""

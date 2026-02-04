@@ -81,9 +81,9 @@ class VideoAIAnalyzer:
         # 视频下载管理器（共享下载，避免重复）
         self.download_manager = download_manager
 
-        # 全局并发限制（P0-3）
-        max_concurrent = int(os.getenv('VIDEO_MAX_CONCURRENT', '2'))
-        self.video_semaphore = asyncio.Semaphore(max_concurrent)
+        # 全局并发限制（P0-3）— 懒初始化，避免跨事件循环绑定问题
+        self._max_concurrent = int(os.getenv('VIDEO_MAX_CONCURRENT', '2'))
+        self._video_semaphore: Optional[asyncio.Semaphore] = None
 
         # 检测配置的AI服务类型
         self.service_type = self._detect_service_type()
@@ -103,8 +103,15 @@ class VideoAIAnalyzer:
         mode_source = "运行时参数" if video_source_mode is not None else "环境变量"
         logger.info(f"视频分析模式: {self.video_analysis_mode}")
         logger.info(f"视频模型: {self.video_model}")
-        logger.info(f"视频源处理: {self.video_source_mode} ({mode_source}), 并发限制: {max_concurrent}")
+        logger.info(f"视频源处理: {self.video_source_mode} ({mode_source}), 并发限制: {self._max_concurrent}")
         logger.info(f"视频大小限制: {self.video_max_size_mb}MB (配置={self._configured_limit}MB, API限制={self._api_limit_mb}MB)")
+
+    @property
+    def video_semaphore(self) -> asyncio.Semaphore:
+        """懒初始化 Semaphore，确保绑定到当前运行的事件循环"""
+        if self._video_semaphore is None:
+            self._video_semaphore = asyncio.Semaphore(self._max_concurrent)
+        return self._video_semaphore
 
     def _init_knowledge_retriever(self):
         """初始化知识检索器"""

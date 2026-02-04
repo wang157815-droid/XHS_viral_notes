@@ -4,7 +4,7 @@
 核心组件，负责任务的生命周期管理、控制信号分发、状态查询
 """
 from typing import Dict, List, Optional, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import deque
 from loguru import logger
 
@@ -314,10 +314,10 @@ class TaskManager:
         task = self._tasks.get(task_id)
         if task:
             self._log_id_counter += 1
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             log_entry = {
                 "id": self._log_id_counter,
-                "time": now.strftime("%H:%M:%S") + f".{now.microsecond // 1000:03d}",
+                "time": now.isoformat(),
                 "message": message,
                 "level": level
             }

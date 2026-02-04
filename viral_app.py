@@ -12,7 +12,7 @@ if sys.platform == 'win32':
 
 import json
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from collections import deque
 
@@ -32,7 +32,10 @@ from viral_agent.auth import (
     init_auth, verify_token, verify_token_and_password_changed,
     verify_password, create_token, check_must_change_password, change_password,
     # 用户管理
-    is_admin, create_user, delete_user, list_users, get_user_info, update_user_role
+    is_admin, is_initial_admin, get_initial_admin_username,
+    create_user, delete_user, list_users, get_user_info, update_user_role,
+    # 个人资料
+    change_username, update_display_name
 )
 
 # 导入爆文Agent核心模块
@@ -95,6 +98,13 @@ task_status = {}
 # 日志缓冲区配置
 LOG_BUFFER_SIZE = 50  # 每个任务最多保存50条日志
 _log_id_counter = 0  # 日志ID计数器
+
+
+@app.on_event("startup")
+async def startup_register_event_loop():
+    """注册主事件循环，供线程池中的异步调度使用"""
+    from viral_agent.utils.async_utils import register_main_loop
+    register_main_loop(asyncio.get_running_loop())
 
 
 @app.on_event("startup")
@@ -165,12 +175,12 @@ def add_task_log(task_id: str, message: str, level: str = "info") -> None:
     if "logs" not in task_status[task_id]:
         task_status[task_id]["logs"] = deque(maxlen=LOG_BUFFER_SIZE)
 
-    # 生成日志条目（使用毫秒精度避免同秒显示）
+    # 生成日志条目（UTC ISO 时间戳，前端转换为本地时区显示）
     _log_id_counter += 1
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     log_entry = {
         "id": _log_id_counter,
-        "time": now.strftime("%H:%M:%S") + f".{now.microsecond // 1000:03d}",
+        "time": now.isoformat(),
         "message": message,
         "level": level
     }
@@ -316,6 +326,21 @@ class UpdateUserRoleRequest(BaseModel):
     role: str = Field(..., description="新角色：admin 或 user", pattern="^(admin|user)$")
 
 
+class ChangeUsernameRequest(BaseModel):
+    """修改用户名请求模型"""
+    new_username: str = Field(
+        ...,
+        description="新用户名（字母开头，3-20位，只能包含字母数字下划线）",
+        pattern="^[a-zA-Z][a-zA-Z0-9_]{2,19}$"
+    )
+    password: str = Field(..., description="当前密码（二次验证）")
+
+
+class UpdateDisplayNameRequest(BaseModel):
+    """修改显示名称请求模型"""
+    display_name: str = Field(..., description="显示名称", min_length=1, max_length=30)
+
+
 # ==================== 知识库管理请求模型 ====================
 
 class DomainCreateRequest(BaseModel):
@@ -399,20 +424,25 @@ async def login(request: LoginRequest):
     return {
         "status": "success",
         "username": request.username,
+        "display_name": user_info.get("display_name", request.username) if user_info else request.username,
         "token": token,
         "token_type": "bearer",
         "expires_in": 24 * 3600,
         "must_change_password": must_change,
-        "role": user_role  # 返回用户角色，前端用于显示管理员功能
+        "role": user_role
     }
 
 
 @app.get("/api/auth/me")
 async def get_current_user(username: str = Depends(verify_token)):
     """获取当前登录用户信息（需要认证）"""
+    user_info = get_user_info(username)
     return {
         "status": "success",
-        "username": username
+        "username": username,
+        "display_name": user_info.get("display_name", username) if user_info else username,
+        "role": user_info.get("role", "user") if user_info else "user",
+        "is_initial_admin": user_info.get("is_initial_admin", False) if user_info else False
     }
 
 
@@ -427,6 +457,45 @@ async def api_change_password(
 
     change_password(username, request.new_password)
     return {"status": "success", "message": "密码修改成功"}
+
+
+# ==================== 个人资料API ====================
+
+@app.put("/api/auth/profile/display-name")
+async def api_update_display_name(
+    request: UpdateDisplayNameRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """修改显示名称"""
+    try:
+        if not update_display_name(username, request.display_name):
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {
+            "status": "success",
+            "display_name": request.display_name,
+            "message": "显示名称修改成功"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/auth/profile/username")
+async def api_change_username(
+    request: ChangeUsernameRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """修改用户名（需密码二次验证）"""
+    try:
+        result = change_username(username, request.new_username, request.password)
+        return {
+            "status": "success",
+            "new_username": result["new_username"],
+            "new_token": result["new_token"],
+            "display_name": result["display_name"],
+            "message": "用户名修改成功"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ==================== 用户管理API（仅管理员） ====================
@@ -1364,14 +1433,14 @@ async def collect_viral_notes_task(
         manager.add_log(task_id, "⚙️ 正在初始化采集器...", "info")
 
         # 获取任务所属用户
-        task_username = task_status[task_id].get("username", "admin")
+        task_username = task_status[task_id].get("username") or get_initial_admin_username()
 
         # 获取用户专属 Cookie
         user_data = get_user_data_service(task_username)
         cookies_str = user_data.get_cookie()
 
         if not cookies_str and is_admin(task_username):
-            # 仅 admin 用户可回退到环境变量中的全局 Cookie
+            # 仅管理员用户可回退到环境变量中的全局 Cookie
             cookies_str = os.getenv("COOKIE") or os.getenv("COOKIES") or ""
             cookies_str = cookies_str.strip().replace('\n', '').replace('\r', '')
             if cookies_str:
@@ -1549,7 +1618,7 @@ async def collect_viral_notes_task(
         add_task_log(task_id, f"📊 采集完成，共获取 {len(notes)} 篇笔记", "success")
         add_task_log(task_id, "💾 正在保存数据...", "info")
         # 获取用户专属数据目录
-        task_username = task_status[task_id].get("username", "admin")
+        task_username = task_status[task_id].get("username") or get_initial_admin_username()
         user_data = get_user_data_service(task_username)
         user_analysis_dir = str(user_data.get_analysis_dir())
         data_file = collector.save_collected_notes(output_dir=user_analysis_dir)

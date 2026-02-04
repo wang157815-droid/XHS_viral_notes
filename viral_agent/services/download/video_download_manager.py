@@ -82,8 +82,9 @@ class VideoDownloadManager:
         self.effective_max_bytes = int(max_size_mb * 1024 * 1024)
         self.download_timeout = download_timeout
 
-        # 并发控制
-        self._download_semaphore = asyncio.Semaphore(max_concurrent)
+        # 并发控制 — 懒初始化，避免跨事件循环绑定问题
+        self._max_concurrent = max_concurrent
+        self._download_semaphore_inst: Optional[asyncio.Semaphore] = None
         self._locks: Dict[str, asyncio.Lock] = {}
         self._in_progress: Dict[str, asyncio.Future] = {}
 
@@ -100,6 +101,13 @@ class VideoDownloadManager:
             f"大小限制={max_size_mb}MB, "
             f"并发={max_concurrent}"
         )
+
+    @property
+    def _download_semaphore(self) -> asyncio.Semaphore:
+        """懒初始化下载 Semaphore，确保绑定到当前事件循环"""
+        if self._download_semaphore_inst is None:
+            self._download_semaphore_inst = asyncio.Semaphore(self._max_concurrent)
+        return self._download_semaphore_inst
 
     def _get_cache_key(self, url: str, note_id: str = None) -> str:
         """

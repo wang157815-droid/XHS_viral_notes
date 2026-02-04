@@ -112,7 +112,7 @@ class CleanupService:
             username: 用户名，用于清理用户专属数据。为空时使用默认用户
         """
         self.base_path = Path(base_path) if base_path else Path.cwd()
-        self.username = username or UserDataService.DEFAULT_USER
+        self.username = username or UserDataService.get_default_user()
         self.user_data = get_user_data_service(self.username)
         logger.info(f"清理服务初始化，根目录: {self.base_path}, 用户: {self.username}")
 
