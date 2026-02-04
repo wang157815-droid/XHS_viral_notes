@@ -221,28 +221,15 @@ class SceneAnalyzer:
         }
 
     def _analyze_video_scenes(self, notes: List[ViralNote]) -> Dict[str, Any]:
-        """使用视频AI分析视频场景"""
+        """使用视频AI分析视频场景（并行 + 单视频超时保护）"""
         if not self.video_ai_analyzer:
             return {'status': 'disabled', 'message': '视频AI分析未配置'}
 
         logger.info("开始视频场景AI分析...")
 
-        # 这里需要异步处理，但为了简化，使用同步包装
         import asyncio
 
-        async def analyze_video_batch():
-            results = []
-            sample_notes = notes[:5]  # 视频分析成本高，只分析5个
-
-            for note in sample_notes:
-                # 使用 get_best_video_url() 方法获取视频URL（ViralNote模型没有video_url属性）
-                video_url = note.get_best_video_url()
-                if not video_url:
-                    continue
-
-                try:
-                    # 构建场景识别提示词
-                    prompt = """请分析这个视频的场景类型，识别：
+        scene_prompt = """请分析这个视频的场景类型，识别：
 1. 主要场景（如户外、室内、健身房、办公室、居家等）
 2. 场景特征（如环境、氛围、时间等）
 3. 内容方向（如教程、测评、分享、推荐等）
@@ -254,28 +241,46 @@ class SceneAnalyzer:
     "content_direction": "内容方向"
 }"""
 
-                    result = await self.video_ai_analyzer.analyze_video(
-                        video_url=video_url,  # 使用上面获取的视频URL
-                        prompt=prompt,
-                        title=note.title,
-                        description=note.desc
-                    )
+        async def analyze_video_batch():
+            sample_notes = notes[:5]  # 视频分析成本高，只分析5个
+            semaphore = asyncio.Semaphore(2)  # 最多2个并发，避免资源争抢
 
-                    results.append({
-                        'note_id': note.note_id,
-                        'title': note.title[:30],
-                        'ai_result': result,
-                        'detected_scenes': self._parse_video_scene_result(result)
-                    })
+            async def analyze_one(note: 'ViralNote'):
+                video_url = note.get_best_video_url()
+                if not video_url:
+                    return None
 
-                except Exception as e:
-                    logger.warning(f"视频场景分析失败 {note.note_id}: {e}")
+                async with semaphore:
+                    try:
+                        result = await asyncio.wait_for(
+                            self.video_ai_analyzer.analyze_video(
+                                video_url=video_url,
+                                prompt=scene_prompt,
+                                title=note.title,
+                                description=note.desc
+                            ),
+                            timeout=90  # 单视频90s超时保护
+                        )
+                        return {
+                            'note_id': note.note_id,
+                            'title': note.title[:30],
+                            'ai_result': result,
+                            'detected_scenes': self._parse_video_scene_result(result)
+                        }
+                    except asyncio.TimeoutError:
+                        logger.warning(f"视频场景分析超时(90s): {note.note_id}")
+                        return None
+                    except Exception as e:
+                        logger.warning(f"视频场景分析失败 {note.note_id}: {e}")
+                        return None
 
-            return results
+            tasks = [analyze_one(note) for note in sample_notes]
+            raw_results = await asyncio.gather(*tasks)
+            return [r for r in raw_results if r is not None]
 
         # 运行异步任务（使用安全包装器，兼容 uvloop）
         from viral_agent.utils.async_utils import run_async_safely
-        video_results = run_async_safely(analyze_video_batch())
+        video_results = run_async_safely(analyze_video_batch(), timeout=600)
 
         # 统计视频场景
         video_scene_counter = Counter()
