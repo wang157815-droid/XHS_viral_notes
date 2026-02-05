@@ -254,19 +254,48 @@ class APIQRCodeLoginService:
                         logger.info(f"会话 {session.session_id}: 用户已扫码，等待确认")
 
                 elif code_status == 2:
-                    # 登录成功
+                    # 登录成功，需验证 Cookie 真正有效
                     session.status = QRLoginStatus.CONFIRMED
-                    logger.info(f"会话 {session.session_id}: 登录成功，正在提取 Cookie")
+                    logger.info(f"会话 {session.session_id}: 登录成功，正在验证 Cookie")
 
                     # 合并 Cookie
                     final_cookies = self._merge_cookies(cookies_dict, new_cookies or {})
-                    session.cookies_str = '; '.join([f"{k}={v}" for k, v in final_cookies.items()])
+                    merged_cookies_str = '; '.join(
+                        [f"{k}={v}" for k, v in final_cookies.items()]
+                    )
 
-                    # 保存到用户配置
-                    await self._save_cookie_to_user(session)
+                    # 带重试的 Cookie 验证（容忍网络抖动，to_thread 避免阻塞事件循环）
+                    from .cookie_validator import verify_cookie_with_api
 
-                    session.status = QRLoginStatus.SUCCESS
-                    logger.success(f"会话 {session.session_id}: Cookie 已保存")
+                    retry_delays = [2, 4, 6]  # 递增重试间隔（秒）
+                    validation = None
+                    for attempt, delay in enumerate(retry_delays, 1):
+                        validation = await asyncio.to_thread(
+                            verify_cookie_with_api, merged_cookies_str
+                        )
+                        if validation.is_valid:
+                            break
+                        logger.info(
+                            f"会话 {session.session_id}: "
+                            f"Cookie 验证第 {attempt} 次未通过"
+                            f"（{validation.reason}），{delay}秒后重试"
+                        )
+                        await asyncio.sleep(delay)
+
+                    if validation and validation.is_valid:
+                        session.cookies_str = merged_cookies_str
+                        await self._save_cookie_to_user(session)
+                        session.status = QRLoginStatus.SUCCESS
+                        logger.success(
+                            f"会话 {session.session_id}: Cookie 已验证有效并保存"
+                        )
+                    else:
+                        reason = validation.reason if validation else "验证异常"
+                        logger.warning(
+                            f"会话 {session.session_id}: Cookie 验证失败 - {reason}"
+                        )
+                        session.status = QRLoginStatus.ERROR
+                        session.error_message = f"登录未完成: {reason}"
                     break
 
                 elif code_status == 3:

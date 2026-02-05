@@ -28,6 +28,10 @@ class SortType(IntEnum):
     COLLECTS = 4     # 最多收藏
 
 
+# 维度间冷却秒数（可通过环境变量 DIMENSION_COOLDOWN 覆盖）
+DIMENSION_COOLDOWN = int(os.environ.get("DIMENSION_COOLDOWN", "10"))
+
+
 @dataclass
 class DimensionResult:
     """单维度爬取结果"""
@@ -460,10 +464,11 @@ class ViralNoteCollector:
                     if note_id and note_id not in all_notes:
                         all_notes[note_id] = note
 
-            # 维度间等待
+            # 维度间等待（防止累积请求触发限流）
             if not await self._check_pause_point():
                 break
-            await asyncio.sleep(2)
+            logger.info(f"等待 {DIMENSION_COOLDOWN} 秒后爬取下一个维度...")
+            await asyncio.sleep(DIMENSION_COOLDOWN)
 
         # 完成当前关键词后重置维度索引
         self._current_dimension_index = 0
@@ -565,8 +570,8 @@ class ViralNoteCollector:
             if i < len(dimensions) - 1:
                 if not await self._check_pause_point():
                     break
-                logger.info(f"等待 3 秒后爬取下一个维度...")
-                await asyncio.sleep(3)
+                logger.info(f"等待 {DIMENSION_COOLDOWN} 秒后爬取下一个维度...")
+                await asyncio.sleep(DIMENSION_COOLDOWN)
 
         # 合并结果并去重（使用 note_id 作为键）
         all_notes: Dict[str, Dict[str, Any]] = {}
@@ -670,38 +675,48 @@ class ViralNoteCollector:
             return []
 
     async def _get_note_detail_async(self, note_url: str) -> Optional[Dict]:
-        """异步获取笔记详情（封装同步方法）"""
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self.client.get_note_info(note_url, self.cookies_str)
-        )
+        """异步获取笔记详情（带限流重试）"""
+        retry_delays = [3, 6]  # 限流场景的重试间隔（秒）
 
-        # 解析返回值（返回的是元组：success, msg, res_json）
-        if isinstance(result, tuple) and len(result) == 3:
+        for attempt in range(1 + len(retry_delays)):  # 首次 + 最多 2 次重试
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.client.get_note_info(note_url, self.cookies_str)
+            )
+
+            if not (isinstance(result, tuple) and len(result) == 3):
+                logger.error(f"意外的返回格式: {type(result)}")
+                break
+
             success, msg, res_json = result
-            if success and res_json and 'data' in res_json:
-                # 获取笔记详情
-                items = res_json.get('data', {}).get('items', [])
-                if items and len(items) > 0:
-                    # 使用handle_note_info处理原始数据，正确提取视频URL等字段
-                    try:
-                        item = items[0]
-                        # handle_note_info函数期望数据中有url字段，需要先添加
-                        item['url'] = note_url
-                        processed_data = handle_note_info(item)
-                        return processed_data
-                    except Exception as e:
-                        logger.warning(f"处理笔记数据失败 {note_url}: {e}，返回原始note_card")
-                        # 如果处理失败，返回原始note_card
-                        return items[0].get('note_card', {})
-                else:
-                    # items为空，可能是笔记被删除或不存在
-                    logger.debug(f"笔记详情items为空: {note_url}")
-            else:
+
+            if not (success and res_json and 'data' in res_json):
+                # 硬失败（网络错误、签名错误等），不重试
                 logger.debug(f"获取笔记详情失败: {msg}")
-        else:
-            logger.error(f"意外的返回格式: {type(result)}")
+                break
+
+            items = res_json.get('data', {}).get('items', [])
+            if items and len(items) > 0:
+                # 成功拿到数据，处理并返回
+                try:
+                    item = items[0]
+                    item['url'] = note_url
+                    return handle_note_info(item)
+                except Exception as e:
+                    logger.warning(f"处理笔记数据失败 {note_url}: {e}，返回原始note_card")
+                    return items[0].get('note_card', {})
+
+            # items 为空：可能是限流，也可能是笔记被删除/私密
+            if attempt < len(retry_delays):
+                delay = retry_delays[attempt]
+                logger.info(
+                    f"笔记详情为空（可能限流或已删除），"
+                    f"{delay}秒后重试 ({attempt + 1}/{len(retry_delays)})"
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.debug(f"笔记详情items为空（重试已耗尽）: {note_url}")
 
         return None
 
@@ -765,7 +780,8 @@ class ViralNoteCollector:
                     logger.debug(f"[{dimension_name}] 第 {page} 页无结果，停止")
                     break
 
-                # 获取笔记详情
+                # 获取笔记详情（带自适应降速）
+                consecutive_empty = 0
                 for note_brief in search_results:
                     note_url = note_brief.get('note_url', '')
                     if not note_url:
@@ -775,8 +791,21 @@ class ViralNoteCollector:
                         note_detail = await self._get_note_detail_async(note_url)
                         if note_detail:
                             notes.append(note_detail)
+                            consecutive_empty = 0  # 成功，重置计数
                             if len(notes) >= target_per_dimension:
                                 break
+                        else:
+                            consecutive_empty += 1
+                            if consecutive_empty >= 3:
+                                # 连续空结果，大概率被限流，额外冷却
+                                if not await self._check_pause_point():
+                                    break
+                                logger.warning(
+                                    f"[{dimension_name}] 连续 {consecutive_empty} 次详情为空"
+                                    f"（可能限流），冷却 8 秒..."
+                                )
+                                await asyncio.sleep(8)
+                                consecutive_empty = 0
                     except Exception as e:
                         logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
                         continue

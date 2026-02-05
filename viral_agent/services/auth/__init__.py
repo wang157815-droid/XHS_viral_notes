@@ -10,10 +10,13 @@
 """
 from .qrcode_session import QRCodeSession, QRLoginStatus
 from .qrcode_login_service import QRCodeLoginService, get_qrcode_login_service
+from .cookie_validator import verify_cookie_with_api, check_cookie_fields
 
 __all__ = [
     "QRCodeSession",
     "QRLoginStatus",
     "QRCodeLoginService",
     "get_qrcode_login_service",
+    "verify_cookie_with_api",
+    "check_cookie_fields",
 ]

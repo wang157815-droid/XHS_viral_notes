@@ -69,10 +69,13 @@ def check_cookie():
     else:
         print(f"  ❌ 获取频道列表: {msg}")
     
-    # 测试2: 搜索功能
+    # 测试2: 搜索功能（增强检查：同时验证数据内容）
     success, msg, data = xhs.search_some_note("测试", 1, cookie)
-    if success:
-        print(f"  ✅ 搜索功能: 成功")
+    if success and data and len(data) > 0:
+        print(f"  ✅ 搜索功能: 成功 ({len(data)} 条结果)")
+    elif success and (not data or len(data) == 0):
+        print(f"  ⚠️  搜索功能: 请求成功但无数据返回（Cookie 可能未完成登录）")
+        success = False  # 标记为无效，影响最终结论
     else:
         print(f"  ❌ 搜索功能: {msg}")
     

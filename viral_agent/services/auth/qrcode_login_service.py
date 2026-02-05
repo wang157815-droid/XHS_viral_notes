@@ -848,16 +848,14 @@ class QRCodeLoginService:
             del self._sessions[session.session_id]
 
     async def _verify_cookie_valid(self, cookies_str: str) -> bool:
-        """验证 Cookie 是否真正有效（通过 API 调用测试）"""
-        try:
-            from apis.xhs_pc_apis import XHS_Apis
-            xhs = XHS_Apis()
-            # 尝试搜索一个简单关键词
-            success, msg, data = xhs.search_some_note("测试", 1, cookies_str)
-            return success
-        except Exception as e:
-            logger.warning(f"验证 Cookie 时出错: {e}")
-            return False
+        """验证 Cookie 是否真正有效（字段检查 + 多关键词 API 验证 + 数据内容检查）"""
+        import asyncio
+        from .cookie_validator import verify_cookie_with_api
+
+        result = await asyncio.to_thread(verify_cookie_with_api, cookies_str)
+        if not result.is_valid:
+            logger.warning(f"Cookie 验证未通过: {result.reason}")
+        return result.is_valid
 
     async def get_session(self, session_id: str) -> Optional[QRCodeSession]:
         """获取会话状态"""
