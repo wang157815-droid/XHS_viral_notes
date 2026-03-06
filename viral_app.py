@@ -2872,5 +2872,6 @@ if __name__ == "__main__":
     else:
         # Linux/Mac: 可以使用 reload
         uvicorn_config["reload"] = not is_production
+        uvicorn_config["loop"] = "asyncio"  # 禁用 uvloop，避免与 nest_asyncio 冲突
 
     uvicorn.run("viral_app:app", **uvicorn_config)
