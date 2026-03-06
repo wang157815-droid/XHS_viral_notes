@@ -1723,6 +1723,10 @@ export TEST_PASSWORD="your-password"
 python tests/test_viral_app.py
 ```
 
+> 多用户使用指南请查看独立文档：[多用户使用指南.md](多用户使用指南.md)
+
+---
+
 ## 🏗️ 系统架构优化（2025年12月）
 
 ### 优化概览
@@ -2323,6 +2327,21 @@ python3 tests/test_knowledge_base.py
 - **多关键词匹配**：`_FIND_DIALOG_JS` 和 `_FILL_INPUT_JS` 的弹窗检测从仅匹配 `'短信验证码验证'` 扩展为 7 个关键词（`安全验证`、`身份验证`、`验证身份`、`短信验证`、`验证手机`、`手机验证`），覆盖异地登录等多种验证场景
 - **特征检测兜底**：`check_page_interaction` 新增 DOM 特征检测策略——即使弹窗标题未命中任何关键词，只要页面同时存在「验证码输入框 + 获取/发送按钮」即判定为 SMS 验证
 - **防误判机制**：QR 码可见时自动跳过特征检测，避免将扫码页的手机登录区误判为 SMS 弹窗
+
+---
+
+### 2026-03-06 知识库管理 UI 修复（RAG + JSON配置）
+
+#### 🔧 API 响应结构修复
+- **知识库摘要接口**：`viral_app.py` 中 `/api/knowledge/summary` 返回数据使用 `**summary` 展开到顶层，但前端期望嵌套在 `result.summary` 下，导致设置面板和RAG统计区显示"加载失败"。修复为 `"summary": summary` 包装返回
+- **影响范围**：设置面板知识库摘要 + RAG文档库统计区域
+
+#### 🔧 文档列表渲染修复
+- **字段路径不匹配**：`index.html` 中 `loadDocuments()` 使用 `doc.metadata.format` 和 `doc.metadata.word_count` 读取文档属性，但 `/api/documents` 返回扁平结构 `doc.format`（无 `metadata` 嵌套），导致 JS 报错进入 catch 分支显示"加载失败"。修复为兼容两种结构 `doc.format || (doc.metadata && doc.metadata.format)`
+- **影响范围**：RAG文档库的文档列表
+
+#### 🔍 根因分析
+两个 bug 属于同一类问题：**前后端 API 契约不一致**。后端在不同接口中对同类数据采用了不同的包装方式（嵌套 vs 扁平），而前端按单一格式编写，未做防御性处理。建议后续使用 Pydantic `response_model` 统一约束响应结构。
 
 ---
 
