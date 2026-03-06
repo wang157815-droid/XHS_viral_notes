@@ -11,11 +11,21 @@ from loguru import logger
 # ─── 二次弹窗检测 JS ───────────────────────────────────────
 # XHS 二次弹窗使用 CSS Modules hash 类名（每次构建变化），
 # 故通过标题文本「短信验证码验证」定位，再向上查找包含 input+button 的容器。
+_SMS_DIALOG_KEYWORDS = [
+    '短信验证码验证', '安全验证', '身份验证', '验证身份',
+    '短信验证', '验证手机', '手机验证',
+]
+
 _FIND_DIALOG_JS = '''() => {
+    const keywords = ['短信验证码验证', '安全验证', '身份验证', '验证身份',
+                      '短信验证', '验证手机', '手机验证'];
     const walker = document.createTreeWalker(
         document.body, NodeFilter.SHOW_TEXT,
-        { acceptNode: n => n.textContent.trim().includes('短信验证码验证')
-            ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT }
+        { acceptNode: n => {
+            const t = n.textContent.trim();
+            return keywords.some(k => t.includes(k))
+                ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }}
     );
     const tn = walker.nextNode();
     if (!tn) return null;
@@ -30,10 +40,15 @@ _FIND_DIALOG_JS = '''() => {
 # 策略 1 的完整 JS：内嵌弹窗检测 + nativeInputValueSetter 绕过 Vue
 _FILL_INPUT_JS = '''(code) => {
     function findDialog() {
+        const keywords = ['短信验证码验证', '安全验证', '身份验证', '验证身份',
+                          '短信验证', '验证手机', '手机验证'];
         const walker = document.createTreeWalker(
             document.body, NodeFilter.SHOW_TEXT,
-            { acceptNode: n => n.textContent.trim().includes('短信验证码验证')
-                ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT }
+            { acceptNode: n => {
+                const t = n.textContent.trim();
+                return keywords.some(k => t.includes(k))
+                    ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+            }}
         );
         const tn = walker.nextNode();
         if (!tn) return null;
@@ -104,27 +119,68 @@ async def find_secondary_sms_dialog(page) -> Optional:
 
 
 async def check_page_interaction(page) -> Optional[str]:
-    """检测页面需要什么类型的交互（优先检测二次弹窗）"""
-    # 轻量检测：evaluate 返回 bool，不创建 ElementHandle，避免轮询积累句柄
+    """
+    检测页面需要什么类型的交互。
+
+    检测策略（按优先级）：
+    1. 文本匹配：通过弹窗标题关键词定位（多关键词，覆盖异地登录等场景）
+    2. 特征检测兜底：即使 XHS 换了全新的弹窗标题，只要有
+       「验证码输入框 + 获取/发送按钮」的组合就判定为 SMS 验证
+       排除条件：QR 码可见时不触发（避免误判扫码页的手机登录区）
+    3. 滑块验证检测
+    """
+    # ── 策略 1：标题文本匹配 ──
     try:
         has_dialog = await page.evaluate('(' + _FIND_DIALOG_JS + ')() !== null')
     except Exception:
         has_dialog = False
     if has_dialog:
-        logger.debug("检测到二次短信验证弹窗")
+        logger.debug("检测到二次短信验证弹窗（文本匹配）")
         return 'sms_code'
 
-    for selector in [
-        'input[placeholder*="验证码"]', 'input[placeholder*="短信"]',
-        'input[class*="code-input"]', 'input[class*="sms"]',
-    ]:
-        try:
-            el = await page.query_selector(selector)
-            if el and await el.is_visible():
-                return 'sms_code'
-        except Exception:
-            continue
+    # ── 策略 2：DOM 特征检测兜底 ──
+    try:
+        has_sms_feature = await page.evaluate('''() => {
+            // 排除：如果 QR 码图片可见，说明还在扫码阶段，不应误判手机登录区
+            const qrImgs = document.querySelectorAll(
+                'img[src*="qrcode"], img[class*="qr"], canvas[class*="qr"], [class*="qrcode"]'
+            );
+            for (const qr of qrImgs) {
+                if (qr.offsetParent !== null && qr.offsetWidth > 50) return false;
+            }
 
+            // 特征 A：找到可见的验证码输入框
+            const inputSels = [
+                'input[placeholder*="验证码"]', 'input[placeholder*="短信"]',
+                'input[maxlength="4"]', 'input[maxlength="6"]',
+            ];
+            let hasCodeInput = false;
+            for (const sel of inputSels) {
+                const inp = document.querySelector(sel);
+                if (inp && inp.offsetParent !== null) { hasCodeInput = true; break; }
+            }
+            if (!hasCodeInput) return false;
+
+            // 特征 B：找到含「获取/发送」文字的按钮
+            const btns = document.querySelectorAll(
+                'button, [role="button"], span, div, a'
+            );
+            for (const btn of btns) {
+                if (btn.offsetParent === null) continue;
+                const t = (btn.innerText || '').trim();
+                if ((t.includes('获取') || t.includes('发送')) && t.length < 15) {
+                    return true;  // 输入框 + 发送按钮 = SMS 验证
+                }
+            }
+            return false;
+        }''')
+    except Exception:
+        has_sms_feature = False
+    if has_sms_feature:
+        logger.debug("检测到二次短信验证弹窗（特征检测：验证码输入框 + 发送按钮）")
+        return 'sms_code'
+
+    # ── 策略 3：滑块验证 ──
     for selector in ['[class*="slider"]', '[class*="slide-verify"]', '[class*="captcha"]']:
         try:
             el = await page.query_selector(selector)

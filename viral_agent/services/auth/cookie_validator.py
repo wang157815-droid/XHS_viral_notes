@@ -20,6 +20,8 @@ REQUIRED_COOKIE_FIELDS = ["a1", "web_session"]
 
 # 验证用的关键词列表（热门词，减少因单一关键词限流导致的假阴性）
 _VERIFY_KEYWORDS = ["美妆", "穿搭", "美食"]
+# 验证用的最少结果数（热门词正常应返回约20条，3条为极保守下限）
+MIN_VERIFY_RESULTS = 3
 
 
 @dataclass
@@ -96,15 +98,30 @@ def verify_cookie_with_api(cookies_str: str) -> CookieValidationResult:
         xhs = XHS_Apis()
         all_success_but_empty = True  # 跟踪是否全部 success=True 但数据为空
         has_api_failure = False  # 跟踪是否有 API 调用失败
+        has_weak_positive = False  # 跟踪是否出现弱阳性（少量数据）
 
         for keyword in _VERIFY_KEYWORDS:
             try:
-                success, msg, data = xhs.search_some_note(keyword, 1, cookies_str)
+                success, msg, data = xhs.search_some_note(keyword, MIN_VERIFY_RESULTS, cookies_str)
+                data_count = len(data) if data else 0
+                logger.debug(
+                    f"验证关键词「{keyword}」: success={success}, msg={msg}, 数据量={data_count}"
+                )
 
-                if success and data and len(data) > 0:
-                    # 搜到了数据，Cookie 确认有效
-                    logger.info(f"Cookie 验证通过（关键词「{keyword}」返回 {len(data)} 条结果）")
+                if success and data and data_count >= MIN_VERIFY_RESULTS:
+                    # 强阳性：数据量充足，Cookie 确认有效
+                    logger.info(f"Cookie 验证通过（关键词「{keyword}」返回 {data_count} 条结果）")
                     return CookieValidationResult(status="valid", reason="验证通过")
+
+                if success and data and 0 < data_count < MIN_VERIFY_RESULTS:
+                    # 弱阳性：有数据但偏少，继续验证下一个关键词
+                    has_weak_positive = True
+                    all_success_but_empty = False
+                    logger.warning(
+                        f"验证关键词「{keyword}」仅返回 {data_count} 条"
+                        f"（低于阈值 {MIN_VERIFY_RESULTS}），Cookie 可能未完全激活"
+                    )
+                    continue
 
                 if not success:
                     # API 调用失败，可能是网络问题
@@ -119,6 +136,13 @@ def verify_cookie_with_api(cookies_str: str) -> CookieValidationResult:
                 has_api_failure = True
                 all_success_but_empty = False
                 logger.debug(f"验证关键词「{keyword}」异常: {e}")
+
+        # 弱阳性兜底：有少量数据但不达标
+        if has_weak_positive:
+            return CookieValidationResult(
+                status="uncertain",
+                reason="搜索有少量数据但数量异常偏低，Cookie 可能未完全激活",
+            )
 
         # 所有关键词都试过了，没有一个返回数据
         if all_success_but_empty:

@@ -180,8 +180,8 @@ class QRCodeLoginService:
                 if self._playwright:
                     try:
                         await self._playwright.stop()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭 Playwright 失败: {e}")
                     self._playwright = None
                 return False
 
@@ -213,8 +213,8 @@ class QRCodeLoginService:
                     logger.warning("深度预热：二维码元素未找到，降级为浅预热")
                     try:
                         await context.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭 context 失败: {e}")
                     self._warmed_browser = browser
                     self._warmed_context = None
                     self._warmed_page = None
@@ -238,8 +238,8 @@ class QRCodeLoginService:
                 if 'context' in locals() and context:
                     try:
                         await context.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭 context 失败: {e}")
                 self._warmed_browser = browser
                 self._warmed_context = None
                 self._warmed_page = None
@@ -257,8 +257,8 @@ class QRCodeLoginService:
             if 'browser' in locals() and browser:
                 try:
                     await browser.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"关闭 browser 失败: {e}")
             return False
         finally:
             self._is_warming_up = False
@@ -334,13 +334,13 @@ class QRCodeLoginService:
                 if warmed_page:
                     try:
                         await warmed_page.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭预热 page 失败: {e}")
                 if warmed_context:
                     try:
                         await warmed_context.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭预热 context 失败: {e}")
                 logger.info("♻️ 复用预热的浏览器（回退到浅预热路径）")
                 asyncio.create_task(self.warmup())
                 return browser
@@ -388,8 +388,8 @@ class QRCodeLoginService:
                 logger.warning("深度预热页面已关闭，回退到完整流程")
                 try:
                     await browser.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"关闭 browser 失败: {e}")
                 asyncio.create_task(self.warmup())
                 return False
 
@@ -416,18 +416,18 @@ class QRCodeLoginService:
                 if page:
                     try:
                         await page.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭 page 失败: {e}")
                 if context:
                     try:
                         await context.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭 context 失败: {e}")
                 if browser:
                     try:
                         await browser.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭 browser 失败: {e}")
                 asyncio.create_task(self.warmup())
                 return False
 
@@ -461,18 +461,18 @@ class QRCodeLoginService:
             if page:
                 try:
                     await page.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"关闭 page 失败: {e}")
             if context:
                 try:
                     await context.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"关闭 context 失败: {e}")
             if browser:
                 try:
                     await browser.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"关闭 browser 失败: {e}")
             asyncio.create_task(self.warmup())
             return False
 
@@ -686,9 +686,11 @@ class QRCodeLoginService:
         if not page:
             return
 
-        # 在 WAITING_SCAN 和 NEED_SMS_CODE 状态下都持续更新截图
+        # 持续截图和交互检测，直到登录完成或失败
+        # 包含 SCANNED：二次 SMS 弹窗可能在扫码后才弹出，必须持续监测
         while session.is_active and session.status in (
-            QRLoginStatus.WAITING_SCAN, QRLoginStatus.NEED_SMS_CODE
+            QRLoginStatus.WAITING_SCAN, QRLoginStatus.NEED_SMS_CODE,
+            QRLoginStatus.SCANNED,
         ):
             try:
                 if not page.is_closed():
@@ -777,6 +779,8 @@ class QRCodeLoginService:
         )
         last_verify_time = None  # 上次验证时间，用于 SCANNED 状态下定期重试
         verify_retry_interval = 5  # 验证重试间隔（秒）
+        verify_fail_count = 0  # 验证失败计数
+        max_verify_failures = 8  # 最多重试次数，超出后保存半有效 Cookie
 
         while session.is_active:
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -802,39 +806,68 @@ class QRCodeLoginService:
                     # Cookie 发生变化，立即验证
                     should_verify = True
                     initial_web_session = current_web_session
-                elif session.status == QRLoginStatus.SCANNED and last_verify_time:
-                    # 已在 SCANNED 状态，定期重试验证
+                elif session.status in (QRLoginStatus.SCANNED, QRLoginStatus.WAITING_SCAN) and last_verify_time:
+                    # 已在验证/等待状态，定期重试
                     time_since_last_verify = (datetime.now() - last_verify_time).total_seconds()
                     if time_since_last_verify >= verify_retry_interval:
                         should_verify = True
                         logger.debug(f"会话 {session.session_id}: 定期重试验证 Cookie...")
 
                 if should_verify:
-                    session.status = QRLoginStatus.SCANNED
-                    last_verify_time = datetime.now()
-                    logger.info(f"会话 {session.session_id}: 验证 Cookie 有效性...")
-
-                    cookies_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
-
-                    # 验证 Cookie 是否真正有效（调用 API 测试）
-                    if await self._verify_cookie_valid(cookies_str):
-                        session.status = QRLoginStatus.CONFIRMED
-                        session.cookies_str = cookies_str
-
-                        # 保存 Cookie
-                        try:
-                            from viral_agent.services.user_data_service import get_user_data_service
-                            user_data = get_user_data_service(session.username)
-                            user_data.save_cookie(cookies_str)
-                            logger.success(f"会话 {session.session_id}: Cookie 已验证有效并保存")
-                        except Exception as e:
-                            logger.error(f"保存 Cookie 失败: {e}")
-
-                        session.status = QRLoginStatus.SUCCESS
-                        break
+                    if session.status == QRLoginStatus.NEED_SMS_CODE:
+                        # 短信验证码尚未提交，不验证也不改状态
+                        # （避免覆写 NEED_SMS_CODE → SCANNED 导致 submit_sms_code 被锁死）
+                        logger.debug(
+                            f"会话 {session.session_id}: Cookie 变化但 SMS 未提交，跳过验证"
+                        )
+                        last_verify_time = datetime.now()
                     else:
-                        # Cookie 暂时无效，继续等待（可能用户还在验证短信）
-                        logger.info(f"会话 {session.session_id}: Cookie 暂时无效，{verify_retry_interval}秒后重试...")
+                        session.status = QRLoginStatus.SCANNED
+                        last_verify_time = datetime.now()
+                        logger.info(f"会话 {session.session_id}: 验证 Cookie 有效性...")
+
+                        cookies_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
+
+                        if await self._verify_cookie_valid(cookies_str):
+                            session.status = QRLoginStatus.CONFIRMED
+                            session.cookies_str = cookies_str
+
+                            try:
+                                from viral_agent.services.user_data_service import get_user_data_service
+                                user_data = get_user_data_service(session.username)
+                                user_data.save_cookie(cookies_str)
+                                logger.success(f"会话 {session.session_id}: Cookie 已验证有效并保存")
+                            except Exception as e:
+                                logger.error(f"保存 Cookie 失败: {e}")
+
+                            session.status = QRLoginStatus.SUCCESS
+                            break
+                        else:
+                            verify_fail_count += 1
+                            if verify_fail_count >= max_verify_failures:
+                                # 超过最大重试次数，保存半有效 Cookie 并结束
+                                logger.warning(
+                                    f"会话 {session.session_id}: 验证失败 {verify_fail_count} 次，"
+                                    f"保存当前 Cookie（可能需要手动粘贴完整 Cookie）"
+                                )
+                                session.cookies_str = cookies_str
+                                try:
+                                    from viral_agent.services.user_data_service import get_user_data_service
+                                    user_data = get_user_data_service(session.username)
+                                    user_data.save_cookie(cookies_str)
+                                except Exception as e:
+                                    logger.error(f"保存 Cookie 失败: {e}")
+                                session.error_message = (
+                                    "Cookie 已保存但可能未完全激活，"
+                                    "如采集无数据请在设置中手动粘贴 Cookie"
+                                )
+                                session.status = QRLoginStatus.SUCCESS
+                                break
+                            logger.info(
+                                f"会话 {session.session_id}: Cookie 暂时无效"
+                                f"（{verify_fail_count}/{max_verify_failures}），"
+                                f"{verify_retry_interval}秒后重试..."
+                            )
 
             except Exception as e:
                 logger.warning(f"会话 {session.session_id}: 监听出错 - {e}")
@@ -874,15 +907,15 @@ class QRCodeLoginService:
             if session_id in self._pages:
                 try:
                     await self._pages[session_id].close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"会话 {session_id}: 关闭 page 失败: {e}")
                 del self._pages[session_id]
 
             if session_id in self._contexts:
                 try:
                     await self._contexts[session_id].close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"会话 {session_id}: 关闭 context 失败: {e}")
                 del self._contexts[session_id]
 
             # 关闭独立浏览器实例
@@ -890,8 +923,8 @@ class QRCodeLoginService:
                 try:
                     await self._browsers[session_id].close()
                     logger.info(f"会话 {session_id}: 浏览器窗口已关闭")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"会话 {session_id}: 关闭 browser 失败: {e}")
                 del self._browsers[session_id]
 
             if remove_from_sessions and session_id in self._sessions:
@@ -930,24 +963,24 @@ class QRCodeLoginService:
         if warmed_page:
             try:
                 await warmed_page.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"关闭预热 page 失败: {e}")
         if warmed_context:
             try:
                 await warmed_context.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"关闭预热 context 失败: {e}")
         if warmed_browser:
             try:
                 await warmed_browser.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"关闭预热 browser 失败: {e}")
 
         if self._playwright:
             try:
                 await self._playwright.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"关闭 Playwright 失败: {e}")
             self._playwright = None
 
 
