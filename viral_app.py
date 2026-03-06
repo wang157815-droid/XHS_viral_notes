@@ -651,6 +651,12 @@ async def save_cookie(
     user_data = get_user_data_service(username)
     if user_data.save_cookie(cookie):
         logger.info(f"用户 {username} 的 Cookie 已更新，长度: {len(cookie)}")
+        # 清除 Guard 层的 auth_expired 记录，让 /health 立即恢复正常
+        try:
+            from xhs_utils.api_guard import HealthTracker
+            HealthTracker().clear_auth_errors()
+        except Exception:
+            pass
         return {
             "status": "success",
             "message": "Cookie保存成功",
@@ -658,6 +664,53 @@ async def save_cookie(
         }
     else:
         return {"status": "error", "message": "Cookie保存失败"}
+
+
+@app.post("/api/viral/cookie/backup")
+async def save_backup_cookie(
+    request: CookieRequest,
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    保存备用Cookie（需要认证，用户独立存储）
+    """
+    cookie = request.cookie.strip().replace('\n', '').replace('\r', '')
+
+    if not cookie:
+        return {"status": "error", "message": "Cookie不能为空"}
+
+    try:
+        from viral_agent.services.auth.cookie_validator import check_cookie_fields
+        check_result = check_cookie_fields(cookie)
+        if not check_result.is_valid:
+            return {"status": "error", "message": f"Cookie格式不正确：{check_result.reason}"}
+    except Exception:
+        return {"status": "error", "message": "Cookie校验失败，请稍后重试"}
+
+    user_data = get_user_data_service(username)
+    if user_data.save_backup_cookie(cookie):
+        logger.info(f"用户 {username} 的备用Cookie已更新，长度: {len(cookie)}")
+        return {
+            "status": "success",
+            "message": "备用Cookie保存成功",
+            "cookie_length": len(cookie)
+        }
+    else:
+        return {"status": "error", "message": "备用Cookie保存失败"}
+
+
+@app.delete("/api/viral/cookie/backup")
+async def delete_backup_cookie(
+    username: str = Depends(verify_token_and_password_changed)
+):
+    """
+    删除备用Cookie（需要认证，用户独立存储）
+    """
+    user_data = get_user_data_service(username)
+    if user_data.delete_backup_cookie():
+        logger.info(f"用户 {username} 的备用Cookie已删除")
+        return {"status": "success", "message": "备用Cookie已删除"}
+    return {"status": "error", "message": "备用Cookie不存在或删除失败"}
 
 
 @app.get("/api/viral/cookie/status")
@@ -1438,6 +1491,7 @@ async def collect_viral_notes_task(
         # 获取用户专属 Cookie
         user_data = get_user_data_service(task_username)
         cookies_str = user_data.get_cookie()
+        backup_cookie = user_data.get_backup_cookie()
 
         if not cookies_str and is_admin(task_username):
             # 仅管理员用户可回退到环境变量中的全局 Cookie
@@ -1451,7 +1505,10 @@ async def collect_viral_notes_task(
             raise ValueError("未配置Cookie，请在「设置」中输入您的小红书Cookie")
 
         # 创建采集器
-        collector = ViralNoteCollector(cookies_str)
+        collector = ViralNoteCollector(cookies_str, backup_cookies_str=backup_cookie)
+        if backup_cookie:
+            add_task_log(task_id, "🔄 已加载备用Cookie，将在维度间轮换", "info")
+            manager.add_log(task_id, "🔄 已加载备用Cookie，将在维度间轮换", "info")
 
         # 注入控制信号（支持暂停/恢复/取消）
         if signal:
@@ -2748,16 +2805,38 @@ async def submit_qrcode_sms_code(
         raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
 
 
-# ==================== 健康检查 ====================
+# ==================== 健康检查 + API Guard 告警 ====================
 
 @app.get("/health")
 async def health_check():
-    """健康检查接口"""
+    """健康检查接口（永不抛错，即使 Guard 内部异常也返回 degraded）"""
+    try:
+        from xhs_utils.api_guard import HealthTracker
+        guard_status = HealthTracker().get_status()
+    except Exception:
+        guard_status = {"status": "degraded", "reason": "guard_unavailable"}
+
+    active = len([t for t in task_status.values() if t.get("status") == "running"])
+
+    # 综合状态：取 Guard 层与应用层的最差值
+    overall = guard_status.get("status", "healthy")
+
     return {
-        "status": "healthy",
+        "status": overall,
         "version": "1.0.0",
-        "active_tasks": len([t for t in task_status.values() if t.get("status") == "running"])
+        "active_tasks": active,
+        "api_guard": guard_status,
     }
+
+
+@app.get("/api/guard/alerts")
+async def guard_alerts():
+    """最近 API 错误告警列表"""
+    try:
+        from xhs_utils.api_guard import HealthTracker
+        return {"alerts": HealthTracker().get_recent_alerts()}
+    except Exception:
+        return {"alerts": [], "error": "guard_unavailable"}
 
 
 # ==================== 启动应用 ====================

@@ -1958,6 +1958,41 @@
             color: #856404;
         }
 
+        .cookie-compact-status.expired {
+            background: linear-gradient(135deg, #ffcdd2 0%, #ef9a9a 100%);
+            color: #b71c1c;
+            border: 1px solid rgba(183, 28, 28, 0.3);
+            animation: gentlePulse 2s ease-in-out infinite;
+        }
+
+        /* Cookie 失效顶部横幅 */
+        .cookie-expired-banner {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 10000;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: #fff;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transform: translateY(-100%);
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+        }
+        .cookie-expired-banner.visible { transform: translateY(0); }
+        .cookie-expired-banner .banner-actions { display: flex; gap: 8px; align-items: center; }
+        .cookie-expired-banner .btn-update {
+            background: #fff; color: #ee5a24; border: none;
+            padding: 6px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;
+        }
+        .cookie-expired-banner .btn-update:hover { background: #f0f0f0; }
+        .cookie-expired-banner .btn-dismiss {
+            background: transparent; color: rgba(255,255,255,0.8); border: none;
+            font-size: 1.2rem; cursor: pointer; padding: 4px 8px;
+        }
+        .cookie-expired-banner .btn-dismiss:hover { color: #fff; }
+
         .cookie-compact-toggle {
             font-size: 0.75rem;
             color: var(--color-on-surface-variant);
@@ -2527,6 +2562,21 @@
     </style>
 </head>
 <body>
+    <!-- Cookie 失效横幅（由 JS 健康轮询控制显示隐藏） -->
+    <div id="cookieExpiredBanner" class="cookie-expired-banner">
+        <div>
+            <i class="fas fa-exclamation-triangle"></i>
+            <strong style="margin-left:8px;">小红书 Cookie 已失效</strong>
+            <span style="margin-left:8px; opacity:0.9;">采集功能受影响，请尽快更新 Cookie</span>
+        </div>
+        <div class="banner-actions">
+            <button class="btn-update" onclick="onBannerUpdateClick()">
+                <i class="fas fa-key"></i> 立即更新
+            </button>
+            <button class="btn-dismiss" onclick="dismissCookieBanner()">&times;</button>
+        </div>
+    </div>
+
     <!-- 全屏登录页面 -->
     <div id="loginPage" class="hidden">
         <!-- 主内容区（紫色背景） -->
@@ -2842,7 +2892,8 @@
                     <div id="qrcode-success" class="d-none py-4">
                         <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
                         <p class="text-success fw-bold">登录成功！</p>
-                        <p class="text-muted">Cookie 已验证有效并保存<br>2秒后关闭...</p>
+                        <p id="qrcode-success-msg" class="text-muted">Cookie 已验证有效并保存<br>2秒后关闭...</p>
+                        <p id="qrcode-success-warn" class="text-warning small d-none"></p>
                     </div>
 
                     <!-- 超时 -->
@@ -3846,6 +3897,7 @@
                     } else {
                         // 刷新页面状态
                         checkCookie();
+                        startCookieHealthPolling();
                         loadHistory();
                         loadKnowledgeSummary();
                         loadCleanupInfo();
@@ -3967,6 +4019,7 @@
                 setSidebarUsername('未登录');
                 updateAdminUI(null);
                 loadUserAvatar();  // 重置头像
+                stopCookieHealthPolling();  // JWT 过期，停止健康轮询
                 showLoginModal();
                 throw new Error('登录已过期，请重新登录');
             }
@@ -6556,6 +6609,8 @@
                 if (result.status === 'success') {
                     document.getElementById('cookieStatus').innerHTML = '<span class="text-success"><i class="fas fa-check-circle"></i> 保存成功</span>';
                     updateCookieIndicator(true);
+                    hideCookieBanner();
+                    _cookieBannerDismissed = false;
 
                     // 记录 Cookie 保存时间戳
                     localStorage.setItem('cookieSavedTime', Date.now().toString());
@@ -6614,18 +6669,79 @@
             }
         }
 
-        function updateCookieIndicator(configured) {
-            // 更新紧凑Cookie状态
-            const compactStatus = document.getElementById('cookieCompactStatus');
-            if (compactStatus) {
-                if (configured) {
-                    compactStatus.className = 'cookie-compact-status configured';
-                    compactStatus.textContent = '已配置';
-                } else {
-                    compactStatus.className = 'cookie-compact-status not-configured';
-                    compactStatus.textContent = '未配置';
-                }
+        function updateCookieIndicator(state) {
+            // 支持三态：true/'configured' | false/'not-configured' | 'expired'
+            const el = document.getElementById('cookieCompactStatus');
+            if (!el) return;
+            if (state === 'expired') {
+                el.className = 'cookie-compact-status expired';
+                el.textContent = '已失效';
+            } else if (state === true || state === 'configured') {
+                el.className = 'cookie-compact-status configured';
+                el.textContent = '已配置';
+            } else {
+                el.className = 'cookie-compact-status not-configured';
+                el.textContent = '未配置';
             }
+        }
+
+        // ── Cookie 健康轮询（每 30s 检测 /health 中的 auth_expired）──
+
+        let _cookieHealthTimer = null;
+        let _cookieBannerDismissed = false;
+
+        function startCookieHealthPolling() {
+            stopCookieHealthPolling();
+            _cookieBannerDismissed = false;
+            checkCookieHealth();
+            _cookieHealthTimer = setInterval(checkCookieHealth, 30000);
+        }
+
+        function stopCookieHealthPolling() {
+            if (_cookieHealthTimer) {
+                clearInterval(_cookieHealthTimer);
+                _cookieHealthTimer = null;
+            }
+        }
+
+        async function checkCookieHealth() {
+            try {
+                const resp = await fetch('/health');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const authExpired = data.api_guard?.auth_expired === true;
+
+                if (authExpired) {
+                    updateCookieIndicator('expired');
+                    if (!_cookieBannerDismissed) showCookieBanner();
+                } else {
+                    hideCookieBanner();
+                }
+            } catch {
+                // 网络异常静默忽略，不打扰用户
+            }
+        }
+
+        function showCookieBanner() {
+            const banner = document.getElementById('cookieExpiredBanner');
+            if (banner) banner.classList.add('visible');
+        }
+
+        function hideCookieBanner() {
+            const banner = document.getElementById('cookieExpiredBanner');
+            if (banner) banner.classList.remove('visible');
+            _cookieBannerDismissed = false;
+        }
+
+        function dismissCookieBanner() {
+            const banner = document.getElementById('cookieExpiredBanner');
+            if (banner) banner.classList.remove('visible');
+            _cookieBannerDismissed = true;
+        }
+
+        function onBannerUpdateClick() {
+            dismissCookieBanner();
+            openSidebarToCookie();
         }
 
         // ==================== 扫码登录功能 ====================
@@ -6781,6 +6897,18 @@
                     case 'success':
                         showQRCodeState('success');
                         clearQRCodeTimers();
+
+                        // 半有效 Cookie 提示
+                        const warnEl = document.getElementById('qrcode-success-warn');
+                        const msgEl = document.getElementById('qrcode-success-msg');
+                        let closeDelay = 2000;
+                        if (data.message) {
+                            warnEl.textContent = data.message;
+                            warnEl.classList.remove('d-none');
+                            msgEl.innerHTML = 'Cookie 已保存<br>5秒后关闭...';
+                            closeDelay = 5000;
+                        }
+
                         // 刷新Cookie状态
                         setTimeout(() => {
                             checkCookie();
@@ -6792,7 +6920,7 @@
                             if (cookieCompact && cookieCompact.classList.contains('expanded')) {
                                 cookieCompact.classList.remove('expanded');
                             }
-                        }, 2000);
+                        }, closeDelay);
                         break;
 
                     case 'expired':
@@ -7849,6 +7977,7 @@
             loadHistory();
             loadActiveTasks();  // 加载活跃任务列表
             checkCookie();  // 会自动处理 Cookie 配置区域的展开状态
+            startCookieHealthPolling();  // 启动 Cookie 健康轮询
             loadKnowledgeSummary();
             loadCleanupInfo();
 

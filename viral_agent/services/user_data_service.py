@@ -120,11 +120,19 @@ class UserDataService:
         from datetime import datetime
 
         cookie_file = self.get_cookies_file()
-        cookie_data = {
+        # 保留已有字段（例如 backup_cookie）
+        cookie_data = {}
+        if cookie_file.exists():
+            try:
+                cookie_data = json.loads(cookie_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                cookie_data = {}
+
+        cookie_data.update({
             "cookie": cookie,
             "updated_at": datetime.now().isoformat(),
             "cookie_length": len(cookie)
-        }
+        })
 
         try:
             cookie_file.write_text(
@@ -182,10 +190,119 @@ class UserDataService:
                 "has_cookie": bool(cookie_data.get("cookie")),
                 "cookie_length": cookie_data.get("cookie_length", 0),
                 "updated_at": cookie_data.get("updated_at"),
+                "has_backup": bool(cookie_data.get("backup_cookie")),
+                "backup_updated_at": cookie_data.get("backup_updated_at"),
                 "source": "user_config"
             }
         except (json.JSONDecodeError, OSError):
             return None
+
+    def save_backup_cookie(self, cookie: str) -> bool:
+        """
+        保存备用 Cookie（校验 a1 + web_session）
+
+        Args:
+            cookie: 备用 Cookie 字符串
+
+        Returns:
+            是否保存成功
+        """
+        import json
+        from datetime import datetime
+
+        cookie = cookie.strip().replace('\n', '').replace('\r', '')
+        if not cookie:
+            return False
+
+        try:
+            from viral_agent.services.auth.cookie_validator import check_cookie_fields
+            result = check_cookie_fields(cookie)
+            if not result.is_valid:
+                logger.warning(f"备用 Cookie 校验失败: {result.reason}")
+                return False
+        except Exception as e:
+            logger.warning(f"备用 Cookie 校验异常: {e}")
+            return False
+
+        cookie_file = self.get_cookies_file()
+        cookie_data = {}
+        if cookie_file.exists():
+            try:
+                cookie_data = json.loads(cookie_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                cookie_data = {}
+
+        cookie_data.update({
+            "backup_cookie": cookie,
+            "backup_updated_at": datetime.now().isoformat(),
+            "backup_cookie_length": len(cookie),
+        })
+
+        try:
+            cookie_file.write_text(
+                json.dumps(cookie_data, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            try:
+                cookie_file.chmod(0o600)
+            except OSError:
+                pass
+            logger.info(f"备用 Cookie 已保存到用户 {self.username} 的配置")
+            return True
+        except OSError as e:
+            logger.error(f"保存备用 Cookie 失败: {e}")
+            return False
+
+    def get_backup_cookie(self) -> Optional[str]:
+        """
+        获取备用 Cookie
+
+        Returns:
+            备用 Cookie 字符串，不存在返回 None
+        """
+        import json
+
+        cookie_file = self.get_cookies_file()
+        if not cookie_file.exists():
+            return None
+
+        try:
+            cookie_data = json.loads(cookie_file.read_text(encoding="utf-8"))
+            return cookie_data.get("backup_cookie")
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def delete_backup_cookie(self) -> bool:
+        """
+        删除备用 Cookie（保留主 Cookie）
+
+        Returns:
+            是否删除成功
+        """
+        import json
+
+        cookie_file = self.get_cookies_file()
+        if not cookie_file.exists():
+            return False
+
+        try:
+            cookie_data = json.loads(cookie_file.read_text(encoding="utf-8"))
+            cookie_data.pop("backup_cookie", None)
+            cookie_data.pop("backup_updated_at", None)
+            cookie_data.pop("backup_cookie_length", None)
+            cookie_file.write_text(
+                json.dumps(cookie_data, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            try:
+                cookie_file.chmod(0o600)
+            except OSError:
+                pass
+            logger.info(f"已删除用户 {self.username} 的备用 Cookie")
+            return True
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error(f"删除备用 Cookie 失败: {e}")
+            return False
 
     def delete_cookie(self) -> bool:
         """
