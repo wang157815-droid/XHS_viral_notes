@@ -2874,4 +2874,9 @@ if __name__ == "__main__":
         uvicorn_config["reload"] = not is_production
         uvicorn_config["loop"] = "asyncio"  # 禁用 uvloop，避免与 nest_asyncio 冲突
 
+    # uvloop 在导入时接管 event loop policy，必须在 uvicorn.run() 前重置
+    # 否则 nest_asyncio 补丁的 asyncio.run() 会触发 uvloop 的 RuntimeError
+    import asyncio
+    asyncio.set_event_loop_policy(None)
+
     uvicorn.run("viral_app:app", **uvicorn_config)
