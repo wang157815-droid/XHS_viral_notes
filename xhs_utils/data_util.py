@@ -52,8 +52,8 @@ def handle_user_info(data, user_id):
     for tag in tags_temp:
         try:
             tags.append(tag['name'])
-        except:
-            pass
+        except (KeyError, TypeError) as e:
+            logger.warning(f"用户tag提取失败: {e}, tag={tag}")
     return {
         'user_id': user_id,
         'home_url': home_url,
@@ -94,10 +94,8 @@ def handle_note_info(data):
     for image in image_list_temp:
         try:
             image_list.append(image['info_list'][1]['url'])
-            # success, msg, img_url = XHS_Apis.get_note_no_water_img(image['info_list'][1]['url'])
-            # image_list.append(img_url)
-        except:
-            pass
+        except (KeyError, TypeError, IndexError):
+            logger.debug(f"图片URL提取失败, image keys={list(image.keys()) if isinstance(image, dict) else type(image)}")
     if note_type == '视频':
         video_cover = image_list[0] if image_list else None
 
@@ -195,8 +193,8 @@ def handle_note_info(data):
     for tag in tags_temp:
         try:
             tags.append(tag['name'])
-        except:
-            pass
+        except (KeyError, TypeError):
+            logger.debug(f"笔记tag提取失败, tag={tag}")
     upload_time = timestamp_to_str(data['note_card']['time'])
     if 'ip_location' in data['note_card']:
         ip_location = data['note_card']['ip_location']
@@ -237,22 +235,15 @@ def handle_comment_info(data):
     show_tags = data['show_tags']
     like_count = data['like_count']
     upload_time = timestamp_to_str(data['create_time'])
-    try:
-        ip_location = data['ip_location']
-    except:
-        ip_location = '未知'
+    ip_location = data.get('ip_location', '未知')
     pictures = []
-    try:
-        pictures_temp = data['pictures']
+    pictures_temp = data.get('pictures', [])
+    if pictures_temp:
         for picture in pictures_temp:
             try:
                 pictures.append(picture['info_list'][1]['url'])
-                # success, msg, img_url = XHS_Apis.get_note_no_water_img(picture['info_list'][1]['url'])
-                # pictures.append(img_url)
-            except:
-                pass
-    except:
-        pass
+            except (KeyError, TypeError, IndexError):
+                logger.debug(f"评论图片URL提取失败")
     return {
         'note_id': note_id,
         'note_url': note_url,
@@ -285,20 +276,6 @@ def save_to_xlsx(datas, file_path, type='note'):
     wb.save(file_path)
     logger.info(f'数据保存至 {file_path}')
 
-def download_media(path, name, url, type):
-    # timeout=(连接超时, 读取超时)，媒体文件可能较大需要更长读取时间
-    if type == 'image':
-        content = requests.get(url, timeout=(5, 30)).content
-        with open(path + '/' + name + '.jpg', mode="wb") as f:
-            f.write(content)
-    elif type == 'video':
-        res = requests.get(url, stream=True, timeout=(5, 60))
-        size = 0
-        chunk_size = 1024 * 1024
-        with open(path + '/' + name + '.mp4', mode="wb") as f:
-            for data in res.iter_content(chunk_size=chunk_size):
-                f.write(data)
-                size += len(data)
 
 def save_user_detail(user, path):
     with open(f'{path}/detail.txt', mode="w", encoding="utf-8") as f:
@@ -341,31 +318,16 @@ def save_note_detail(note, path):
 
 
 
-@retry(tries=3, delay=1)
-def download_note(note_info, path, save_choice):
-    note_id = note_info['note_id']
-    user_id = note_info['user_id']
-    title = note_info['title']
-    title = norm_str(title)[:40]
-    nickname = note_info['nickname']
-    nickname = norm_str(nickname)[:20]
-    if title.strip() == '':
-        title = f'无标题'
-    save_path = f'{path}/{nickname}_{user_id}/{title}_{note_id}'
-    check_and_create_path(save_path)
-    with open(f'{save_path}/info.json', mode='w', encoding='utf-8') as f:
-        f.write(json.dumps(note_info) + '\n')
-    note_type = note_info['note_type']
-    save_note_detail(note_info, save_path)
-    if note_type == '图集' and save_choice in ['media', 'media-image', 'all']:
-        for img_index, img_url in enumerate(note_info['image_list']):
-            download_media(save_path, f'image_{img_index}', img_url, 'image')
-    elif note_type == '视频' and save_choice in ['media', 'media-video', 'all']:
-        download_media(save_path, 'cover', note_info['video_cover'], 'image')
-        download_media(save_path, 'video', note_info['video_addr'], 'video')
-    return save_path
-
 
 def check_and_create_path(path):
     if not os.path.exists(path):
         os.makedirs(path)
+
+
+# ── 兼容导出：download_media / download_note 已迁移至 download_util.py ──
+# 使用 __getattr__ 惰性加载，避免与 download_util 形成循环导入
+def __getattr__(name: str):
+    if name in ("download_media", "download_note", "download_notes_parallel"):
+        from xhs_utils import download_util
+        return getattr(download_util, name)
+    raise AttributeError(f"module 'xhs_utils.data_util' has no attribute {name!r}")

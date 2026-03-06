@@ -6,6 +6,7 @@
 from typing import Dict, Any, List
 import json
 import re
+from loguru import logger
 
 
 def parse_synthesis_result(result: str) -> Dict[str, Any]:
@@ -97,8 +98,8 @@ def extract_key_recommendations(synthesis_result: Dict[str, Any]) -> List[str]:
         # 提取最佳实践
         _extract_best_practices(data, recommendations)
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"提取关键建议失败: {e}")
 
     return recommendations
 
@@ -165,8 +166,8 @@ def parse_quick_synthesis(result: str) -> List[str]:
             line = re.sub(r'^[\d]+[\.\、\)]\s*', '', line.strip())
             if line:
                 recommendations.append(line)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"解析快速综合推理失败: {e}")
     return recommendations[:5]
 
 
@@ -201,8 +202,8 @@ def parse_checklist(result: str) -> Dict[str, List[str]]:
             # 检测检查项
             _parse_checklist_item(line, current_section, checklist)
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"解析检查清单失败: {e}")
 
     return checklist
 

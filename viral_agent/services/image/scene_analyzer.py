@@ -340,8 +340,8 @@ class SceneAnalyzer:
             json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
-        except:
-            pass
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"场景分析JSON解析失败: {e}")
 
         # 从文本中提取场景关键词
         detected = {'main_scene': '日常', 'scene_features': [], 'content_direction': '日常分享'}

@@ -1137,8 +1137,8 @@ def create_cover_and_images_sheet(wb, data):
                             end_color=hex_color,
                             fill_type="solid"
                         )
-                except:
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"单元格填充颜色失败: {e}")
                 row += 1
             row += 1
 

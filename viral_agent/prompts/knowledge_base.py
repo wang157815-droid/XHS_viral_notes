@@ -6,6 +6,8 @@
 硬编码的知识库常量保留用于向后兼容和降级
 """
 
+from loguru import logger
+
 # 新增：导入JSON配置加载器
 try:
     from viral_agent.config.knowledge_loader import get_knowledge_config
@@ -218,7 +220,7 @@ def detect_domain(title: str = "", description: str = "") -> list:
             config = get_knowledge_config()
             return config.detect_domain(title, description)
         except Exception as e:
-            print(f"警告: JSON配置加载失败，使用硬编码降级: {e}")
+            logger.warning(f"JSON配置加载失败，使用硬编码降级: {e}")
 
     # 降级：使用硬编码逻辑
     text = (title + " " + description).lower()
@@ -250,7 +252,7 @@ def get_domain_knowledge(domains: list) -> str:
             config = get_knowledge_config()
             return config.get_domain_knowledge_text(domains)
         except Exception as e:
-            print(f"警告: JSON配置加载失败，使用硬编码降级: {e}")
+            logger.warning(f"JSON配置加载失败，使用硬编码降级: {e}")
 
     # 降级：使用硬编码逻辑
     if not domains:
@@ -329,8 +331,8 @@ def _get_domain_names(domains: list) -> str:
                 if domain_info:
                     names.append(domain_info['name'])
                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"JSON配置获取领域名称失败: {e}")
         # 降级：从硬编码字典获取
         if d in DOMAIN_KEYWORDS:
             names.append(DOMAIN_KEYWORDS[d]['name'])
