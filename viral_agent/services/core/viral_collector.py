@@ -28,8 +28,12 @@ class SortType(IntEnum):
     COLLECTS = 4     # 最多收藏
 
 
-# 维度间冷却秒数（可通过环境变量 DIMENSION_COOLDOWN 覆盖）
-DIMENSION_COOLDOWN = int(os.environ.get("DIMENSION_COOLDOWN", "10"))
+# 维度间冷却秒数（可通过环境变量覆盖）
+DIMENSION_COOLDOWN = int(os.environ.get("DIMENSION_COOLDOWN", "30"))
+# 使用备用 Cookie 时的维度间冷却秒数
+DIMENSION_COOLDOWN_WITH_BACKUP = int(os.environ.get("DIMENSION_COOLDOWN_WITH_BACKUP", "3"))
+# 检测到限流后的长暂停秒数（让限流窗口自然过期）
+RATE_LIMIT_PAUSE = int(os.environ.get("RATE_LIMIT_PAUSE", "60"))
 
 
 @dataclass
@@ -49,19 +53,29 @@ from apis.xhs_pc_apis import XHS_Apis
 from viral_agent.models.viral_note import ViralNote
 from viral_agent.utils import parse_chinese_number
 from xhs_utils.cookie_util import trans_cookies
+from xhs_utils.api_guard import HealthTracker, ApiCallRecord, ErrorCategory
 from xhs_utils.data_util import handle_note_info
 
 
 class ViralNoteCollector:
     """爆款笔记采集器（支持暂停/恢复/取消）"""
 
-    def __init__(self, cookies_str: str):
+    def __init__(self, cookies_str: str, backup_cookies_str: Optional[str] = None):
         """
         初始化采集器
 
         Args:
             cookies_str: Cookie字符串
+            backup_cookies_str: 备用Cookie字符串（可选）
         """
+        cookies_str = self._normalize_cookie_str(cookies_str) or ""
+        backup_cookies_str = self._normalize_cookie_str(backup_cookies_str)
+        if backup_cookies_str == cookies_str:
+            backup_cookies_str = None
+
+        self._primary_cookie_str = cookies_str
+        self._backup_cookies_str = backup_cookies_str
+
         self.cookies_str = cookies_str
         self.cookies = trans_cookies(cookies_str)
         self.client = XHS_Apis()  # XHS_Apis 不需要参数
@@ -74,6 +88,34 @@ class ViralNoteCollector:
         self._current_keyword_index: int = 0
         self._current_dimension_index: int = 0
         self._current_page_index: int = 1  # 当前页码（独立跟踪，确保首次暂停也能保存）
+        self._is_rate_limited: bool = False  # 限流状态（True 时跳过笔记级重试）
+
+    @staticmethod
+    def _normalize_cookie_str(cookie: Optional[str]) -> Optional[str]:
+        if not cookie:
+            return None
+        cookie = cookie.strip().replace('\n', '').replace('\r', '')
+        return cookie or None
+
+    def _set_active_cookie(self, cookie: str) -> None:
+        if not cookie or cookie == self.cookies_str:
+            return
+        self.cookies_str = cookie
+        self.cookies = trans_cookies(cookie)
+        if self._backup_cookies_str:
+            if cookie == self._primary_cookie_str:
+                logger.info("已轮换到主Cookie")
+            else:
+                logger.info("已轮换到备用Cookie")
+
+    def _ensure_cookie_for_dimension(self, dim_index: int) -> None:
+        if not self._backup_cookies_str:
+            return
+        desired = self._primary_cookie_str if dim_index % 2 == 0 else self._backup_cookies_str
+        self._set_active_cookie(desired)
+
+    def _get_dimension_cooldown(self) -> int:
+        return DIMENSION_COOLDOWN_WITH_BACKUP if self._backup_cookies_str else DIMENSION_COOLDOWN
 
     def set_control_signal(self, signal: "TaskControlSignal") -> None:
         """设置控制信号（用于暂停/取消控制）"""
@@ -444,6 +486,9 @@ class ViralNoteCollector:
                 logger.info(f"任务被取消/暂停，停止在维度: {name}")
                 break
 
+            # 维度级轮换 Cookie（主/备交替）
+            self._ensure_cookie_for_dimension(dim_idx)
+
             result = await self._fetch_dimension(
                 query=query,
                 sort_type=sort_type,
@@ -467,8 +512,9 @@ class ViralNoteCollector:
             # 维度间等待（防止累积请求触发限流）
             if not await self._check_pause_point():
                 break
-            logger.info(f"等待 {DIMENSION_COOLDOWN} 秒后爬取下一个维度...")
-            await asyncio.sleep(DIMENSION_COOLDOWN)
+            cooldown = self._get_dimension_cooldown()
+            logger.info(f"等待 {cooldown} 秒后爬取下一个维度...")
+            await asyncio.sleep(cooldown)
 
         # 完成当前关键词后重置维度索引
         self._current_dimension_index = 0
@@ -545,6 +591,9 @@ class ViralNoteCollector:
                 logger.info(f"任务被取消/暂停，停止在维度: {name}")
                 break
 
+            # 维度级轮换 Cookie（主/备交替）
+            self._ensure_cookie_for_dimension(i)
+
             if progress_callback:
                 progress_callback(
                     10 + i * 25,
@@ -570,8 +619,9 @@ class ViralNoteCollector:
             if i < len(dimensions) - 1:
                 if not await self._check_pause_point():
                     break
-                logger.info(f"等待 {DIMENSION_COOLDOWN} 秒后爬取下一个维度...")
-                await asyncio.sleep(DIMENSION_COOLDOWN)
+                cooldown = self._get_dimension_cooldown()
+                logger.info(f"等待 {cooldown} 秒后爬取下一个维度...")
+                await asyncio.sleep(cooldown)
 
         # 合并结果并去重（使用 note_id 作为键）
         all_notes: Dict[str, Dict[str, Any]] = {}
@@ -674,11 +724,17 @@ class ViralNoteCollector:
             logger.error(f"意外的返回格式: {type(result)}")
             return []
 
-    async def _get_note_detail_async(self, note_url: str) -> Optional[Dict]:
-        """异步获取笔记详情（带限流重试）"""
-        retry_delays = [3, 6]  # 限流场景的重试间隔（秒）
+    async def _get_note_detail_async(self, note_url: str) -> tuple[Optional[Dict], str]:
+        """异步获取笔记详情，返回 (detail, reason)。
 
-        for attempt in range(1 + len(retry_delays)):  # 首次 + 最多 2 次重试
+        reason 取值：
+          - "ok"          成功获取数据
+          - "hard_fail"   硬失败（success=False / 数据格式异常）
+          - "empty_items" success=True 但 items=[]（疑似限流或 token 过期）
+        """
+        retry_delays = [] if self._is_rate_limited else [3, 6]
+
+        for attempt in range(1 + len(retry_delays)):
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
@@ -687,27 +743,25 @@ class ViralNoteCollector:
 
             if not (isinstance(result, tuple) and len(result) == 3):
                 logger.error(f"意外的返回格式: {type(result)}")
-                break
+                return None, "hard_fail"
 
             success, msg, res_json = result
 
             if not (success and res_json and 'data' in res_json):
-                # 硬失败（网络错误、签名错误等），不重试
                 logger.debug(f"获取笔记详情失败: {msg}")
-                break
+                return None, "hard_fail"
 
             items = res_json.get('data', {}).get('items', [])
             if items and len(items) > 0:
-                # 成功拿到数据，处理并返回
                 try:
                     item = items[0]
                     item['url'] = note_url
-                    return handle_note_info(item)
+                    return handle_note_info(item), "ok"
                 except Exception as e:
                     logger.warning(f"处理笔记数据失败 {note_url}: {e}，返回原始note_card")
-                    return items[0].get('note_card', {})
+                    return items[0].get('note_card', {}), "ok"
 
-            # items 为空：可能是限流，也可能是笔记被删除/私密
+            # items 为空：可能是限流/token过期/笔记删除
             if attempt < len(retry_delays):
                 delay = retry_delays[attempt]
                 logger.info(
@@ -718,7 +772,36 @@ class ViralNoteCollector:
             else:
                 logger.debug(f"笔记详情items为空（重试已耗尽）: {note_url}")
 
-        return None
+        return None, "empty_items"
+
+    async def _refresh_xsec_tokens(
+        self, query: str, page: int, sort_type: int,
+        note_type: int, time_range: int, pending_notes: list[dict],
+    ) -> int:
+        """重新搜索同一页获取新 xsec_token，原地替换 pending_notes 中的 URL。
+
+        Returns:
+            成功刷新的 token 数量
+        """
+        logger.info(f"尝试刷新 xsec_token（重新搜索第 {page} 页）...")
+        fresh = await self._search_notes_async(
+            query=query, page=page, note_type=note_type,
+            time_range=time_range, sort_type=sort_type,
+        )
+        if not fresh:
+            logger.warning("刷新搜索无结果，无法获取新 token")
+            return 0
+        url_map = {
+            n['note_id']: n['note_url'] for n in fresh
+            if n.get('note_id') and 'xsec_token=' in n.get('note_url', '')
+        }
+        refreshed = 0
+        for note in pending_notes:
+            if note.get('note_id') in url_map:
+                note['note_url'] = url_map[note['note_id']]
+                refreshed += 1
+        logger.info(f"Token 刷新: {refreshed}/{len(pending_notes)} 条已更新")
+        return refreshed
 
     async def _fetch_dimension(
         self,
@@ -752,6 +835,9 @@ class ViralNoteCollector:
             logger.debug(f"[{dimension_name}] 从第 {page} 页继续")
 
         logger.info(f"[{dimension_name}] 开始爬取，目标 {target_per_dimension} 条")
+        self._is_rate_limited = False  # 新维度开始，重置限流状态
+        consecutive_empty = 0  # 维度级：连续空结果计数
+        long_pause_count = 0  # 维度级：长暂停次数（防止无限等待）
 
         try:
             while len(notes) < target_per_dimension and page <= max_pages:
@@ -780,37 +866,84 @@ class ViralNoteCollector:
                     logger.debug(f"[{dimension_name}] 第 {page} 页无结果，停止")
                     break
 
-                # 获取笔记详情（带自适应降速）
-                consecutive_empty = 0
-                for note_brief in search_results:
+                # 获取笔记详情（限流自适应 + token 刷新）
+                remaining_notes = list(search_results)
+                note_idx = 0
+                token_refreshed = False  # 每页仅刷新一次
+
+                while note_idx < len(remaining_notes):
+                    note_brief = remaining_notes[note_idx]
                     note_url = note_brief.get('note_url', '')
                     if not note_url:
+                        note_idx += 1
                         continue
 
                     try:
-                        note_detail = await self._get_note_detail_async(note_url)
+                        note_detail, fail_reason = await self._get_note_detail_async(note_url)
                         if note_detail:
                             notes.append(note_detail)
-                            consecutive_empty = 0  # 成功，重置计数
+                            consecutive_empty = 0
+                            long_pause_count = 0
+                            self._is_rate_limited = False
                             if len(notes) >= target_per_dimension:
                                 break
                         else:
-                            consecutive_empty += 1
+                            if fail_reason == "empty_items":
+                                consecutive_empty += 1
+                            else:
+                                consecutive_empty = 0  # hard_fail 打断连续计数
+
                             if consecutive_empty >= 3:
-                                # 连续空结果，大概率被限流，额外冷却
                                 if not await self._check_pause_point():
+                                    break
+
+                                # 上报软限流到健康追踪器
+                                HealthTracker().record(ApiCallRecord(
+                                    api_name="feed_soft_rate_limit",
+                                    success=False,
+                                    error_category=ErrorCategory.RATE_LIMITED,
+                                    msg=f"[{dimension_name}] 连续 {consecutive_empty} 次 items=[]",
+                                ))
+
+                                # 先尝试刷新 xsec_token（每页仅一次）
+                                if not token_refreshed:
+                                    pending = remaining_notes[note_idx:]
+                                    count = await self._refresh_xsec_tokens(
+                                        query=query, page=page,
+                                        sort_type=int(sort_type),
+                                        note_type=note_type,
+                                        time_range=time_range,
+                                        pending_notes=pending,
+                                    )
+                                    token_refreshed = True
+                                    if count > 0:
+                                        consecutive_empty = 0
+                                        self._is_rate_limited = False
+                                        continue  # while 中不递增索引，重试当前笔记
+
+                                # token 刷新无效，走原有限流暂停逻辑
+                                self._is_rate_limited = True
+                                long_pause_count += 1
+                                if long_pause_count >= 3:
+                                    logger.warning(
+                                        f"[{dimension_name}] 已长暂停 {long_pause_count} 次仍被限流，跳过剩余笔记"
+                                    )
                                     break
                                 logger.warning(
                                     f"[{dimension_name}] 连续 {consecutive_empty} 次详情为空"
-                                    f"（可能限流），冷却 8 秒..."
+                                    f"（疑似限流），暂停 {RATE_LIMIT_PAUSE} 秒等待解除..."
                                 )
-                                await asyncio.sleep(8)
+                                await asyncio.sleep(RATE_LIMIT_PAUSE)
                                 consecutive_empty = 0
                     except Exception as e:
                         logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
-                        continue
 
-                    await asyncio.sleep(1)  # 防止请求过快
+                    note_idx += 1
+                    await asyncio.sleep(1)
+
+                # 限流暂停达上限，结束整个维度（不仅是当前页）
+                if long_pause_count >= 3:
+                    break
 
                 page += 1
                 await asyncio.sleep(2)  # 页面间隔
@@ -1107,6 +1240,9 @@ class ViralNoteCollector:
             if not await self._check_pause_point():
                 break
 
+            # 维度级轮换 Cookie（主/备交替）
+            self._ensure_cookie_for_dimension(dim_idx)
+
             result = await self._fetch_dimension_threshold(
                 query=query,
                 sort_type=sort_type,
@@ -1164,6 +1300,9 @@ class ViralNoteCollector:
         consecutive_below_threshold = 0  # 连续低于阈值的计数
 
         logger.debug(f"[{dimension_name}] 阈值采集开始，阈值={min_interaction}")
+        self._is_rate_limited = False
+        consecutive_empty = 0
+        long_pause_count = 0
 
         try:
             while len(notes) < max_count and page <= max_pages:
@@ -1185,28 +1324,86 @@ class ViralNoteCollector:
                     logger.debug(f"[{dimension_name}] 第 {page} 页无结果，停止")
                     break
 
-                # 逐条获取详情并过滤
-                for note_brief in search_results:
+                # 逐条获取详情并过滤（限流自适应 + token 刷新）
+                remaining_notes = list(search_results)
+                note_idx = 0
+                token_refreshed = False
+
+                while note_idx < len(remaining_notes):
+                    note_brief = remaining_notes[note_idx]
                     note_url = note_brief.get('note_url', '')
                     if not note_url:
+                        note_idx += 1
                         continue
 
                     try:
-                        note_detail = await self._get_note_detail_async(note_url)
+                        note_detail, fail_reason = await self._get_note_detail_async(note_url)
                         if not note_detail:
+                            if fail_reason == "empty_items":
+                                consecutive_empty += 1
+                            else:
+                                consecutive_empty = 0  # hard_fail 打断连续计数
+
+                            if consecutive_empty >= 3:
+                                if not await self._check_pause_point():
+                                    break
+
+                                HealthTracker().record(ApiCallRecord(
+                                    api_name="feed_soft_rate_limit",
+                                    success=False,
+                                    error_category=ErrorCategory.RATE_LIMITED,
+                                    msg=f"[{dimension_name}] 连续 {consecutive_empty} 次 items=[]",
+                                ))
+
+                                if not token_refreshed:
+                                    pending = remaining_notes[note_idx:]
+                                    count = await self._refresh_xsec_tokens(
+                                        query=query, page=page,
+                                        sort_type=int(sort_type),
+                                        note_type=note_type,
+                                        time_range=time_range,
+                                        pending_notes=pending,
+                                    )
+                                    token_refreshed = True
+                                    if count > 0:
+                                        consecutive_empty = 0
+                                        self._is_rate_limited = False
+                                        continue
+
+                                self._is_rate_limited = True
+                                long_pause_count += 1
+                                if long_pause_count >= 3:
+                                    logger.warning(
+                                        f"[{dimension_name}] 已长暂停 {long_pause_count} 次"
+                                        f"仍被限流，跳过剩余笔记"
+                                    )
+                                    break
+                                logger.warning(
+                                    f"[{dimension_name}] 连续 {consecutive_empty} 次详情为空"
+                                    f"（疑似限流），暂停 {RATE_LIMIT_PAUSE} 秒等待解除..."
+                                )
+                                await asyncio.sleep(RATE_LIMIT_PAUSE)
+                                consecutive_empty = 0
+
+                            note_idx += 1
+                            await asyncio.sleep(1)
                             continue
+
+                        # 获取到数据，清除限流状态
+                        consecutive_empty = 0
+                        long_pause_count = 0
+                        self._is_rate_limited = False
 
                         # 计算互动分数
                         score = self.calculate_interaction_score(note_detail)
 
                         if score >= min_interaction:
                             notes.append(note_detail)
-                            consecutive_below_threshold = 0  # 重置计数
+                            consecutive_below_threshold = 0
                             if len(notes) >= max_count:
                                 break
                         else:
                             consecutive_below_threshold += 1
-                            # 连续 10 条低于阈值，智能终止
                             if consecutive_below_threshold >= 10:
                                 logger.debug(
                                     f"[{dimension_name}] 连续 10 条低于阈值，提前终止"
@@ -1215,12 +1412,12 @@ class ViralNoteCollector:
 
                     except Exception as e:
                         logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
-                        continue
 
+                    note_idx += 1
                     await asyncio.sleep(1)
 
-                # 如果连续低于阈值，退出分页循环
-                if consecutive_below_threshold >= 10:
+                # 如果连续低于阈值或限流达上限，退出分页循环
+                if consecutive_below_threshold >= 10 or long_pause_count >= 3:
                     break
 
                 page += 1
