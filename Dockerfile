@@ -37,11 +37,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 注：OCR 使用 AI 多模态 API（ai_ocr_service.py），无需本地 EasyOCR/PyTorch
 RUN pip install --no-cache-dir chromadb opencv-python-headless playwright==1.52.0
 
-# 安装 Playwright Chromium 浏览器及其系统依赖
-# --with-deps 会自动安装 libnss3, libatk1.0 等必要的系统库
-# 使用淘宝镜像加速下载（国内服务器无法访问 cdn.playwright.dev）
+# Playwright 系统依赖（Debian Trixie 下 --with-deps 会因字体包重命名失败，手动安装）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-unifont \
+    libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 libxcomposite1 \
+    libxdamage1 libxrandr2 libgbm1 libasound2 libxshmfence1 \
+    libx11-xcb1 libxcb-dri3-0 libxfixes3 libpango-1.0-0 libcairo2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 下载 Playwright Chromium（使用淘宝镜像加速）
 ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
-RUN playwright install chromium --with-deps
+RUN playwright install chromium
 
 COPY . .
 
