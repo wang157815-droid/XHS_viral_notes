@@ -2313,6 +2313,19 @@ python3 tests/test_knowledge_base.py
 
 ---
 
+### 2026-03-06 Cookie 验证修复 + SMS 检测增强
+
+#### 🔧 Cookie 验证修复
+- **验证逻辑 Bug 修复**：`cookie_validator.py` 中 `search_some_note()` 的 `require_num` 从 `1` 改为 `MIN_VERIFY_RESULTS`（3），修复因请求数量不足导致验证始终判定为"弱阳性"、8 轮重试后保存半有效 Cookie 的问题
+- **修复效果**：扫码登录后 Cookie 验证从 8 轮全部失败 → 首次即通过
+
+#### 📱 SMS 验证检测增强（异地登录支持）
+- **多关键词匹配**：`_FIND_DIALOG_JS` 和 `_FILL_INPUT_JS` 的弹窗检测从仅匹配 `'短信验证码验证'` 扩展为 7 个关键词（`安全验证`、`身份验证`、`验证身份`、`短信验证`、`验证手机`、`手机验证`），覆盖异地登录等多种验证场景
+- **特征检测兜底**：`check_page_interaction` 新增 DOM 特征检测策略——即使弹窗标题未命中任何关键词，只要页面同时存在「验证码输入框 + 获取/发送按钮」即判定为 SMS 验证
+- **防误判机制**：QR 码可见时自动跳过特征检测，避免将扫码页的手机登录区误判为 SMS 弹窗
+
+---
+
 ## 📈 Star 趋势
 <a href="https://www.star-history.com/#cv-cat/Spider_XHS&Date">
  <picture>
