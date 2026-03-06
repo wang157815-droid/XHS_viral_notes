@@ -315,6 +315,8 @@ class VideoDownloadManager:
             except Exception as e:
                 last_error = e
                 logger.warning(f"下载失败 [{i+1}]: {e}")
+                if i < len(urls_to_try) - 1:
+                    await asyncio.sleep(2)
                 continue
 
         raise VideoDownloadError(f"所有 URL 下载失败: {last_error}")

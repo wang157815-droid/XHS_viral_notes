@@ -222,7 +222,8 @@ class ViralFeatureExtractor:
                         upload_times.append(('recent', 0))
                     else:
                         upload_times.append(('date', note.upload_time))
-                except:
+                except Exception as e:
+                    logger.debug(f"解析上传时间失败 '{note.upload_time}': {e}")
                     continue
 
         # 统计发布时间分布

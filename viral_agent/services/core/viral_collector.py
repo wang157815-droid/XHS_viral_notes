@@ -936,7 +936,7 @@ class ViralNoteCollector:
                                 await asyncio.sleep(RATE_LIMIT_PAUSE)
                                 consecutive_empty = 0
                     except Exception as e:
-                        logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
+                        logger.warning(f"[{dimension_name}] 获取详情失败: {e}")
 
                     note_idx += 1
                     await asyncio.sleep(1)
@@ -1411,7 +1411,7 @@ class ViralNoteCollector:
                                 break
 
                     except Exception as e:
-                        logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
+                        logger.warning(f"[{dimension_name}] 获取详情失败: {e}")
 
                     note_idx += 1
                     await asyncio.sleep(1)
