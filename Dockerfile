@@ -39,6 +39,8 @@ RUN pip install --no-cache-dir chromadb opencv-python-headless playwright
 
 # 安装 Playwright Chromium 浏览器及其系统依赖
 # --with-deps 会自动安装 libnss3, libatk1.0 等必要的系统库
+# 使用淘宝镜像加速下载（国内服务器无法访问 cdn.playwright.dev）
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
 RUN playwright install chromium --with-deps
 
 COPY . .
