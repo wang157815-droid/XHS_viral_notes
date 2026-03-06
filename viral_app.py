@@ -2485,7 +2485,7 @@ async def get_knowledge_summary(username: str = Depends(verify_token_and_passwor
 
         return {
             "status": "success",
-            **summary
+            "summary": summary
         }
     except Exception as e:
         logger.error(f"获取知识库摘要失败: {e}")
