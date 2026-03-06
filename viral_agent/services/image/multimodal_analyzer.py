@@ -51,9 +51,12 @@ class MultimodalAnalyzer:
 
         # 配置OpenAI客户端
         if self.api_key:
+            from viral_agent.config.ai_retry_config import AIRetryConfig
+            self._retry_config = AIRetryConfig.from_env()
             self.client = OpenAI(
                 api_key=self.api_key,
-                base_url=self.api_base
+                base_url=self.api_base,
+                timeout=self._retry_config.timeout
             )
             logger.info(f"多模态分析器初始化: 模型={self.model_name}, API基址={self.api_base}")
         else:
@@ -231,7 +234,11 @@ class MultimodalAnalyzer:
                 break
 
             logger.info(f"分析第 {i}/{sample_count} 篇笔记...")
-            result = self.analyze_note_with_images(note)
+            try:
+                result = self.analyze_note_with_images(note)
+            except Exception as e:
+                logger.error(f"第 {i}/{sample_count} 篇笔记分析异常: {e}")
+                continue
             if result['status'] == 'success':
                 results.append({
                     'note_title': note.title,
@@ -576,27 +583,28 @@ class MultimodalAnalyzer:
         note: ViralNote,
         image_urls: List[str],
         batch_info: str = "",
-        max_retries: int = 3
     ) -> Dict[str, Any]:
         """
-        分析单批图片（带429重试机制）
+        分析单批图片（带统一重试机制）
 
         Args:
             note: 笔记对象
             image_urls: 图片URL列表
             batch_info: 批次信息说明
-            max_retries: 最大重试次数
 
         Returns:
             分析结果
         """
         import time
+        from viral_agent.utils.retry_logger import log_ai_retry, log_ai_retry_exhausted
+
+        config = self._retry_config
 
         # 构建多模态prompt
         messages = self._build_multimodal_messages(note, image_urls, batch_info)
 
         last_error = None
-        for attempt in range(max_retries):
+        for attempt in range(config.max_retries):
             try:
                 # 调用多模态AI
                 response = self.client.chat.completions.create(
@@ -609,29 +617,19 @@ class MultimodalAnalyzer:
                 # 解析响应
                 ai_response = response.choices[0].message.content
 
-                # 调试日志：记录AI原始响应
                 logger.debug(f"多模态AI原始响应长度: {len(ai_response)} 字符")
                 logger.debug(f"多模态AI原始响应（前800字符）: {ai_response[:800]}")
 
-                # 检查是否有think标签
                 if '<think>' in ai_response:
                     logger.info("检测到DeepSeek Reasoner think标签，将自动移除")
 
                 insights = self._parse_multimodal_response(ai_response)
 
-                # 调试日志：记录解析结果
                 logger.debug(f"解析结果类型: {type(insights)}")
                 if isinstance(insights, dict):
                     logger.debug(f"解析结果键: {list(insights.keys())}")
                     if 'raw_insights' in insights:
                         logger.warning("解析失败，回退到raw_insights模式")
-                    else:
-                        # 检查各键的值是否为空
-                        for key, value in list(insights.items())[:3]:
-                            if isinstance(value, str):
-                                logger.debug(f"  键'{key}'值长度: {len(value)}")
-                            elif isinstance(value, dict):
-                                logger.debug(f"  键'{key}'子键: {list(value.keys())[:5]}")
 
                 logger.success("多模态分析完成")
                 return {
@@ -644,19 +642,24 @@ class MultimodalAnalyzer:
                 last_error = e
                 error_str = str(e)
 
-                # 检测429错误，使用指数退避重试
-                if '429' in error_str or '1302' in error_str:
-                    wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
-                    logger.warning(f"API限流(429)，第{attempt + 1}次重试，等待{wait_time}秒...")
+                if config.is_retryable_error(error_str):
+                    wait_time = config.delay_for(attempt)
+                    log_ai_retry("多模态分析", error_str[:80], attempt + 1, config.max_retries, wait_time)
                     time.sleep(wait_time)
                 else:
-                    # 非429错误，直接抛出
-                    logger.error(f"分析失败: {e}")
-                    raise
+                    # 非可重试错误，返回错误结果而非 raise
+                    logger.error(f"多模态分析失败（不可重试）: {e}")
+                    return {
+                        'status': 'error',
+                        'message': str(e)
+                    }
 
         # 所有重试都失败
-        logger.error(f"分析失败，已重试{max_retries}次: {last_error}")
-        raise last_error
+        log_ai_retry_exhausted("多模态分析", str(last_error)[:80], config.max_retries)
+        return {
+            'status': 'error',
+            'message': f"重试{config.max_retries}次后失败: {last_error}"
+        }
 
     def _analyze_images_in_batches(
         self,

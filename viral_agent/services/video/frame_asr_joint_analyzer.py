@@ -368,11 +368,15 @@ class FrameASRJointAnalyzer:
         self,
         messages: List[Dict[str, Any]],
         max_tokens: int = 2000,
-        max_retries: int = 3
     ) -> str:
-        """调用多模态API"""
+        """调用多模态API（使用统一重试配置）"""
+        from viral_agent.config.ai_retry_config import AIRetryConfig
+        from viral_agent.utils.retry_logger import log_ai_retry, log_ai_retry_exhausted
+
         if not self.api_key:
             return "API密钥未配置"
+
+        config = AIRetryConfig.from_env()
 
         headers = {
             'Authorization': f'Bearer {self.api_key}',
@@ -386,25 +390,24 @@ class FrameASRJointAnalyzer:
             'temperature': 0.3
         }
 
-        for attempt in range(max_retries):
+        last_error = None
+        for attempt in range(config.max_retries):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f'{self.api_base}/chat/completions',
                         headers=headers,
                         json=data,
-                        timeout=aiohttp.ClientTimeout(total=120)
+                        timeout=aiohttp.ClientTimeout(total=config.timeout)
                     ) as response:
                         if response.status == 200:
                             result = await response.json()
                             return result['choices'][0]['message']['content']
-                        elif response.status == 429:
-                            wait_time = (2 ** attempt) * 5
-                            logger.warning(
-                                f"API限流(429)，第{attempt + 1}次重试，"
-                                f"等待{wait_time}秒..."
-                            )
+                        elif config.is_retryable_status(response.status):
+                            wait_time = config.delay_for(attempt)
+                            log_ai_retry("帧ASR", f"HTTP {response.status}", attempt + 1, config.max_retries, wait_time)
                             await asyncio.sleep(wait_time)
+                            last_error = f"HTTP {response.status}"
                         else:
                             error_text = await response.text()
                             logger.error(
@@ -413,15 +416,23 @@ class FrameASRJointAnalyzer:
                             return f"API调用失败: {response.status}"
 
             except asyncio.TimeoutError:
-                logger.warning(f"API超时，第{attempt + 1}次重试...")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(5)
+                last_error = f"超时({config.timeout}s)"
+                if attempt < config.max_retries - 1:
+                    wait_time = config.delay_for(attempt)
+                    log_ai_retry("帧ASR", last_error, attempt + 1, config.max_retries, wait_time)
+                    await asyncio.sleep(wait_time)
             except Exception as e:
-                logger.error(f"API调用异常: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(3)
+                last_error = str(e)
+                if config.is_retryable_error(last_error) and attempt < config.max_retries - 1:
+                    wait_time = config.delay_for(attempt)
+                    log_ai_retry("帧ASR", f"{type(e).__name__}", attempt + 1, config.max_retries, wait_time)
+                    await asyncio.sleep(wait_time)
+                elif not config.is_retryable_error(last_error):
+                    logger.error(f"API调用异常（不可重试）: {type(e).__name__}: {e}")
+                    return f"API调用异常: {type(e).__name__}"
 
-        return "API调用失败: 超过最大重试次数"
+        log_ai_retry_exhausted("帧ASR", str(last_error)[:80], config.max_retries)
+        return f"API调用失败: 超过最大重试次数({last_error})"
 
     def _parse_json_response(self, response: str) -> Optional[Dict[str, Any]]:
         """解析JSON响应"""

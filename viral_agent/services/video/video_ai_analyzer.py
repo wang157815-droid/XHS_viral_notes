@@ -71,12 +71,14 @@ class VideoAIAnalyzer:
         else:
             self.video_source_mode = os.getenv('VIDEO_SOURCE_MODE', 'url')  # url | proxy
         self.video_download_timeout = int(os.getenv('VIDEO_DOWNLOAD_TIMEOUT', '60'))
-        # P2-fix-4: 考虑 base64 膨胀（约1.33倍）和 API data-uri 限制（10MB）
-        # 通义千问等 API 有 10MB data-uri 单项限制，7.5MB 视频 × 1.33 ≈ 10MB base64
+        # base64 模式下的视频大小限制
+        # 通义千问 API 有 10MB data-uri 单项限制，视频 base64 膨胀约 1.33 倍
+        # 默认: 10MB / 1.33 ≈ 7.5MB，取整为 7
+        # 可通过 VIDEO_PROXY_MAX_MB 覆盖（例如 API 支持更大的 data-uri 时）
         configured_max_mb = int(os.getenv('VIDEO_MAX_SIZE_MB', '50'))
-        self._configured_limit = int(configured_max_mb * 0.75)  # 配置值的 75%
-        self._api_limit_mb = 7  # API 10MB data-uri 限制 / 1.33 base64膨胀 ≈ 7.5MB，取整为7
-        self.video_max_size_mb = min(self._configured_limit, self._api_limit_mb)  # 取更严格的限制
+        self._configured_limit = int(configured_max_mb * 0.75)
+        self._api_limit_mb = int(os.getenv('VIDEO_PROXY_MAX_MB', '7'))
+        self.video_max_size_mb = min(self._configured_limit, self._api_limit_mb)
 
         # 视频下载管理器（共享下载，避免重复）
         self.download_manager = download_manager
@@ -839,9 +841,9 @@ class VideoAIAnalyzer:
                 # P2-fix: 智能降级 - 预检视频大小，超过阈值自动降级到 URL 模式
                 estimated_size = await self._estimate_video_size(video_url)
                 if estimated_size and estimated_size > self.video_max_size_mb:
-                    logger.warning(
-                        f"⚠️ 视频预估 {estimated_size:.1f}MB > {self.video_max_size_mb}MB，"
-                        f"自动降级到 URL 模式（避免下载失败和 API 超限）"
+                    logger.info(
+                        f"视频预估 {estimated_size:.1f}MB > {self.video_max_size_mb}MB，"
+                        f"自动降级到 URL 模式"
                     )
                     # 直接使用 URL 模式，跳过下载
                     messages = self._build_video_messages(video_url, prompt, title, description)
@@ -1068,32 +1070,33 @@ class VideoAIAnalyzer:
         model: str,
         max_tokens: int = 500,
         temperature: float = 0.3,
-        max_retries: int = 3
     ) -> str:
         """
-        调用AI API（带429重试机制）
+        调用AI API（带统一重试机制）
 
         Args:
             messages: 消息列表
             model: 模型名称
             max_tokens: 最大token数
             temperature: 温度参数
-            max_retries: 最大重试次数
 
         Returns:
             AI响应内容
         """
+        from viral_agent.config.ai_retry_config import AIRetryConfig
+        from viral_agent.utils.retry_logger import log_ai_retry, log_ai_retry_exhausted
+
+        config = AIRetryConfig.from_env()
+
         # 判断使用哪个API配置
         multimodal_models = [
             'glm-4v', 'glm-4v-plus', 'glm-4.5v',
             'qwen-vl-max', 'qwen-vl-plus', 'qwen3-vl-plus', 'qwen3-vl-flash', 'qwen-vl-max-latest'
         ]
         if model in multimodal_models:
-            # 使用多模态API配置
             api_key = self.multimodal_api_key
             api_base = self.multimodal_api_base
         else:
-            # 使用默认API配置
             api_key = self.api_key
             api_base = self.api_base
 
@@ -1113,62 +1116,54 @@ class VideoAIAnalyzer:
         }
 
         last_error = None
-        for attempt in range(max_retries):
+        for attempt in range(config.max_retries):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f'{api_base}/chat/completions',
                         headers=headers,
                         json=data,
-                        timeout=aiohttp.ClientTimeout(total=60)
+                        timeout=aiohttp.ClientTimeout(total=config.timeout)
                     ) as response:
                         if response.status == 200:
                             result = await response.json()
                             return result['choices'][0]['message']['content']
-                        elif response.status == 429:
-                            # 429限流，使用指数退避重试
+                        elif config.is_retryable_status(response.status):
                             error_text = await response.text()
-                            wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
-                            logger.warning(f"API限流(429)，第{attempt + 1}次重试，等待{wait_time}秒...")
+                            wait_time = config.delay_for(attempt)
+                            log_ai_retry("视频AI", f"HTTP {response.status}", attempt + 1, config.max_retries, wait_time)
                             await asyncio.sleep(wait_time)
-                            last_error = f"API调用失败: 429 - {error_text}"
+                            last_error = f"API调用失败: {response.status} - {error_text}"
                         else:
                             error_text = await response.text()
                             logger.error(f"API调用失败: {response.status} - {error_text}")
-                            # P2-fix-7: 返回值包含错误详情，便于上层检测特定错误（如Exceeded limit）
                             return f"API调用失败: {response.status} - {error_text[:200]}"
             except asyncio.TimeoutError as e:
-                # P0-2: 超时异常单独处理，可重试
-                timeout_val = 60  # 与 ClientTimeout(total=60) 一致
-                last_error = f"timeout_{timeout_val}s"
-                logger.error(f"API调用超时: {timeout_val}s | {type(e).__name__}")
-                if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 3
-                    logger.warning(f"超时重试，第{attempt + 1}次，等待{wait_time}秒...")
+                last_error = f"timeout_{config.timeout}s"
+                wait_time = config.delay_for(attempt)
+                if attempt < config.max_retries - 1:
+                    log_ai_retry("视频AI", f"超时({config.timeout}s)", attempt + 1, config.max_retries, wait_time)
                     await asyncio.sleep(wait_time)
                 continue
             except aiohttp.ClientError as e:
-                # P0-2: 网络异常单独处理，可重试
                 last_error = f"network_{type(e).__name__}"
-                logger.error(f"API网络异常: {type(e).__name__}: {repr(e)}")
-                if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 3
-                    logger.warning(f"网络异常重试，第{attempt + 1}次，等待{wait_time}秒...")
+                if attempt < config.max_retries - 1:
+                    wait_time = config.delay_for(attempt)
+                    log_ai_retry("视频AI", f"网络异常({type(e).__name__})", attempt + 1, config.max_retries, wait_time)
                     await asyncio.sleep(wait_time)
                 continue
             except Exception as e:
-                # P0-2: 其他异常，记录详细信息
                 last_error = f"{type(e).__name__}: {repr(e)}"
-                if '429' in str(e) or '1302' in str(e):
-                    wait_time = (2 ** attempt) * 5
-                    logger.warning(f"API限流，第{attempt + 1}次重试，等待{wait_time}秒...")
+                error_str = str(e)
+                if config.is_retryable_error(error_str):
+                    wait_time = config.delay_for(attempt)
+                    log_ai_retry("视频AI", error_str[:80], attempt + 1, config.max_retries, wait_time)
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error(f"API调用异常: {type(e).__name__}: {repr(e)}")
                     return f"API调用异常: {type(e).__name__}"
 
-        # 所有重试都失败
-        logger.error(f"API调用失败，已重试{max_retries}次: {last_error}")
+        log_ai_retry_exhausted("视频AI", str(last_error)[:80], config.max_retries)
         return f"API调用失败: {last_error}"
 
     async def batch_analyze(
