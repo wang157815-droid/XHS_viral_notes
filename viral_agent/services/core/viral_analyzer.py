@@ -77,7 +77,8 @@ class ViralAnalyzer:
         if self.api_key:
             self.client = OpenAI(
                 api_key=self.api_key,
-                base_url=self.api_base if self.api_base else None
+                base_url=self.api_base if self.api_base else None,
+                timeout=300.0
             )
             logger.info(f"AI分析器初始化: 模型={self.model_name}, API基址={self.api_base}")
         else:

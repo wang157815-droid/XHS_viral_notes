@@ -638,15 +638,7 @@ class CoverAnalyzer:
             return []
 
         try:
-            # 在同步上下文中运行异步方法
-            loop = asyncio.new_event_loop()
-            try:
-                texts = loop.run_until_complete(
-                    self.ai_ocr.extract_text_from_image(image)
-                )
-            finally:
-                loop.close()
-            return texts
+            return self.ai_ocr.extract_text_from_image(image)
         except Exception as e:
             logger.error(f"AI OCR 识别失败: {e}")
             return []

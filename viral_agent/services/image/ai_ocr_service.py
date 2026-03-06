@@ -10,7 +10,6 @@ AI 视觉模型 OCR 服务
 """
 import os
 import base64
-import asyncio
 from io import BytesIO
 from typing import List, Optional, Dict, TYPE_CHECKING
 from loguru import logger
@@ -55,13 +54,14 @@ class AIOCRService:
         self._client = None
 
     def _get_client(self):
-        """懒加载 OpenAI 客户端"""
+        """懒加载 OpenAI 客户端（同步）"""
         if self._client is None:
             try:
-                from openai import AsyncOpenAI
-                self._client = AsyncOpenAI(
+                from openai import OpenAI
+                self._client = OpenAI(
                     api_key=self.api_key,
-                    base_url=self.api_base
+                    base_url=self.api_base,
+                    timeout=60.0
                 )
             except ImportError:
                 logger.error("未安装 openai 库，AI OCR 功能不可用")
@@ -144,9 +144,9 @@ class AIOCRService:
         logger.warning(f"图片大幅压缩: {width}x{height} -> {width//2}x{height//2}")
         return f"data:image/jpeg;base64,{img_base64}"
 
-    async def extract_text_from_image(self, image: "Image.Image") -> List[str]:
+    def extract_text_from_image(self, image: "Image.Image") -> List[str]:
         """
-        从 PIL Image 对象提取文字（推荐方式，避免防盗链问题）
+        从 PIL Image 对象提取文字（同步调用，线程安全）
 
         Args:
             image: PIL Image 对象
@@ -162,10 +162,9 @@ class AIOCRService:
             return []
 
         try:
-            # 准备图片（降采样 + 压缩，防止超过 API 大小限制）
             data_url = self._prepare_image_for_ocr(image)
 
-            response = await client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=self.model,
                 messages=[{
                     "role": "user",
@@ -190,88 +189,6 @@ class AIOCRService:
         except Exception as e:
             logger.error(f"AI OCR 识别失败: {e}")
             return []
-
-    async def extract_text(self, image_url: str) -> List[str]:
-        """
-        从图片 URL 提取文字（备用方式，可能受防盗链影响）
-
-        Args:
-            image_url: 图片 URL
-
-        Returns:
-            识别出的文字列表
-        """
-        if not self.enabled:
-            return []
-
-        client = self._get_client()
-        if not client:
-            return []
-
-        try:
-            response = await client.chat.completions.create(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_url}
-                        },
-                        {
-                            "type": "text",
-                            "text": self.OCR_PROMPT
-                        }
-                    ]
-                }],
-                max_tokens=500,
-                temperature=0.1
-            )
-
-            result = response.choices[0].message.content
-            return self._parse_ocr_result(result)
-
-        except Exception as e:
-            logger.error(f"AI OCR 识别失败 (URL模式): {e}")
-            return []
-
-    async def extract_text_batch(
-        self,
-        images: List["Image.Image"],
-        max_concurrent: int = 5
-    ) -> List[List[str]]:
-        """
-        批量提取多张图片的文字
-
-        Args:
-            images: PIL Image 列表
-            max_concurrent: 最大并发数
-
-        Returns:
-            文字列表的列表，与输入顺序对应
-        """
-        if not self.enabled or not images:
-            return [[] for _ in images]
-
-        semaphore = asyncio.Semaphore(max_concurrent)
-
-        async def process_one(img: "Image.Image") -> List[str]:
-            async with semaphore:
-                return await self.extract_text_from_image(img)
-
-        tasks = [process_one(img) for img in images]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # 处理异常，返回空列表
-        output = []
-        for result in results:
-            if isinstance(result, Exception):
-                logger.debug(f"批量 OCR 单项失败: {result}")
-                output.append([])
-            else:
-                output.append(result)
-
-        return output
 
     def is_available(self) -> bool:
         """检查 AI OCR 服务是否可用"""
