@@ -5,6 +5,7 @@ import urllib
 from urllib.parse import parse_qs
 import requests
 from xhs_utils.xhs_util import splice_str, generate_request_params, generate_x_b3_traceid, get_common_headers
+from xhs_utils.api_guard import guarded_api
 from loguru import logger
 
 # 默认请求超时时间（秒）
@@ -18,6 +19,7 @@ class XHS_Apis():
     def __init__(self):
         self.base_url = "https://edith.xiaohongshu.com"
 
+    @guarded_api
     def get_homefeed_all_channel(self, cookies_str: str, proxies: dict = None):
         """
             获取主页的所有频道
@@ -29,12 +31,14 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api)
             response = requests.get(self.base_url + api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
+    @guarded_api
     def get_homefeed_recommend(self, category, cursor_score, refresh_type, note_index, cookies_str: str, proxies: dict = None):
         """
             获取主页推荐的笔记
@@ -69,7 +73,8 @@ class XHS_Apis():
             headers, cookies, trans_data = generate_request_params(cookies_str, api, data)
             response = requests.post(self.base_url + api, headers=headers, data=trans_data, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -106,6 +111,7 @@ class XHS_Apis():
             note_list = note_list[:require_num]
         return success, msg, note_list
 
+    @guarded_api
     def get_user_info(self, user_id: str, cookies_str: str, proxies: dict = None):
         """
             获取用户的信息
@@ -123,12 +129,14 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
+    @guarded_api
     def get_user_self_info(self, cookies_str: str, proxies: dict = None):
         """
             获取用户自己的信息1
@@ -141,13 +149,15 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api)
             response = requests.get(self.base_url + api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
 
+    @guarded_api
     def get_user_self_info2(self, cookies_str: str, proxies: dict = None):
         """
             获取用户自己的信息2
@@ -160,12 +170,14 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api)
             response = requests.get(self.base_url + api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
+    @guarded_api
     def get_user_note_info(self, user_id: str, cursor: str, cookies_str: str, xsec_token='', xsec_source='', proxies: dict = None):
         """
             获取用户指定位置的笔记
@@ -189,7 +201,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -228,6 +241,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, note_list
 
+    @guarded_api
     def get_user_like_note_info(self, user_id: str, cursor: str, cookies_str: str, xsec_token='', xsec_source='', proxies: dict = None):
         """
             获取用户指定位置喜欢的笔记
@@ -251,7 +265,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -290,6 +305,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, note_list
 
+    @guarded_api
     def get_user_collect_note_info(self, user_id: str, cursor: str, cookies_str: str, xsec_token='', xsec_source='', proxies: dict = None):
         """
             获取用户指定位置收藏的笔记
@@ -313,7 +329,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -352,6 +369,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, note_list
 
+    @guarded_api
     def get_note_info(self, url: str, cookies_str: str, proxies: dict = None):
         """
             获取笔记的详细
@@ -382,13 +400,15 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api, data)
             response = requests.post(self.base_url + api, headers=headers, data=data, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
 
+    @guarded_api
     def get_search_keyword(self, word: str, cookies_str: str, proxies: dict = None):
         """
             获取搜索关键词
@@ -406,12 +426,14 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
+    @guarded_api
     def search_note(self, query: str, cookies_str: str, page=1, sort_type_choice=0, note_type=0, note_time=0, note_range=0, pos_distance=0, geo="", proxies: dict = None):
         """
             获取搜索笔记的结果
@@ -513,7 +535,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api, data)
             response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -554,6 +577,7 @@ class XHS_Apis():
             note_list = note_list[:require_num]
         return success, msg, note_list
 
+    @guarded_api
     def search_user(self, query: str, cookies_str: str, page=1, proxies: dict = None):
         """
             获取搜索用户的结果
@@ -578,7 +602,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api, data)
             response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -613,6 +638,7 @@ class XHS_Apis():
             user_list = user_list[:require_num]
         return success, msg, user_list
 
+    @guarded_api
     def get_note_out_comment(self, note_id: str, cursor: str, xsec_token: str, cookies_str: str, proxies: dict = None):
         """
             获取指定位置的笔记一级评论
@@ -635,7 +661,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -668,6 +695,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, note_out_comment_list
 
+    @guarded_api
     def get_note_inner_comment(self, comment: dict, cursor: str, xsec_token: str, cookies_str: str, proxies: dict = None):
         """
             获取指定位置的笔记二级评论
@@ -692,7 +720,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -753,6 +782,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, out_comment_list
 
+    @guarded_api
     def get_unread_message(self, cookies_str: str, proxies: dict = None):
         """
             获取未读消息
@@ -765,12 +795,14 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, api)
             response = requests.get(self.base_url + api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
         return success, msg, res_json
 
+    @guarded_api
     def get_metions(self, cursor: str, cookies_str: str, proxies: dict = None):
         """
             获取评论和@提醒
@@ -789,7 +821,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -821,6 +854,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, metions_list
 
+    @guarded_api
     def get_likesAndcollects(self, cursor: str, cookies_str: str, proxies: dict = None):
         """
             获取赞和收藏
@@ -839,7 +873,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
@@ -871,6 +906,7 @@ class XHS_Apis():
             msg = str(e)
         return success, msg, likesAndcollects_list
 
+    @guarded_api
     def get_new_connections(self, cursor: str, cookies_str: str, proxies: dict = None):
         """
             获取新增关注
@@ -889,7 +925,8 @@ class XHS_Apis():
             headers, cookies, data = generate_request_params(cookies_str, splice_api)
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success = res_json.get("success", False)
+            msg = res_json.get("msg", "未知响应")
         except Exception as e:
             success = False
             msg = str(e)
