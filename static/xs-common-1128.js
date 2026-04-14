@@ -234,7 +234,7 @@ HTMLBodyElement.prototype = Object.create(HTMLElement.prototype)
 HTMLBodyElement.prototype.constructor = HTMLBodyElement;
 Document.prototype.all = new HTMLAllCollection();
 Document.prototype.body = new HTMLBodyElement();
-Document.prototype.cookie = 'abRequestId=placeholder; webBuild=4.81.0; xsecappid=xhs-pc-web; a1=placeholder; webId=placeholder; gid=placeholder; unread={%22ub%22:%2268d7af2e000000000e0327db%22%2C%22ue%22:%2268c4e00d000000001b030fde%22%2C%22uc%22:23}; loadts=1759663837296; websectiga=placeholder';
+Document.prototype.cookie = 'abRequestId=placeholder; webBuild=4.81.0; xsecappid=xhs-pc-web; a1=placeholder; webId=placeholder; gid=placeholder; websectiga=placeholder';
 
 
 function HTMLDocument(){}

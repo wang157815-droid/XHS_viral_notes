@@ -238,7 +238,7 @@ HTMLDocument.prototype.body = body
 HTMLDocument.prototype.documentElement =  html
 HTMLDocument.prototype.documentMode = undefined
 
-HTMLDocument.prototype.cookie = 'abRequestId=placeholder; xsecappid=xhs-pc-web; a1=placeholder; webId=placeholder; gid=placeholder; webBuild=4.72.0; loadts=1752420555436; unread={%22ub%22:%22687338ef000000001d00f0ba%22%2C%22ue%22:%2268739fd9000000001703265f%22%2C%22uc%22:26}; websectiga=placeholder'
+HTMLDocument.prototype.cookie = 'abRequestId=placeholder; xsecappid=xhs-pc-web; a1=placeholder; webId=placeholder; gid=placeholder; webBuild=4.72.0; websectiga=placeholder'
 
 Object.defineProperty(HTMLDocument.prototype, "addEventListener", {
     writable:true,
