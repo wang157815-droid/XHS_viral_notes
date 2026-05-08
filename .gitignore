@@ -4,6 +4,9 @@
 .env
 .env.local
 .env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 *.pem
 *.key
 credentials.json
@@ -53,7 +56,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
+/package-lock.json
 
 # ============================
 # IDE 与编辑器
@@ -79,6 +82,9 @@ logs/
 # 数据目录（包含爬取的数据）
 datas/
 /download/
+
+# Playwright 浏览器登录态（包含小红书 Cookie/LocalStorage）
+browser_data/
 
 # 向量数据库存储
 viral_agent/storage/chromadb/
@@ -108,6 +114,33 @@ htmlcov/
 # Claude Code
 # ============================
 .claude/
+
+# ============================
+# MCP / IDE 缓存
+# ============================
+.cursor/
+**/entities.json
+**/mempalace.yaml
+
+# ============================
+# 运行时射出的封面 / 截图样本
+# ============================
+data_publish_*.png
+*_visual_summary_cover_*.png
+
+# ============================
+# 文档中间产物（decoded.txt / 临时 doc dump）
+# ============================
+docs/*.decoded.txt
+docs/doc_[0-9].txt
+docs/temp_*.txt
+docs/copy_log.txt
+
+# ============================
+# 测试临时目录
+# ============================
+.pytest-tmp/
+tmp_pytest_review_base/
 
 # ============================
 # 其他
