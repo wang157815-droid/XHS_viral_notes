@@ -124,7 +124,7 @@ async def index() -> str:
 
 @app.get("/health")
 async def health_check() -> Dict[str, Any]:
-        return {
+    return {
         "status": "legacy_stub",
         "service": "RedMuse Legacy Stub",
         "message": "viral_app.py 已下线，请使用 backend.app.main",
@@ -135,7 +135,7 @@ async def health_check() -> Dict[str, Any]:
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def legacy_api_gone(path: str, request: Request) -> JSONResponse:
     legacy_path = f"/api/{path}"
-        return JSONResponse(
+    return JSONResponse(
         status_code=410,
         content={
             "ok": False,
