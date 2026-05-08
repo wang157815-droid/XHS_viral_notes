@@ -1,6 +1,12 @@
 # 基础依赖
 PyExecJS>=1.5.1
 requests>=2.31.0
+# 小红书签名库（阶段 4.1 hotfix 3 引入,跟进最新签名算法）
+# 原 static/xhs_xs_xsc_56.js 是 2024 年版本,算法已被平台迭代过,
+# 签名虽能通过"success=True"校验,但服务端内容风控会识别算法版本返回空结果(items=[])。
+# 切换到 xhshow 后诊断脚本验证能采到真实数据。
+# 如需回退老算法,设置 XHS_SIGN_BACKEND=execjs
+xhshow>=0.1.0
 loguru>=0.7.2
 python-dotenv>=1.0.0
 retry>=0.9.2
@@ -54,3 +60,24 @@ dashscope>=1.20.0
 # 扫码登录相关（Playwright 方式）
 # 安装后需执行: playwright install chromium
 playwright>=1.40.0
+
+# 阶段4 编排引擎（LangGraph 企业级状态图）
+# 锁 minor 防大版本破坏 API
+langgraph>=0.2.0,<0.3.0
+
+# ============================================================
+# 阶段 4.α 基础设施（Redis 缓存 + ARQ 队列 + pgvector 笔记向量）
+# ============================================================
+# Redis 客户端(async)：ARQ broker + L1 热缓存 + SSE backlog
+redis>=5.0.0
+# ARQ：async-first Redis 任务队列（队列 + cron 一体,替代 Celery+Beat）
+arq>=0.25.0
+# PostgreSQL 异步驱动（仅用于 pgvector 笔记向量存储,业务表仍 JSON 等 4.6 再迁）
+asyncpg>=0.29.0
+# PostgreSQL 同步驱动 + 迁移工具（阶段 4.6 业务表硬切）
+psycopg[binary]>=3.1.18
+alembic>=1.13.0
+# pgvector Python 客户端（向量列类型绑定 + SQLAlchemy Type）
+pgvector>=0.2.5
+# SQLAlchemy 2.0 异步引擎（pgvector 操作底座）
+sqlalchemy[asyncio]>=2.0.25

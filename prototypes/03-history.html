@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RedMuse - 历史任务</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #FAFAF8; min-height: 100vh; display: flex; color: #2D2A26; }
+.sidebar { width: 260px; background: #FFFFFF; border-right: 1px solid #F0EEEB; display: flex; flex-direction: column; flex-shrink: 0; height: 100vh; position: sticky; top: 0; }
+.sidebar-header { padding: 20px 20px 16px; border-bottom: 1px solid #F0EEEB; display: flex; align-items: center; gap: 12px; }
+.sidebar-logo { width: 36px; height: 36px; background: #FF4757; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 16px; }
+.sidebar-brand { font-size: 17px; font-weight: 700; }
+.sidebar-nav { flex: 1; padding: 12px 10px; }
+.nav-item { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 10px; font-size: 14px; color: #5A5550; cursor: pointer; margin-bottom: 2px; }
+.nav-item:hover { background: #F5F3F0; }
+.nav-item.active { background: #FFF0EE; color: #FF4757; font-weight: 600; }
+.nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
+.nav-divider { height: 1px; background: #F0EEEB; margin: 8px 14px; }
+.nav-label { padding: 8px 14px 6px; font-size: 11px; font-weight: 600; color: #A8A4A0; letter-spacing: 0.5px; }
+.sidebar-footer { padding: 16px; border-top: 1px solid #F0EEEB; }
+.user-info { display: flex; align-items: center; gap: 10px; padding: 8px; }
+.user-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #FFB8B0, #FF7A70); display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; font-weight: 600; }
+.user-name { font-size: 13px; font-weight: 600; }
+.user-role { font-size: 11px; color: #A8A4A0; }
+
+.main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.main-header { padding: 16px 32px; border-bottom: 1px solid #F0EEEB; background: #FFFFFF; display: flex; align-items: center; justify-content: space-between; }
+.page-title { font-size: 18px; font-weight: 700; }
+.main-content { flex: 1; overflow-y: auto; padding: 24px 32px; }
+
+.filter-bar { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+.filter-bar input { height: 38px; border: 1px solid #E8E5E0; border-radius: 8px; padding: 0 14px; font-size: 13px; width: 260px; outline: none; background: #FFFFFF; }
+.filter-bar input:focus { border-color: #FF4757; }
+.filter-bar select { height: 38px; border: 1px solid #E8E5E0; border-radius: 8px; padding: 0 12px; font-size: 13px; background: #FFFFFF; outline: none; cursor: pointer; }
+
+.task-list { display: flex; flex-direction: column; gap: 12px; }
+.task-card { background: #FFFFFF; border: 1px solid #F0EEEB; border-radius: 12px; padding: 20px 24px; display: flex; align-items: center; gap: 20px; cursor: pointer; transition: all 0.15s; }
+.task-card:hover { border-color: #FFD6CC; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+.task-status { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.task-status.success { background: #3D8C40; }
+.task-status.running { background: #E8A84C; animation: pulse 1.5s infinite; }
+.task-status.failed { background: #E04040; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+.task-info { flex: 1; }
+.task-keywords { font-size: 15px; font-weight: 600; margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+.task-keyword-tag { background: #FFF0EE; color: #FF4757; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.task-meta { font-size: 12px; color: #A8A4A0; display: flex; gap: 16px; }
+.task-stats { display: flex; gap: 20px; align-items: center; }
+.task-stat { text-align: center; }
+.task-stat-value { font-size: 16px; font-weight: 700; color: #2D2A26; }
+.task-stat-label { font-size: 11px; color: #A8A4A0; }
+.task-actions { display: flex; gap: 8px; }
+.btn-sm { padding: 6px 14px; border-radius: 6px; font-size: 12px; border: 1px solid #E8E5E0; background: transparent; color: #5A5550; cursor: pointer; }
+.btn-sm:hover { background: #F5F3F0; }
+.btn-sm.primary { background: #FF4757; color: white; border-color: #FF4757; }
+.btn-sm.primary:hover { background: #E8404F; }
+
+.empty-state { text-align: center; padding: 80px 0; color: #A8A4A0; }
+.empty-state svg { width: 64px; height: 64px; color: #D5D0CB; margin-bottom: 16px; }
+.empty-state p { font-size: 14px; }
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-header"><div class="sidebar-logo">R</div><span class="sidebar-brand">RedMuse</span></div>
+  <nav class="sidebar-nav">
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>分析工作台</div>
+    <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>历史任务</div>
+    <div class="nav-divider"></div>
+    <div class="nav-label">管理</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>知识库</div>
+  </nav>
+  <div class="sidebar-footer">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div class="user-info" style="flex:1;"><div class="user-avatar">小</div><div><div class="user-name">小红书用户</div><div class="user-role">普通用户</div></div></div>
+      <button title="系统设置" style="width:28px;height:28px;border-radius:7px;border:1px solid #E8E5E0;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#A8A4A0;flex-shrink:0;" onmouseover="this.style.background='#F5F3F0';this.style.color='#5A5550'" onmouseout="this.style.background='transparent';this.style.color='#A8A4A0'"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+  </div>
+</aside>
+
+<div class="main">
+  <div class="main-header"><div class="page-title">历史任务</div></div>
+  <div class="main-content">
+    <div class="filter-bar">
+      <input placeholder="搜索关键词..." />
+      <select><option>全部状态</option><option>已完成</option><option>分析中</option><option>失败</option></select>
+      <select><option>最近 7 天</option><option>最近 30 天</option><option>全部</option></select>
+    </div>
+
+    <div class="task-list">
+      <div class="task-card">
+        <div class="task-status success"></div>
+        <div class="task-info">
+          <div class="task-keywords"><span class="task-keyword-tag">奶油巧克力</span><span class="task-keyword-tag">巧克力甜品</span></div>
+          <div class="task-meta"><span>2026-04-15 14:23</span><span>耗时 23s</span><span>87 篇笔记</span></div>
+        </div>
+        <div class="task-stats">
+          <div class="task-stat"><div class="task-stat-value">92</div><div class="task-stat-label">爆文评分</div></div>
+          <div class="task-stat"><div class="task-stat-value">15.2k</div><div class="task-stat-label">平均互动</div></div>
+        </div>
+        <div class="task-actions">
+          <button class="btn-sm primary">查看结果</button>
+          <button class="btn-sm">导出</button>
+        </div>
+      </div>
+
+      <div class="task-card">
+        <div class="task-status success"></div>
+        <div class="task-info">
+          <div class="task-keywords"><span class="task-keyword-tag">防脱精华</span></div>
+          <div class="task-meta"><span>2026-04-14 10:15</span><span>耗时 45s</span><span>126 篇笔记</span></div>
+        </div>
+        <div class="task-stats">
+          <div class="task-stat"><div class="task-stat-value">85</div><div class="task-stat-label">爆文评分</div></div>
+          <div class="task-stat"><div class="task-stat-value">8.7k</div><div class="task-stat-label">平均互动</div></div>
+        </div>
+        <div class="task-actions">
+          <button class="btn-sm primary">查看结果</button>
+          <button class="btn-sm">导出</button>
+        </div>
+      </div>
+
+      <div class="task-card">
+        <div class="task-status running"></div>
+        <div class="task-info">
+          <div class="task-keywords"><span class="task-keyword-tag">露营装备</span><span class="task-keyword-tag">户外</span></div>
+          <div class="task-meta"><span>2026-04-15 14:30</span><span>进行中</span></div>
+        </div>
+        <div class="task-stats">
+          <div class="task-stat"><div class="task-stat-value">--</div><div class="task-stat-label">爆文评分</div></div>
+          <div class="task-stat"><div class="task-stat-value">42</div><div class="task-stat-label">已采集</div></div>
+        </div>
+        <div class="task-actions">
+          <button class="btn-sm">暂停</button>
+          <button class="btn-sm">取消</button>
+        </div>
+      </div>
+
+      <div class="task-card">
+        <div class="task-status failed"></div>
+        <div class="task-info">
+          <div class="task-keywords"><span class="task-keyword-tag">穿搭</span></div>
+          <div class="task-meta"><span>2026-04-13 16:42</span><span>失败: Cookie 已过期</span></div>
+        </div>
+        <div class="task-stats"></div>
+        <div class="task-actions">
+          <button class="btn-sm">重试</button>
+          <button class="btn-sm">删除</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,13 +1,41 @@
-version: '3.8'
+# RedMuse 基础设施编排（阶段 4.5 起主 Web 进程运行新后端）
+# 服务拓扑：
+#   nginx (对外 80/443)
+#     ├─ frontend         RedMuse Next.js 前端
+#     └─ spider-xhs       RedMuse FastAPI 新后端,挂 datas/ChromaDB 持久化
+#         ├─ redis        ARQ 队列 + L1 缓存 + SSE backlog + HTTP 幂等键
+#         └─ postgres     pgvector 笔记向量 + 业务表 + RAG knowledge_chunks
+#     └─ arq-worker      ARQ 后台队列 + cron 定时任务
+#
+# 本地/生产首版 Web 可以用 `docker compose up -d redis postgres spider-xhs frontend nginx`
+# 需要 ARQ worker 时使用 `docker compose --profile worker up -d`
 
 services:
+  # Next.js 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+    container_name: spider-xhs-frontend
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    restart: unless-stopped
+    networks:
+      - spider-network
+
   # 主应用服务
   spider-xhs:
     build: .
     container_name: spider-xhs-app
     # 不对外暴露端口，仅通过Nginx访问
     expose:
-      - "8000"
+      - "8100"
     volumes:
       # 数据持久化
       - ./datas:/app/datas
@@ -18,12 +46,107 @@ services:
       - .env
     environment:
       - PRODUCTION=true  # 生产模式：禁用热重载
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-redmuse}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-redmuse_dev}
+      - POSTGRES_DB=${POSTGRES_DB:-redmuse}
+      - BACKLOG_BACKEND=${BACKLOG_BACKEND:-redis}
+      - TASK_RUNNER=${TASK_RUNNER:-inprocess}        # 首版 ECS 部署默认 inprocess,稳定后可切 arq
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8100/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - spider-network
+
+  # ARQ 后台 worker（阶段 4.α 新增）
+  # 承载：队列任务(run_analysis_task / run_video_analysis)+ cron 定时(预热/巡检/清理/热词榜)
+  arq-worker:
+    profiles: ["worker"]
+    build: .
+    container_name: spider-xhs-arq-worker
+    command: ["python", "-m", "backend.app.infrastructure.queue.runner"]
+    volumes:
+      - ./datas:/app/datas
+      - ./logs:/app/logs
+      - ./viral_agent/storage/chromadb:/app/viral_agent/storage/chromadb
+    env_file:
+      - .env
+    environment:
+      - PRODUCTION=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-redmuse}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-redmuse_dev}
+      - POSTGRES_DB=${POSTGRES_DB:-redmuse}
+      - BACKLOG_BACKEND=${BACKLOG_BACKEND:-redis}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - spider-network
+
+  # Redis（阶段 4.α 新增）：ARQ 队列 broker + L1 热缓存 + SSE backlog
+  # 端口映射 127.0.0.1:6379 开发期方便 Navicat / RedisInsight 等工具连;
+  # 生产部署时如果不需要对外访问,可删除 ports 段,用 expose 即可。
+  redis:
+    image: redis:7-alpine
+    container_name: spider-xhs-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    expose:
+      - "6379"
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - spider-network
+
+  # PostgreSQL + pgvector：笔记向量、业务表、知识库 RAG 分块向量
+  # 端口映射 127.0.0.1:5432 开发期方便 Navicat 连接管理(只绑本机,不对外暴露)。
+  # 如果宿主机已经装了本地 PostgreSQL 占用 5432,可改为 "127.0.0.1:5433:5432"。
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: spider-xhs-postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-redmuse}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-redmuse_dev}
+      - POSTGRES_DB=${POSTGRES_DB:-redmuse}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # 初始化脚本：创建 pgvector extension + xhs_notes 表
+      - ./scripts/pg_init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - spider-network
 
@@ -41,10 +164,17 @@ services:
       # 启用HTTPS后取消注释下行，并放入证书文件
       # - ./nginx/ssl:/etc/nginx/ssl:ro
     depends_on:
-      - spider-xhs
+      spider-xhs:
+        condition: service_started
+      frontend:
+        condition: service_started
     restart: unless-stopped
     networks:
       - spider-network
+
+volumes:
+  redis-data:
+  postgres-data:
 
 networks:
   spider-network:

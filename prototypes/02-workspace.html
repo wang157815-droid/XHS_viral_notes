@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RedMuse - Canvas 工作台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #FAFAF8; min-height: 100vh; display: flex; color: #2D2A26; }
+
+/* ===== 侧边栏 ===== */
+.sidebar { width: 220px; background: #FFFFFF; border-right: 1px solid #F0EEEB; display: flex; flex-direction: column; flex-shrink: 0; height: 100vh; position: sticky; top: 0; }
+.sidebar-header { padding: 16px 16px 12px; border-bottom: 1px solid #F0EEEB; display: flex; align-items: center; gap: 10px; }
+.sidebar-logo { width: 32px; height: 32px; background: #FF4757; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 14px; }
+.sidebar-brand { font-size: 16px; font-weight: 700; }
+.sidebar-nav { flex: 1; padding: 10px 8px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 13px; color: #5A5550; cursor: pointer; margin-bottom: 2px; }
+.nav-item:hover { background: #F5F3F0; }
+.nav-item.active { background: #FFF0EE; color: #FF4757; font-weight: 600; }
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.nav-divider { height: 1px; background: #F0EEEB; margin: 6px 12px; }
+.nav-label { padding: 6px 12px 4px; font-size: 10px; font-weight: 600; color: #A8A4A0; letter-spacing: 0.5px; }
+.sidebar-footer { padding: 12px; border-top: 1px solid #F0EEEB; }
+.user-info { display: flex; align-items: center; gap: 8px; padding: 6px; }
+.user-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #FFB8B0, #FF7A70); display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 600; }
+.user-name { font-size: 12px; font-weight: 600; }
+.user-role { font-size: 10px; color: #A8A4A0; }
+.cookie-status { display: flex; align-items: center; gap: 5px; margin-top: 8px; padding: 5px 8px; border-radius: 6px; font-size: 11px; background: #F0FAF0; color: #3D8C40; }
+.cookie-dot { width: 5px; height: 5px; border-radius: 50%; background: #3D8C40; }
+
+/* ===== Canvas ===== */
+.canvas-main { flex: 1; display: flex; height: 100vh; overflow: hidden; }
+
+/* 对话区 */
+.chat-panel { width: 380px; border-right: 1px solid #F0EEEB; display: flex; flex-direction: column; background: #FFFFFF; flex-shrink: 0; transition: width 0.3s ease; }
+.canvas-main.canvas-collapsed .chat-panel { width: 100%; }
+.chat-header { padding: 14px 18px; border-bottom: 1px solid #F0EEEB; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; }
+.chat-header-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #F0FAF0; color: #3D8C40; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+.msg { display: flex; gap: 10px; }
+.msg.user { flex-direction: row-reverse; }
+.msg-avatar { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.msg-avatar.ai { background: #FFF0EE; color: #FF4757; }
+.msg-avatar.user { background: #F0EEEB; color: #5A5550; }
+.msg-content { max-width: 85%; }
+.msg-bubble { border-radius: 12px; padding: 12px 16px; font-size: 13px; line-height: 1.7; }
+.msg.ai .msg-bubble { background: #FAFAF8; border: 1px solid #F0EEEB; color: #2D2A26; }
+.msg.user .msg-bubble { background: #FFF5F3; border: 1px solid #FFE8E0; color: #2D2A26; }
+.msg-time { font-size: 10px; color: #A8A4A0; margin-top: 4px; }
+.msg.user .msg-time { text-align: right; }
+.agent-progress { background: #FAFAF8; border: 1px solid #F0EEEB; border-radius: 10px; padding: 12px 16px; margin-top: 10px; }
+.agent-step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #5A5550; padding: 3px 0; }
+.agent-step .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.agent-step .dot.done { background: #3D8C40; }
+.agent-step .dot.active { background: #E8A84C; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+
+.welcome-msg { text-align: center; padding: 40px 20px 20px; }
+.welcome-msg h3 { font-size: 16px; margin-bottom: 8px; }
+.welcome-msg p { font-size: 13px; color: #8A8580; line-height: 1.6; margin-bottom: 20px; }
+.suggestion-tags { display: flex; flex-direction: column; gap: 8px; }
+.suggestion-tag { padding: 10px 14px; border: 1px solid #F0EEEB; border-radius: 10px; font-size: 12px; color: #5A5550; cursor: pointer; text-align: left; background: #FAFAF8; transition: all 0.15s; line-height: 1.5; }
+.suggestion-tag:hover { border-color: #FFD6CC; background: #FFF8F5; }
+
+/* 高级配置 */
+.advanced-bar { padding: 0 18px; border-top: 1px solid #F0EEEB; }
+.adv-toggle { width: 100%; padding: 8px 0; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 11px; color: #A8A4A0; background: none; border: none; cursor: pointer; }
+.adv-toggle:hover { color: #5A5550; }
+.adv-toggle svg { width: 14px; height: 14px; transition: transform 0.2s; }
+.adv-toggle.open svg { transform: rotate(180deg); }
+.adv-opts { display: none; padding: 0 0 12px; }
+.adv-opts.show { display: block; }
+.adv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.adv-item { display: flex; flex-direction: column; gap: 4px; }
+.adv-label { font-size: 10px; font-weight: 600; color: #A8A4A0; }
+.adv-sel { height: 32px; border: 1px solid #E8E5E0; border-radius: 7px; padding: 0 10px; font-size: 12px; color: #2D2A26; background: #FAFAF8; outline: none; cursor: pointer; }
+.adv-sel:focus { border-color: #FF4757; }
+
+.chat-input-area { padding: 14px 18px; border-top: 1px solid #F0EEEB; }
+.chat-input-box { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input { flex: 1; border: 1.5px solid #E8E5E0; border-radius: 12px; padding: 10px 14px; font-size: 13px; outline: none; resize: none; min-height: 40px; max-height: 120px; font-family: inherit; line-height: 1.5; }
+.chat-input:focus { border-color: #FF4757; }
+.chat-input::placeholder { color: #B8B4B0; }
+.chat-send { width: 36px; height: 36px; border-radius: 10px; background: #FF4757; color: white; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.chat-send:hover { background: #E8404F; }
+.chat-send svg { width: 18px; height: 18px; }
+
+.canvas-toggle { width: 30px; height: 30px; border-radius: 8px; border: 1px solid #E8E5E0; background: #FFF; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #8A8580; flex-shrink: 0; }
+.canvas-toggle:hover { background: #F5F3F0; color: #5A5550; }
+.canvas-toggle svg { width: 16px; height: 16px; transition: transform 0.3s; }
+.canvas-main.canvas-collapsed .canvas-toggle svg { transform: rotate(180deg); }
+
+/* 画布区 */
+.canvas-panel { flex: 1; overflow-y: auto; padding: 24px 32px; background: #FAFAF8; transition: width 0.3s ease, opacity 0.3s ease, padding 0.3s ease; }
+.canvas-main.canvas-collapsed .canvas-panel { width: 0; padding: 0; opacity: 0; overflow: hidden; }
+.theme-bar { height: 3px; background: linear-gradient(90deg, #8B6914, #D4A574, #F5E6CC); }
+.canvas-header { margin: 20px 0 16px; display: flex; align-items: center; justify-content: space-between; }
+.canvas-title { font-size: 20px; font-weight: 700; }
+.canvas-meta { font-size: 12px; color: #A8A4A0; margin-top: 4px; }
+.canvas-actions { display: flex; gap: 8px; align-items: center; }
+.canvas-theme { font-size: 11px; padding: 4px 12px; border-radius: 6px; background: #FFF8F0; color: #8B6914; border: 1px solid #F5E6CC; }
+.btn-exp { padding: 7px 14px; border-radius: 8px; font-size: 12px; border: 1px solid #E8E5E0; background: #FFF; color: #5A5550; cursor: pointer; }
+.btn-exp:hover { background: #F5F3F0; }
+.btn-exp.primary { background: #FF4757; color: white; border-color: #FF4757; }
+.btn-exp.primary:hover { background: #E8404F; }
+
+/* 维度标签条 */
+.dim-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+.dim-tag { padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid; cursor: default; }
+.dim-tag.on { background: #FFF0EE; color: #FF4757; border-color: #FFD6CC; }
+.dim-tag.off { background: #F5F3F0; color: #A8A4A0; border-color: #E8E5E0; text-decoration: line-through; }
+.dim-tag.focus { background: #FF4757; color: white; border-color: #FF4757; }
+
+/* 层级 */
+.layer-label { font-size: 11px; font-weight: 700; color: #A8A4A0; letter-spacing: 0.5px; margin: 24px 0 10px; padding-left: 4px; }
+
+/* 模块卡片 */
+.mod { background: #FFF; border: 1px solid #F0EEEB; border-radius: 14px; margin-bottom: 12px; overflow: hidden; }
+.mod.highlighted { border-color: #FFD6CC; box-shadow: 0 0 0 2px rgba(255,71,87,0.06); }
+.mod-head { padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+.mod-head:hover { background: #FAFAF8; }
+.mod-left { display: flex; align-items: center; gap: 10px; }
+.mod-icon { width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.mod-title { font-size: 13px; font-weight: 700; }
+.mod-badge { font-size: 10px; padding: 2px 8px; border-radius: 4px; margin-left: 6px; }
+.mod-summary { font-size: 11px; color: #8A8580; margin-left: 36px; margin-top: -2px; padding-bottom: 10px; padding-left: 18px; padding-right: 18px; line-height: 1.5; }
+.mod-acts { display: flex; gap: 5px; }
+.mod-btn { padding: 3px 10px; border-radius: 5px; font-size: 10px; border: 1px solid #E8E5E0; background: transparent; color: #8A8580; cursor: pointer; }
+.mod-btn:hover { background: #F5F3F0; color: #5A5550; }
+.mod-chevron { color: #C5C0BA; font-size: 16px; transition: transform 0.2s; margin-left: 4px; }
+.mod.open .mod-chevron { transform: rotate(90deg); }
+.mod-body { display: none; padding: 0 18px 18px; font-size: 13px; line-height: 1.8; color: #3E3A36; }
+.mod.open .mod-body { display: block; }
+.mod-body p { margin-bottom: 6px; }
+.mod-body strong { color: #2D2A26; }
+.mod-body ul { padding-left: 18px; line-height: 2; }
+
+/* 案例 */
+.case { border: 1px solid #F0EEEB; border-radius: 8px; padding: 12px 14px; margin-top: 8px; }
+.case-t { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+.case-m { font-size: 10px; color: #A8A4A0; display: flex; gap: 10px; margin-bottom: 4px; }
+.case-d { font-size: 11px; color: #5A5550; line-height: 1.5; }
+
+/* 数据 */
+.dtable { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.dtable th { text-align: left; padding: 7px 10px; font-size: 10px; font-weight: 600; color: #8A8580; border-bottom: 1px solid #F0EEEB; }
+.dtable td { padding: 9px 10px; font-size: 12px; border-bottom: 1px solid #F5F3F0; }
+.disclaimer { font-size: 11px; color: #A8A4A0; background: #FAFAF8; border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; border-left: 3px solid #E8E5E0; }
+
+.ic { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+.ic-r { background: #FFF0EE; color: #FF4757; }
+.ic-g { background: #F0FAF0; color: #3D8C40; }
+.ic-a { background: #FFF8E6; color: #8B6914; }
+.tag-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.kw-tag { padding: 3px 10px; border-radius: 5px; font-size: 11px; background: #FFF8F0; color: #8B6914; border: 1px solid #F5E6CC; }
+
+/* ===== 可编辑段落 ===== */
+.editable {
+  position: relative;
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background 0.15s, box-shadow 0.15s;
+  cursor: text;
+}
+.editable:hover { background: #FFF8F5; }
+.editable:focus {
+  outline: none;
+  background: #FFFFFF;
+  box-shadow: 0 0 0 2px rgba(255, 71, 87, 0.15);
+}
+.editable.edited {
+  border-left: 2px solid #E8A84C;
+  padding-left: 8px;
+  margin-left: -8px;
+}
+.edit-hint {
+  display: none;
+  position: absolute;
+  top: -20px;
+  right: 0;
+  font-size: 9px;
+  color: #A8A4A0;
+  background: #FFFFFF;
+  border: 1px solid #F0EEEB;
+  border-radius: 4px;
+  padding: 1px 6px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.editable:hover .edit-hint { display: block; }
+.editable:focus .edit-hint { display: block; color: #FF4757; border-color: #FFD6CC; }
+
+/* ===== 段落操作条 ===== */
+.para-actions {
+  display: none;
+  position: absolute;
+  top: 50%;
+  right: -70px;
+  transform: translateY(-50%);
+  flex-direction: column;
+  gap: 3px;
+  z-index: 2;
+}
+.editable:hover .para-actions,
+.editable:focus .para-actions { display: flex; }
+.para-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid #E8E5E0;
+  background: #FFFFFF;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #A8A4A0;
+  font-size: 12px;
+  transition: all 0.12s;
+}
+.para-btn:hover { background: #F5F3F0; color: #5A5550; }
+.para-btn.like:hover { color: #3D8C40; background: #F0FAF0; border-color: #3D8C40; }
+.para-btn.dislike:hover { color: #E04040; background: #FFF0EE; border-color: #E04040; }
+.para-btn.del:hover { color: #E04040; background: #FFF0EE; border-color: #E04040; }
+.para-btn.liked { color: #3D8C40; background: #F0FAF0; border-color: #3D8C40; }
+.para-btn.disliked { color: #E04040; background: #FFF0EE; border-color: #E04040; }
+
+/* ===== 模块删除按钮 ===== */
+.mod-del {
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 10px;
+  border: 1px solid #E8E5E0;
+  background: transparent;
+  color: #A8A4A0;
+  cursor: pointer;
+}
+.mod-del:hover { color: #E04040; border-color: #FFD6CC; background: #FFF5F3; }
+
+/* ===== 已标注状态 ===== */
+.para-flagged {
+  background: #FFF8E6;
+  border-left: 2px solid #E8A84C;
+  padding-left: 8px;
+  margin-left: -8px;
+  border-radius: 4px;
+}
+.para-approved {
+  background: #F0FAF0;
+  border-left: 2px solid #3D8C40;
+  padding-left: 8px;
+  margin-left: -8px;
+  border-radius: 4px;
+}
+</style>
+</head>
+<body>
+
+<!-- 侧边栏 -->
+<aside class="sidebar">
+  <div class="sidebar-header"><div class="sidebar-logo">R</div><span class="sidebar-brand">RedMuse</span></div>
+  <div style="padding: 8px 8px 0;">
+    <button onclick="newAnalysis()" style="width:100%;padding:9px 0;border-radius:8px;border:1.5px dashed #FFD6CC;background:#FFF8F5;color:#FF4757;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all 0.15s;" onmouseover="this.style.background='#FFF0EE';this.style.borderStyle='solid'" onmouseout="this.style.background='#FFF8F5';this.style.borderStyle='dashed'">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      新建分析
+    </button>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>分析工作台</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>历史任务</div>
+    <div class="nav-divider"></div><div class="nav-label">管理</div>
+    <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>知识库</div>
+  </nav>
+  <div class="sidebar-footer">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div class="user-info" style="flex:1;">
+        <div class="user-avatar">小</div>
+        <div><div class="user-name">小红书用户</div><div class="user-role">普通用户</div></div>
+      </div>
+      <button onclick="alert('跳转到系统设置页')" title="系统设置" style="width:28px;height:28px;border-radius:7px;border:1px solid #E8E5E0;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#A8A4A0;flex-shrink:0;transition:all 0.15s;" onmouseover="this.style.background='#F5F3F0';this.style.color='#5A5550'" onmouseout="this.style.background='transparent';this.style.color='#A8A4A0'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <div class="cookie-status"><span class="cookie-dot"></span>Cookie 有效</div>
+  </div>
+</aside>
+
+<div class="canvas-main canvas-collapsed">
+
+<!-- 对话区 -->
+<div class="chat-panel">
+  <div class="chat-header">
+    <span>对话</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="newAnalysisBtn" onclick="newAnalysis()" style="display:none;padding:4px 10px;border-radius:6px;border:1px solid #E8E5E0;background:transparent;color:#8A8580;font-size:11px;cursor:pointer;" onmouseover="this.style.background='#F5F3F0';this.style.color='#5A5550'" onmouseout="this.style.background='transparent';this.style.color='#8A8580'">+ 新建</button>
+      <span class="chat-header-badge" id="chatBadge" style="display:none;">已完成</span>
+      <button class="canvas-toggle" onclick="toggleCanvas()" title="收起/展开画布"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6M9 21h6M3 9v6M21 9v6M9 9h6v6H9z"/></svg></button>
+    </div>
+  </div>
+  <div class="chat-messages">
+    <!-- 欢迎引导 -->
+    <div id="chatWelcome">
+      <div class="welcome-msg">
+        <div style="width:48px;height:48px;background:linear-gradient(135deg,#FFE8E0,#FFD6CC);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF4757" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg></div>
+        <h3>告诉我你想分析什么</h3>
+        <p>描述你关注的品类、品牌或内容方向，<br>我会自动完成数据采集、多维洞察和爆文模型生成。</p>
+      </div>
+      <div class="suggestion-tags">
+        <div class="suggestion-tag" onclick="startDemo('分析「防脱精华」的爆文标题套路，重点看情绪钩子和数字用法')">分析「防脱精华」的爆文标题套路，重点看情绪钩子和数字用法</div>
+        <div class="suggestion-tag" onclick="startDemo('帮我研究「奶油巧克力」品类的爆款内容结构，重点看标题和产品植入')">帮我研究「奶油巧克力」品类的爆款内容结构，重点看标题和产品植入</div>
+        <div class="suggestion-tag" onclick="startDemo('对比「完美日记」和「花西子」在小红书的爆文策略差异')">对比「完美日记」和「花西子」在小红书的爆文策略差异</div>
+      </div>
+    </div>
+    <!-- 对话内容 -->
+    <div id="chatConvo" style="display:none;">
+      <div class="msg user"><div class="msg-avatar user">我</div><div class="msg-content"><div class="msg-bubble" id="firstMsg">帮我研究「奶油巧克力」品类的爆款内容结构，重点看标题和产品植入</div><div class="msg-time">14:23</div></div></div>
+      <div class="msg ai"><div class="msg-avatar ai">R</div><div class="msg-content">
+        <div class="msg-bubble">好的，我已理解你的需求：<br><br><strong>关键词：</strong>奶油巧克力、巧克力甜品<br><strong>重点维度：</strong>标题策略、产品植入<br><strong>默认包含：</strong>行业洞察、内容结构、封面视觉、检查清单<br><br>正在启动分析流程...</div>
+        <div class="agent-progress">
+          <div class="agent-step"><span class="dot done"></span>意图解析 · 提取 2 个关键词，聚焦标题+产品维度</div>
+          <div class="agent-step"><span class="dot done"></span>数据采集 · 87 篇笔记（基础库 52 + 实时 35）</div>
+          <div class="agent-step"><span class="dot done"></span>三维洞察 · 行业/竞品/本品分析完成</div>
+          <div class="agent-step"><span class="dot done"></span>知识库检索 · 匹配巧克力/糖果领域 18 条规则</div>
+          <div class="agent-step"><span class="dot done"></span>标题特征分析 · 长度/高频词/模式提取</div>
+          <div class="agent-step"><span class="dot done"></span>产品植入分析 · 时机/策略/切入方式</div>
+          <div class="agent-step"><span class="dot done"></span>封面与内容分析</div>
+          <div class="agent-step"><span class="dot done"></span>爆文模型生成 · 含视觉主题</div>
+          <div class="agent-step"><span class="dot active"></span>视频深度分析（异步，不影响结果查看）</div>
+        </div>
+        <div class="msg-time">14:23 — 14:46</div>
+      </div></div>
+      <div class="msg ai"><div class="msg-avatar ai">R</div><div class="msg-content"><div class="msg-bubble">分析完成，右侧画布已生成。<br><br>根据你的需求，<strong>标题策略</strong>和<strong>产品植入</strong>模块已自动展开详情，其他维度以摘要形式折叠。<br><br>你可以继续调整：<br>· "展开封面分析的详情"<br>· "加上竞品XX的对比"<br>· "我不需要视频分析，去掉"<br>· "导出 Excel"</div><div class="msg-time">14:46</div></div></div>
+    </div>
+  </div>
+  <!-- 高级配置 -->
+  <div class="advanced-bar">
+    <button class="adv-toggle" id="advBtn" onclick="toggleAdv()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 9l-7 7-7-7"/></svg>高级配置</button>
+    <div class="adv-opts" id="advOpts">
+      <div class="adv-grid">
+        <div class="adv-item"><span class="adv-label">笔记类型</span><select class="adv-sel"><option>不限</option><option>视频</option><option>图文</option></select></div>
+        <div class="adv-item"><span class="adv-label">时间范围</span><select class="adv-sel"><option>不限</option><option>一天内</option><option>一周内</option><option>半年内</option></select></div>
+        <div class="adv-item"><span class="adv-label">采集数量</span><select class="adv-sel"><option>100</option><option>200</option><option>500</option></select></div>
+        <div class="adv-item"><span class="adv-label">爆款比例</span><select class="adv-sel"><option>前50%</option><option>前30%</option><option>前20%</option></select></div>
+      </div>
+    </div>
+  </div>
+  <div class="chat-input-area"><div class="chat-input-box"><textarea class="chat-input" placeholder="描述你想分析的品类或品牌..." rows="1"></textarea><button class="chat-send" onclick="handleSend()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 5l7 7-7 7M5 12h14"/></svg></button></div></div>
+</div>
+
+<!-- 画布区 -->
+<div class="canvas-panel">
+<div class="theme-bar"></div>
+<div class="canvas-header">
+  <div><div class="canvas-title">爆文洞察与框架 · 奶油巧克力</div><div class="canvas-meta">87 篇笔记 · 耗时 23s · 基础库+实时采集 · 聚焦：标题策略、产品植入</div></div>
+  <div class="canvas-actions"><span class="canvas-theme">主题: 奶油暖调</span><button class="btn-exp primary">导出 Excel</button><button class="btn-exp">导出 JSON</button></div>
+</div>
+
+<!-- 当前激活维度 -->
+<div class="dim-bar">
+  <span class="dim-tag focus">标题策略</span>
+  <span class="dim-tag focus">产品植入</span>
+  <span class="dim-tag on">成功模式</span>
+  <span class="dim-tag on">内容结构</span>
+  <span class="dim-tag on">封面视觉</span>
+  <span class="dim-tag on">行业洞察</span>
+  <span class="dim-tag on">竞品洞察</span>
+  <span class="dim-tag on">场景分析</span>
+  <span class="dim-tag on">检查清单</span>
+  <span class="dim-tag off">视频分析</span>
+</div>
+
+<!-- LAYER 1 爆文模型框架 -->
+<div class="layer-label">LAYER 1 · 爆文模型框架</div>
+
+<!-- 成功模式总结 -->
+<div class="mod open"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF0EE;color:#FF4757;">S</div><div class="mod-title">成功模式总结</div><span class="mod-badge ic-a">AI 综合推理</span></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-body"><p>巧克力品类爆文的核心成功模式是<strong>"感官轰炸+低门槛承诺"</strong>。73%的头部爆文在标题中使用感官描述词，配合"不用烤箱""零失败"等降低行动门槛的表达。教程类内容的收藏量是种草类的 1.8 倍，说明用户更偏好可复制的实用内容。产品植入在正文中段（第 2-3 段）的互动率比开头直接提及高 35%。</p></div></div>
+
+<!-- 标题策略（重点，展开，可编辑） -->
+<div class="mod open highlighted" id="mod-title-strategy"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF8F0;color:#8B6914;">T</div><div class="mod-title">标题策略</div><span class="mod-badge ic-r">重点维度</span><span class="mod-badge ic-a">3 结论 · 3 模板 · 5 关键词 · 2 案例</span></div><div class="mod-acts"><button class="mod-btn">重新生成</button><button class="mod-del" onclick="event.stopPropagation();delMod('mod-title-strategy')">删除</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-body" style="position:relative;">
+
+  <div class="editable" contenteditable="true" onfocus="onEditFocus(this)" onblur="onEditBlur(this)">
+    <span class="edit-hint">双击编辑</span>
+    <div class="para-actions">
+      <button class="para-btn like" onclick="event.stopPropagation();toggleAnnotation(this,'liked')" title="标记为优质">&#10003;</button>
+      <button class="para-btn dislike" onclick="event.stopPropagation();toggleAnnotation(this,'disliked')" title="标记待修正">&#10007;</button>
+      <button class="para-btn del" onclick="event.stopPropagation();delPara(this)" title="删除此段">&#8722;</button>
+    </div>
+    <p><strong>结论 1：</strong>感官描述词是最强钩子（73% 爆文使用"酥脆""浓郁""丝滑"等），平均互动高 2.4 倍</p>
+  </div>
+
+  <div class="editable" contenteditable="true" onfocus="onEditFocus(this)" onblur="onEditBlur(this)">
+    <span class="edit-hint">双击编辑</span>
+    <div class="para-actions">
+      <button class="para-btn like" onclick="event.stopPropagation();toggleAnnotation(this,'liked')" title="标记为优质">&#10003;</button>
+      <button class="para-btn dislike" onclick="event.stopPropagation();toggleAnnotation(this,'disliked')" title="标记待修正">&#10007;</button>
+      <button class="para-btn del" onclick="event.stopPropagation();delPara(this)" title="删除此段">&#8722;</button>
+    </div>
+    <p><strong>结论 2：</strong>数字承诺提升点击率（"6 款""28 天"等具体数字，CTR 高 18%）</p>
+  </div>
+
+  <div class="editable" contenteditable="true" onfocus="onEditFocus(this)" onblur="onEditBlur(this)">
+    <span class="edit-hint">双击编辑</span>
+    <div class="para-actions">
+      <button class="para-btn like" onclick="event.stopPropagation();toggleAnnotation(this,'liked')" title="标记为优质">&#10003;</button>
+      <button class="para-btn dislike" onclick="event.stopPropagation();toggleAnnotation(this,'disliked')" title="标记待修正">&#10007;</button>
+      <button class="para-btn del" onclick="event.stopPropagation();delPara(this)" title="删除此段">&#8722;</button>
+    </div>
+    <p><strong>结论 3：</strong>群体召唤创造归属感（"XX 控集合""XX 党必看"，收藏率高 22%）</p>
+  </div>
+
+  <div class="editable" contenteditable="true" onfocus="onEditFocus(this)" onblur="onEditBlur(this)">
+    <span class="edit-hint">双击编辑</span>
+    <p style="margin-top:12px;"><strong>推荐标题模板：</strong></p>
+    <p>· 感官形容词 + 核心产品 + 价值承诺</p>
+    <p>· 沉浸式 + 动作 + 产品 + 感叹评价</p>
+    <p>· XX控/党集合 + 核心主题 + 数量承诺</p>
+  </div>
+
+  <p style="margin-top:12px;"><strong>必含关键词：</strong></p>
+  <div class="tag-row"><span class="kw-tag">巧克力</span><span class="kw-tag">甜品</span><span class="kw-tag">配方</span><span class="kw-tag">手作</span><span class="kw-tag">零失败</span></div>
+  <p style="margin-top:12px;"><strong>标题特征数据：</strong>平均长度 14.2 字 · 10-20 字占比 75% · 含 emoji 率 68%</p>
+  <p><strong>高频模式：</strong>包含数字 42% · 包含疑问 18% · 包含省略号 25%</p>
+
+  <div class="case" style="position:relative;">
+    <button class="para-btn del" onclick="delPara(this)" title="删除此案例" style="position:absolute;top:8px;right:8px;">&#10007;</button>
+    <div class="case-t">案例：一口软糯！巧克力拉丝麻薯，不用烤箱</div><div class="case-m"><span>点赞 15,000</span><span>收藏 8,572</span><span>视频</span></div>
+    <div class="case-d editable" contenteditable="true" onfocus="onEditFocus(this)" onblur="onEditBlur(this)"><span class="edit-hint">双击编辑</span>"感官轰炸+低门槛承诺"公式。"一口软糯"触发味觉想象，"不用烤箱"降低门槛</div>
+  </div>
+  <div class="case" style="position:relative;">
+    <button class="para-btn del" onclick="delPara(this)" title="删除此案例" style="position:absolute;top:8px;right:8px;">&#10007;</button>
+    <div class="case-t">案例：巧克力控集合！6 款零失败甜品配方大公开</div><div class="case-m"><span>点赞 4,806</span><span>收藏 3,990</span><span>图文</span></div>
+    <div class="case-d editable" contenteditable="true" onfocus="onEditFocus(this)" onblur="onEditBlur(this)"><span class="edit-hint">双击编辑</span>"群体召唤+数字承诺"公式。"控集合"创造归属感，"6 款"提供数量预期</div>
+  </div>
+
+</div></div>
+
+<!-- 产品植入策略（重点，展开） -->
+<div class="mod open highlighted" id="mod-product"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF0EE;color:#FF4757;">P</div><div class="mod-title">产品植入策略</div><span class="mod-badge ic-r">重点维度</span><span class="mod-badge ic-a">3 结论 · 时机 · 场景 · 切入</span></div><div class="mod-acts"><button class="mod-btn">重新生成</button><button class="mod-del" onclick="event.stopPropagation();delMod('mod-product')">删除</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-body">
+  <p><strong>结论 1：</strong>中段植入互动率最高（正文第 2-3 段提及产品，比开头高 35%）</p>
+  <p><strong>结论 2：</strong>场景化引入优于硬广（"用的是XX巧克力，可可含量 70%"比"推荐XX产品"自然度高 2 倍）</p>
+  <p><strong>结论 3：</strong>成分/工艺背书是关键（标注"0 代可可脂""手工研磨"的笔记互动率高 28%）</p>
+  <p style="margin-top:12px;"><strong>产品引出时机：</strong>标题提及率 12% · 前 1/3 提及 28% · 中段提及 45% · 后段提及 15%</p>
+  <p><strong>三大最佳策略：</strong></p>
+  <p>1. 教程场景植入 — 在配方步骤中自然引出产品（适用率 42%）</p>
+  <p>2. 口感描述植入 — 通过感官体验带出产品卖点（适用率 31%）</p>
+  <p>3. 开箱展示植入 — 以拆箱/礼物场景引入（适用率 18%）</p>
+  <p style="margin-top:12px;"><strong>切入方式：</strong>软植入 72% · 硬植入 15% · 对比植入 8% · 故事化 5%</p>
+  <p><strong>时机指南：</strong>在标题或内容开头建立教程/测评场景后，第 2-3 段引入产品名称和核心卖点</p>
+  <p><strong>场景指南：</strong>优先教程场景和节日送礼场景，结合成分描述和场景化推荐</p>
+</div></div>
+
+<!-- 内容结构（折叠，显示摘要） -->
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#F0FAF0;color:#3D8C40;">C</div><div class="mod-title">内容结构策略</div><span class="mod-badge ic-g">3 结论 · 结构指南 · 钩子列表</span></div><div class="mod-acts"><button class="mod-btn">展开</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">开头钩子 → 材料清单 → 步骤详解 → 成品展示 → 小贴士 · 平均长度 250 字 · 含列表结构 62%</div>
+<div class="mod-body"><p><strong>结构指南：</strong>情感引入 → 材料清单 → 详细步骤 → 小贴士 → 互动呼吁</p><p><strong>钩子列表：</strong>"吃了甜食会开心！" / "手残党也能成功！" / "这个口感绝了！"</p><p><strong>内容长度分布：</strong>&lt;100字 占 12% · 100-300字 占 56% · 300-500字 占 24% · &gt;500字 占 8%</p><p><strong>高频词 TOP5：</strong>巧克力、配方、简单、教程、分享</p><p><strong>热门标签 TOP5：</strong>#甜品治愈一切 #在家做甜品 #烘焙配方 #巧克力 #美食制作</p></div></div>
+
+<!-- 封面视觉（折叠） -->
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF8F0;color:#8B6914;">V</div><div class="mod-title">封面与视觉策略</div><span class="mod-badge ic-a">色彩 · 布局 · OCR · 视觉指南</span></div><div class="mod-acts"><button class="mod-btn">展开</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">推荐配色：奶白+奶棕暖色系 · 真人出镜 100% · 产品图占比 0% · 文字占比建议 &lt;20%</div>
+<div class="mod-body"><p><strong>视觉指南：</strong>真人手持或品尝特写，背景温馨（厨房/下午茶场景）</p><p><strong>文字指南：</strong>封面文字率 45% · 平均 6.2 字 · 使用圆润字体</p><p><strong>色彩分析：</strong>主流暖色调 · 平均亮度 0.72 · 流行配色 TOP3：奶棕、米白、浅粉</p><p><strong>布局分析：</strong>拼图率 8% · 边框率 12% · 竖图为主 78%</p></div></div>
+
+<!-- 检查清单（折叠） -->
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#F5F3F0;color:#5A5550;">&#10003;</div><div class="mod-title">创作检查清单</div><span class="mod-badge" style="background:#F5F3F0;color:#8A8580;">8 项</span></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-body"><ul><li>标题 10-20 字且包含感官关键词？</li><li>开头 3 行有明确钩子？</li><li>配方/步骤清晰可操作？</li><li>产品在中段自然引出而非硬广？</li><li>封面突出巧克力质感且配色暖调？</li><li>结尾有互动引导（提问/投票）？</li><li>标签包含品类核心词？</li><li>整体风格符合社区原生感？</li></ul></div></div>
+
+<!-- 成功案例（折叠） -->
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF0EE;color:#FF4757;">E</div><div class="mod-title">成功案例参考</div><span class="mod-badge ic-r">TOP 5</span></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">最高互动 25,101 · 视频 2 篇 + 图文 3 篇</div>
+<div class="mod-body"><div class="case"><div class="case-t">一口软糯！巧克力拉丝麻薯</div><div class="case-m"><span>互动 25,101</span><span>视频</span></div></div><div class="case"><div class="case-t">沉浸式吃巧克力，声音好酥脆</div><div class="case-m"><span>互动 10,995</span><span>视频</span></div></div><div class="case"><div class="case-t">巧克力控集合！超全甜品配方</div><div class="case-m"><span>互动 8,822</span><span>图文</span></div></div></div></div>
+
+<!-- LAYER 2 多维洞察 -->
+<div class="layer-label">LAYER 2 · 多维洞察</div>
+
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#F0FAF0;color:#3D8C40;">I</div><div class="mod-title">行业洞察</div><span class="mod-badge ic-g">巧克力/甜品品类</span></div><div class="mod-acts"><button class="mod-btn">深入分析</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">品类热度环比 +18% · 教程类 42% 占主导 · "零失败""不用烤箱"为高频搜索词</div>
+<div class="mod-body"><p><strong>市场概况：</strong>近 30 天巧克力品类互动总量环比增长 18%，进入春季甜品消费旺季</p><p><strong>内容类型：</strong>教程 42% > 种草 28% > 测评 18% > 探店 12%</p><p><strong>场景分布：</strong>居家 56% · 办公 22% · 送礼 14% · 探店 8%</p><p><strong>用户偏好：</strong>"低门槛""零失败"是高频搜索词</p></div></div>
+
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF0EE;color:#FF4757;">B</div><div class="mod-title">竞品洞察</div><span class="mod-badge ic-r">品牌策略对比</span></div><div class="mod-acts"><button class="mod-btn">深入分析</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">食验室：健康零食定位 · 每日黑巧：减脂场景绑定 · 共性：场景化引入+成分背书</div>
+<div class="mod-body"><p><strong>食验室：</strong>主打"0 代可可脂""0 白砂糖"成分卖点，平均互动 4,600</p><p><strong>每日黑巧：</strong>与健身/减脂内容强绑定，平均互动 3,200</p><p><strong>共性规律：</strong>成功品牌均采用"场景化引入+成分背书"策略</p></div></div>
+
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#FFF8E6;color:#8B6914;">S</div><div class="mod-title">场景方向分析</div><span class="mod-badge ic-a">场景 · 方向 · 模板</span></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">推荐场景：居家 · 推荐方向：干货教程 · 高互动场景：居家（互动均值最高）</div>
+<div class="mod-body"><p><strong>场景分布：</strong>居家 56% · 办公 22% · 送礼 14% · 探店 8%</p><p><strong>方向分布：</strong>干货教程 42% · 好物合集 28% · 单品推荐 18% · 其他 12%</p><p><strong>场景模板：</strong>「居家」巧克力使用心得 / 居家场景下的巧克力推荐 / 「办公」巧克力使用心得</p></div></div>
+
+<!-- LAYER 3 原始数据 -->
+<div class="layer-label">LAYER 3 · 原始数据验证</div>
+
+<div class="mod"><div class="mod-head" onclick="togMod(this)"><div class="mod-left"><div class="mod-icon" style="background:#F5F3F0;color:#8A8580;">D</div><div class="mod-title">原始数据</div><span class="mod-badge" style="background:#F5F3F0;color:#8A8580;">87 篇 · 交叉验证</span></div><div class="mod-acts"><button class="mod-btn">展开全部</button></div><span class="mod-chevron">&#9656;</span></div>
+<div class="mod-summary">平均互动 12,382 · 视频 38% / 图文 62% · 最高互动 25,101</div>
+<div class="mod-body">
+  <div class="disclaimer">以下数据仅用于验证上述模型结论的可靠性，不建议直接用于内容创作。</div>
+  <table class="dtable"><thead><tr><th>标题</th><th>点赞</th><th>收藏</th><th>评论</th><th>类型</th><th>昵称</th></tr></thead><tbody>
+    <tr><td>一口软糯！巧克力拉丝麻薯</td><td>15,000</td><td>8,572</td><td>119</td><td><span class="ic ic-r">视频</span></td><td>Polaris的烘焙日记</td></tr>
+    <tr><td>沉浸式吃巧克力，声音好酥脆</td><td>6,596</td><td>4,090</td><td>142</td><td><span class="ic ic-r">视频</span></td><td>吃吃爱吃吃</td></tr>
+    <tr><td>巧克力控集合！超全甜品配方</td><td>4,806</td><td>3,990</td><td>26</td><td><span class="ic ic-g">图文</span></td><td>爱吃的看过来</td></tr>
+    <tr><td>这玩意根本吃不够啊</td><td>3,203</td><td>1,330</td><td>78</td><td><span class="ic ic-g">图文</span></td><td>食验室</td></tr>
+  </tbody></table>
+</div></div>
+
+</div><!-- canvas-panel end -->
+</div><!-- canvas-main end -->
+
+<script>
+function toggleCanvas(){document.querySelector('.canvas-main').classList.toggle('canvas-collapsed');}
+function toggleAdv(){document.getElementById('advOpts').classList.toggle('show');document.getElementById('advBtn').classList.toggle('open');}
+function togMod(el){el.closest('.mod').classList.toggle('open');}
+
+function onEditFocus(el){el.dataset.original=el.innerHTML;}
+function onEditBlur(el){if(el.innerHTML!==el.dataset.original){el.classList.add('edited');}}
+
+function toggleAnnotation(btn,cls){
+  var ed=btn.closest('.para-actions').parentElement;
+  var wasActive=btn.classList.contains(cls);
+  btn.parentElement.querySelectorAll('.para-btn').forEach(function(b){b.classList.remove('liked','disliked');});
+  ed.classList.remove('para-approved','para-flagged');
+  if(!wasActive){
+    btn.classList.add(cls);
+    if(cls==='liked') ed.classList.add('para-approved');
+    if(cls==='disliked') ed.classList.add('para-flagged');
+  }
+}
+
+function delPara(btn){
+  var target=btn.closest('.editable')||btn.closest('.case');
+  if(target&&confirm('确定删除这段内容？')){target.style.display='none';}
+}
+
+function delMod(id){
+  if(confirm('确定删除整个模块？删除后可通过对话指令重新生成。')){
+    document.getElementById(id).style.display='none';
+  }
+}
+function startDemo(t){document.getElementById('chatWelcome').style.display='none';document.getElementById('chatConvo').style.display='block';document.getElementById('chatBadge').style.display='inline-block';document.getElementById('newAnalysisBtn').style.display='inline-block';document.getElementById('firstMsg').textContent=t;document.querySelector('.canvas-main').classList.remove('canvas-collapsed');}
+function newAnalysis(){document.getElementById('chatWelcome').style.display='block';document.getElementById('chatConvo').style.display='none';document.getElementById('chatBadge').style.display='none';document.getElementById('newAnalysisBtn').style.display='none';document.querySelector('.canvas-main').classList.add('canvas-collapsed');document.querySelector('.chat-input').value='';}
+function handleSend(){var i=document.querySelector('.chat-input');var t=i.value.trim();if(!t)return;startDemo(t);i.value='';}
+document.querySelector('.chat-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}});
+</script>
+</body>
+</html>

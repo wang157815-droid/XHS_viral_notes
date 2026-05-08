@@ -46,11 +46,11 @@ COPY . .
 # 安装 Node.js 依赖（crypto-js 等，用于请求签名生成）
 RUN npm install
 
-# 爆文分析Web应用端口
-EXPOSE 8000
+# RedMuse 新后端端口
+EXPOSE 8100
 
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
 
-# 启动爆文分析Web应用
-CMD ["python", "viral_app.py"] 
+# 启动 RedMuse 新后端；旧 viral_app.py 仅保留维护 stub
+CMD ["python", "backend/run.py", "--no-reload", "--host", "0.0.0.0", "--port", "8100"]

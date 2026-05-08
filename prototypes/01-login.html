@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RedMuse - 小红书爆文分析 · 登录</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: #FBF8F5;
+  min-height: 100vh;
+  display: flex;
+  color: #2D2A26;
+}
+
+.login-left {
+  flex: 1;
+  background: linear-gradient(135deg, #FFF5F0 0%, #FFE8E0 50%, #FFD6CC 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 60px;
+  position: relative;
+  overflow: hidden;
+}
+.login-left::before {
+  content: '';
+  position: absolute;
+  top: -100px;
+  right: -100px;
+  width: 400px;
+  height: 400px;
+  background: rgba(255, 71, 87, 0.06);
+  border-radius: 50%;
+}
+.login-left::after {
+  content: '';
+  position: absolute;
+  bottom: -80px;
+  left: -80px;
+  width: 300px;
+  height: 300px;
+  background: rgba(255, 130, 100, 0.06);
+  border-radius: 50%;
+}
+.brand-area {
+  text-align: center;
+  z-index: 1;
+}
+.brand-logo {
+  width: 72px;
+  height: 72px;
+  background: #FF4757;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+  box-shadow: 0 8px 32px rgba(255, 71, 87, 0.25);
+}
+.brand-logo span {
+  color: white;
+  font-size: 32px;
+  font-weight: 700;
+}
+.brand-name {
+  font-size: 28px;
+  font-weight: 700;
+  color: #2D2A26;
+  margin-bottom: 12px;
+}
+.brand-desc {
+  font-size: 15px;
+  color: #8A8580;
+  line-height: 1.7;
+  max-width: 320px;
+}
+.feature-tags {
+  display: flex;
+  gap: 10px;
+  margin-top: 32px;
+  flex-wrap: wrap;
+  justify-content: center;
+  z-index: 1;
+}
+.feature-tag {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 71, 87, 0.12);
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: #5A5550;
+  backdrop-filter: blur(8px);
+}
+
+.login-right {
+  width: 520px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 60px;
+  background: #FFFFFF;
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+}
+.login-title {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: #2D2A26;
+}
+.login-subtitle {
+  font-size: 14px;
+  color: #8A8580;
+  margin-bottom: 40px;
+}
+
+.login-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 32px;
+  border-bottom: 2px solid #F0EEEB;
+}
+.login-tab {
+  flex: 1;
+  text-align: center;
+  padding: 12px 0;
+  font-size: 15px;
+  color: #8A8580;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s;
+}
+.login-tab.active {
+  color: #FF4757;
+  border-bottom-color: #FF4757;
+  font-weight: 600;
+}
+
+.qr-section {
+  text-align: center;
+  padding: 20px 0;
+}
+.qr-box {
+  width: 220px;
+  height: 220px;
+  margin: 0 auto 20px;
+  background: #FAFAF8;
+  border: 2px dashed #E8E5E0;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.qr-placeholder {
+  width: 160px;
+  height: 160px;
+  background: linear-gradient(135deg, #F5F3F0 0%, #EBE8E4 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.qr-placeholder svg {
+  width: 64px;
+  height: 64px;
+  color: #C5C0BA;
+}
+.qr-tip {
+  font-size: 14px;
+  color: #5A5550;
+  margin-bottom: 6px;
+}
+.qr-tip-sub {
+  font-size: 12px;
+  color: #A8A4A0;
+}
+.qr-status {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #8A8580;
+}
+.qr-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #E8A84C;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.phone-section {
+  display: none;
+  padding: 20px 0;
+}
+.form-group {
+  margin-bottom: 20px;
+}
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5A5550;
+  margin-bottom: 8px;
+}
+.form-input {
+  width: 100%;
+  height: 48px;
+  border: 1.5px solid #E8E5E0;
+  border-radius: 12px;
+  padding: 0 16px;
+  font-size: 15px;
+  color: #2D2A26;
+  background: #FAFAF8;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-input:focus {
+  border-color: #FF4757;
+  background: #FFFFFF;
+}
+.form-input-group {
+  display: flex;
+  gap: 12px;
+}
+.form-input-group .form-input {
+  flex: 1;
+}
+.sms-btn {
+  height: 48px;
+  padding: 0 20px;
+  background: #FFF0EE;
+  color: #FF4757;
+  border: 1.5px solid #FFD6CC;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.sms-btn:hover {
+  background: #FFE8E4;
+}
+.login-btn {
+  width: 100%;
+  height: 50px;
+  background: #FF4757;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 8px;
+}
+.login-btn:hover {
+  background: #E8404F;
+  box-shadow: 0 4px 16px rgba(255, 71, 87, 0.3);
+}
+
+.login-footer {
+  margin-top: 40px;
+  text-align: center;
+  font-size: 12px;
+  color: #A8A4A0;
+  line-height: 1.8;
+}
+.login-footer a {
+  color: #FF4757;
+  text-decoration: none;
+}
+
+@media (max-width: 960px) {
+  body { flex-direction: column; }
+  .login-left { padding: 40px 20px; min-height: 240px; }
+  .login-right { width: 100%; padding: 40px 20px; }
+}
+</style>
+</head>
+<body>
+
+<div class="login-left">
+  <div class="brand-area">
+    <div class="brand-logo"><span>R</span></div>
+    <div class="brand-name">RedMuse</div>
+    <div class="brand-desc">
+      智能分析小红书爆款笔记<br>
+      一句话生成专属爆文创作模型
+    </div>
+  </div>
+  <div class="feature-tags">
+    <span class="feature-tag">AI 深度分析</span>
+    <span class="feature-tag">多模态理解</span>
+    <span class="feature-tag">智能爆文模型</span>
+    <span class="feature-tag">自然语言交互</span>
+  </div>
+</div>
+
+<div class="login-right">
+  <div class="login-card">
+    <div class="login-title">欢迎使用 RedMuse</div>
+    <div class="login-subtitle">使用小红书账号登录，即刻开始分析</div>
+
+    <div class="login-tabs">
+      <div class="login-tab active" onclick="switchTab('qr')">扫码登录</div>
+      <div class="login-tab" onclick="switchTab('phone')">手机号登录</div>
+    </div>
+
+    <div class="qr-section" id="qrSection">
+      <div class="qr-box">
+        <div class="qr-placeholder">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="7" height="7" rx="1"/>
+            <rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/>
+            <rect x="14" y="14" width="3" height="3"/>
+            <rect x="18" y="14" width="3" height="3"/>
+            <rect x="14" y="18" width="3" height="3"/>
+            <rect x="18" y="18" width="3" height="3"/>
+          </svg>
+        </div>
+      </div>
+      <div class="qr-tip">打开小红书 APP 扫描二维码</div>
+      <div class="qr-tip-sub">扫码后请在手机上确认登录</div>
+      <div class="qr-status">
+        <span class="qr-status-dot"></span>
+        等待扫码中...
+      </div>
+    </div>
+
+    <div class="phone-section" id="phoneSection">
+      <div class="form-group">
+        <label class="form-label">手机号</label>
+        <input class="form-input" type="tel" placeholder="请输入小红书绑定手机号">
+      </div>
+      <div class="form-group">
+        <label class="form-label">验证码</label>
+        <div class="form-input-group">
+          <input class="form-input" type="text" placeholder="请输入验证码" maxlength="6">
+          <button class="sms-btn">获取验证码</button>
+        </div>
+      </div>
+      <button class="login-btn">登录</button>
+    </div>
+
+    <div class="login-footer">
+      登录即表示同意 <a href="#">服务协议</a> 和 <a href="#">隐私政策</a><br>
+      仅用于获取分析所需的访问凭证，不会发布任何内容
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(type) {
+  document.querySelectorAll('.login-tab').forEach((t, i) => {
+    t.classList.toggle('active', (type === 'qr' && i === 0) || (type === 'phone' && i === 1));
+  });
+  document.getElementById('qrSection').style.display = type === 'qr' ? 'block' : 'none';
+  document.getElementById('phoneSection').style.display = type === 'phone' ? 'block' : 'none';
+}
+</script>
+</body>
+</html>
