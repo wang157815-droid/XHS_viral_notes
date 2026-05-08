@@ -115,23 +115,39 @@ class CookieHealthService:
 
     @staticmethod
     def _resolve_username(current_user: Optional[dict]) -> str:
-        """按与用户 Cookie 存储路径一致的逻辑解析目录名。
+        """解析 cookie 文件所在的目录名（``datas/users/<dirname>/cookies.json``）。
 
-        必须与 ``crawler_agent._resolve_cookies_str`` 对齐：
-        Cookie 文件写在 ``datas/users/<username>/cookies.json``，
-        其中 ``username`` 来自 IdentityStore（形如 ``xhs_<小红书 user_id>``）。
+        优先级（Phase 1）：
 
-        JWT 里 ``username`` 可能为空（旧 Token 或未写入 claim），
-        若此时误回退 ``admin``，会找不到文件 → 前端长期显示「Cookie 过期 · 0 天」，
-        而后台采集仍能从正确路径读到 Cookie。
+        1. JWT 中以 ``u_`` 开头的 RedMuse ``user_id`` →
+           :class:`XhsCredentialStore` 查 ``cookies_path`` → 抽取目录名
+        2. 旧 XHS user_id → ``IdentityStore`` 查 username
+        3. JWT 中明文 ``username``（兼容旧 token；RedMuse 的 username 也允许，
+           只要项目里碰巧有同名目录即可——通常用于 admin）
+        4. 最后回退 ``admin``（开发场景兜底；生产应通过 XhsCredentialStore 绑定）
         """
         cu = current_user or {}
-        direct = str(cu.get("username") or "").strip()
-        if direct:
-            return direct
-
         user_id = str(cu.get("user_id") or "").strip()
-        if user_id:
+
+        # 1. RedMuse 用户：通过 XhsCredentialStore 找 cookies_path
+        if user_id.startswith("u_"):
+            try:
+                from .xhs_auth import get_credential_store
+
+                cred = get_credential_store().get_by_redmuse_user_id(user_id)
+                if cred and cred.cookies_path:
+                    parts = Path(cred.cookies_path).parts
+                    if "users" in parts:
+                        idx = parts.index("users")
+                        if idx + 1 < len(parts):
+                            return parts[idx + 1]
+            except Exception as exc:
+                logger.debug(
+                    f"Cookie 健康检查按 RedMuse user_id 解析失败 ({user_id}): {exc}"
+                )
+
+        # 2. 兼容旧 XHS user_id（identity_store）
+        if user_id and not user_id.startswith("u_"):
             try:
                 from .identity_store import get_identity_store
 
@@ -141,8 +157,16 @@ class CookieHealthService:
                     if name:
                         return name
             except Exception as exc:
-                logger.debug(f"Cookie 健康检查按 user_id 解析用户名失败 ({user_id}): {exc}")
+                logger.debug(
+                    f"Cookie 健康检查按 XHS user_id 解析用户名失败 ({user_id}): {exc}"
+                )
 
+        # 3. JWT 明文 username（旧 token 或开发环境）
+        direct = str(cu.get("username") or "").strip()
+        if direct:
+            return direct
+
+        # 4. 兜底
         return "admin"
 
     @staticmethod

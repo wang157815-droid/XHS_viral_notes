@@ -2380,64 +2380,22 @@ def _resolve_owner_user_id(task_id: str) -> str:
 
 
 def _resolve_cookies_str(owner_user_id: str) -> str:
-    """按优先级查找可用 cookie。
+    """按优先级查找可用 cookie（Phase 1 重构：委托 XhsCredentialResolver）。
 
-    顺序：
-    1. datas/users/<owner_username>/cookies.json
-    2. datas/users/admin/cookies.json
-    3. 环境变量 XHS_COOKIES_OVERRIDE（专用最高优先级，如设置则直接使用）
-    4. 环境变量 COOKIES / COOKIE（兼容旧 viral_app 的 .env 配置）
+    顺序（详见 :mod:`backend.app.services.xhs_auth.credential_resolver`）：
 
-    强烈建议：如果扫码流程生成的 cookie 被小红书风控，
-    直接从真实 Chrome 浏览器 DevTools 复制 cookie 到 .env 的 COOKIES=...，即可自动兜底。
+    1. ``XHS_COOKIES_OVERRIDE`` 环境变量
+    2. :class:`XhsCredentialStore` 中按 RedMuse ``user_id`` 命中的记录
+    3. 兼容旧 XHS user_id（identity_store 反查 username）
+    4. ``ALLOW_ADMIN_COOKIE_FALLBACK=true`` 时回退 admin
+    5. ``COOKIES`` / ``COOKIE`` 环境变量
+
+    返回结构化结果只保留 cookie 字符串，调用方维持原签名不变。
     """
-    repo_root = Path(__file__).resolve().parents[4]
+    from ...services.xhs_auth import get_credential_resolver
 
-    # 1. 强制覆盖（调试 / 应急用）
-    override = (os.getenv("XHS_COOKIES_OVERRIDE") or "").strip()
-    if override:
-        return override
-
-    # 2+3. 用户目录 / admin 目录（admin 回退必须显式开启，避免多用户 Cookie 串号）
-    username: Optional[str] = None
-    if owner_user_id:
-        try:
-            from ...services.identity_store import get_identity_store
-
-            record = get_identity_store().get(owner_user_id)
-            if record:
-                username = record.get("username")
-        except Exception:
-            username = None
-
-    candidates: List[str] = []
-    if username:
-        candidates.append(username)
-    allow_admin_fallback = os.getenv("ALLOW_ADMIN_COOKIE_FALLBACK", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    if allow_admin_fallback and "admin" not in candidates:
-        candidates.append("admin")
-
-    for name in candidates:
-        path = repo_root / "datas" / "users" / name / "cookies.json"
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        cookie = payload.get("cookie")
-        if isinstance(cookie, str) and cookie.strip():
-            return cookie
-
-    # 4. 环境变量兜底（兼容旧 viral_app 配置）
-    for key in ("COOKIES", "COOKIE"):
-        v = (os.getenv(key) or "").strip()
-        # 过滤 .env.example 里的占位符
-        if v and "xxx" not in v.lower():
-            return v
+    resolved = get_credential_resolver().resolve(owner_user_id)
+    if resolved.found:
+        return resolved.cookies_str
 
     return ""

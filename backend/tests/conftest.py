@@ -106,3 +106,35 @@ def isolate_redmuse_user_store(tmp_path_factory, monkeypatch):
     isolated = mod.RedMuseUserStore(store_file=str(tmp_dir / "users.json"))
     monkeypatch.setattr(mod, "_default_store", isolated, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_xhs_credential_store(tmp_path_factory, monkeypatch):
+    """Phase 1: 隔离 XhsCredentialStore，避免测试改写真实
+    ``datas/redmuse_auth/xhs_credentials.json``。
+    """
+    try:
+        from backend.app.services.xhs_auth import credential_store as mod
+    except Exception:
+        yield
+        return
+
+    tmp_dir = tmp_path_factory.mktemp("xhs_creds")
+    isolated = mod.XhsCredentialStore(store_file=str(tmp_dir / "xhs_credentials.json"))
+    monkeypatch.setattr(mod, "_default_store", isolated, raising=False)
+
+    # resolver / health 都是单例，下次 get_credential_resolver() 时会自动 lazy
+    # 实例化并通过 .store property 读到上面被替换的 _default_store。
+    # 但如果当前 session 已经实例化过 resolver，把它一并清掉，防止它持有旧 store。
+    try:
+        from backend.app.services.xhs_auth import credential_resolver as r_mod
+        monkeypatch.setattr(r_mod, "_default_resolver", None, raising=False)
+    except Exception:
+        pass
+    try:
+        from backend.app.services.xhs_auth import credential_health as h_mod
+        monkeypatch.setattr(h_mod, "_default_checker", None, raising=False)
+    except Exception:
+        pass
+
+    yield

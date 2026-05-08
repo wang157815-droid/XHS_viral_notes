@@ -77,4 +77,25 @@ def bootstrap_admin_if_needed(
         f"RedMuse 首启动 admin 已创建: username={user.username}, "
         f"user_id={user.user_id}, xhs_credential_path={user.xhs_credential_path or '未挂载'}"
     )
+
+    # Phase 1: 同步在 XhsCredentialStore 中登记一条记录，让 CrawlerAgent
+    # 通过 redmuse_user_id 即可命中既有的 admin cookies.json。
+    if user.xhs_credential_path:
+        try:
+            from ..xhs_auth import get_credential_store
+
+            cred_store = get_credential_store()
+            cred_store.upsert(
+                redmuse_user_id=user.user_id,
+                cookies_path=user.xhs_credential_path,
+                status="unknown",
+                status_message="bootstrap 时挂载，尚未做健康检查",
+            )
+            logger.info(
+                f"[xhs_auth] 已为 admin 写入 XhsCredential 记录 → "
+                f"{user.xhs_credential_path}"
+            )
+        except Exception as exc:
+            logger.warning(f"[xhs_auth] bootstrap 写入 XhsCredential 失败: {exc}")
+
     return user.user_id
