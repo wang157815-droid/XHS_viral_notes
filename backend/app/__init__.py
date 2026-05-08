@@ -1,0 +1,2 @@
+"""RedMuse backend app package."""
+
