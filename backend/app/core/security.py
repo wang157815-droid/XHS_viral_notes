@@ -34,7 +34,20 @@ def _resolve_jwt_secret() -> str:
     return "redmuse-dev-only-secret-change-me"
 
 
-def create_access_token(user: Dict[str, Any], expires_hours: int = JWT_EXPIRE_HOURS) -> str:
+def create_access_token(
+    user: Dict[str, Any],
+    expires_hours: int = JWT_EXPIRE_HOURS,
+    *,
+    token_type: str = "redmuse",
+) -> str:
+    """签发 RedMuse 系统 JWT。
+
+    Args:
+        user: 必须包含 ``user_id``，可选 ``nickname / role / username``。
+        token_type: ``"redmuse"`` 表示来自 Phase 0+ 用户名/密码登录；
+            ``"xhs_selfinfo"`` 表示旧版 XHS 扫码登录（Phase 2 后会移除）。
+            前端无需关心；后端 ``get_current_user`` 会原样回传，便于 Phase 1+ 做来源审计。
+    """
     jwt = _get_jwt_module()
     secret = _resolve_jwt_secret()
     now = datetime.now(timezone.utc)
@@ -43,6 +56,7 @@ def create_access_token(user: Dict[str, Any], expires_hours: int = JWT_EXPIRE_HO
         "nickname": user.get("nickname", ""),
         "role": user.get("role", "user"),
         "username": user.get("username", ""),
+        "token_type": token_type,
         "iat": now,
         "exp": now + timedelta(hours=expires_hours),
     }
@@ -76,6 +90,7 @@ def get_current_user(
             "nickname": payload.get("nickname", ""),
             "role": payload.get("role", "user"),
             "username": payload.get("username", ""),
+            "token_type": payload.get("token_type", "redmuse"),
         }
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

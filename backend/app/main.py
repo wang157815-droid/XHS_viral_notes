@@ -12,6 +12,7 @@ from .core.tracing import get_trace_id, reset_trace_id, set_trace_id
 from .infrastructure.cache.redis_client import close_redis, get_redis
 from .infrastructure.db import close_business_db_engine, ensure_business_schema
 from .infrastructure.storage.db_engine import close_db_engine
+from .services.redmuse_auth import bootstrap_admin_if_needed
 
 
 @asynccontextmanager
@@ -20,6 +21,10 @@ async def lifespan(app: FastAPI):
     if not skip_in_tests:
         ensure_business_schema()
         await get_redis()
+        # Phase 0: 首启动从 env 引导 admin 用户；已存在用户/无密码 env 时跳过。
+        # 仅生产/dev 启动时执行；测试环境通过 REDMUSE_SKIP_STARTUP_CHECKS=true 跳过，
+        # 避免污染真实 datas/redmuse_auth/users.json。
+        bootstrap_admin_if_needed()
     try:
         yield
     finally:

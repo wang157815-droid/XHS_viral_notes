@@ -30,6 +30,8 @@ export interface SessionState {
   logout: () => Promise<void>;
   /** 登录成功后立即把 token/user 注入 Provider,避免跨页跳转 Provider state 不刷新。 */
   loginWithSession: (token: string, user: AuthUser) => void;
+  /** Phase 0: 用户名 + 密码登录。失败抛 Error，由调用方捕获展示。 */
+  loginWithCredentials: (username: string, password: string) => Promise<AuthUser>;
 }
 
 const SessionCtx = createContext<SessionState | null>(null);
@@ -111,6 +113,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (res.ok) setCookieHealth(res.data);
     })();
   }, []);
+
+  const loginWithCredentials = useCallback(
+    async (username: string, password: string): Promise<AuthUser> => {
+      const res = await apiPost<{ token: string; user: AuthUser }, { username: string; password: string }>(
+        "/auth/login",
+        { username: username.trim(), password },
+      );
+      if (!res.ok) {
+        throw new Error(res.error.message || "登录失败");
+      }
+      const { token, user: payloadUser } = res.data;
+      const u: AuthUser = {
+        user_id: payloadUser.user_id,
+        nickname: payloadUser.nickname || payloadUser.user_id,
+        role: payloadUser.role,
+      };
+      // Phase 0: RedMuse 用户的 user_id 与 XHS user_id 不同名，
+      // 不要写入 redmuse_last_xhs_user_id（那是给扫码续登的小红书身份）。
+      saveAuthSession(token, u);
+      setUser(u);
+      setReady(true);
+      // 后台静默刷新 cookie 健康；当前 RedMuse 用户可能尚未绑定 XHS Cookie。
+      void (async () => {
+        const cookieRes = await apiGet<CookieHealth>("/settings/cookie-health", { withAuth: true });
+        if (cookieRes.ok) setCookieHealth(cookieRes.data);
+      })();
+      return u;
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -203,6 +235,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         refreshMe,
         logout,
         loginWithSession,
+        loginWithCredentials,
       }}
     >
       {children}

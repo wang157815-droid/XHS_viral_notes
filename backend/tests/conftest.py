@@ -86,3 +86,23 @@ def isolate_viral_taxonomy_loader(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(mod, "_default_loader", isolated, raising=False)
     monkeypatch.setattr(mod, "get_viral_taxonomy_loader", lambda: isolated)
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_redmuse_user_store(tmp_path_factory, monkeypatch):
+    """Phase 0: 隔离 RedMuseUserStore，避免测试改写真实 datas/redmuse_auth/users.json。
+
+    实现要点：将 user_store 模块级 ``_default_store`` 替换为隔离实例。
+    所有调用方（无论从 ``services.redmuse_auth.__init__`` 还是 ``user_store`` 模块导入
+    ``get_user_store``）都会读到同一个 module-level singleton。
+    """
+    try:
+        from backend.app.services.redmuse_auth import user_store as mod
+    except Exception:
+        yield
+        return
+
+    tmp_dir = tmp_path_factory.mktemp("redmuse_auth")
+    isolated = mod.RedMuseUserStore(store_file=str(tmp_dir / "users.json"))
+    monkeypatch.setattr(mod, "_default_store", isolated, raising=False)
+    yield
