@@ -248,12 +248,29 @@ class TaskManager:
     # ==================== 状态查询 ====================
 
     def get_task(self, task_id: str) -> Optional[TaskModel]:
-        """获取单个任务"""
-        return self._tasks.get(task_id)
+        """获取单个任务（内存无则查库，便于重启后查看已完成任务详情）。"""
+        t = self._tasks.get(task_id)
+        if t is not None:
+            return t
+        t = self._persistence.load_task(task_id)
+        if t is not None:
+            self._tasks[task_id] = t
+        return t
 
     def list_tasks(self, username: str) -> List[TaskModel]:
-        """列出用户的所有任务"""
-        return [t for t in self._tasks.values() if t.username == username]
+        """列出用户的所有任务。
+
+        合并 SQLite 与内存：进程重启后仅会将会话内「未完成」任务灌入 `_tasks`，
+        已完成的记录仍在库里但不再进内存，若不合并则列表会空白（用户改配置重启后易误以为
+       「国际站登录把历史清掉了」——实为冷启动未读库）。
+        同一 task_id 以内存为准（正在跑的任务比库更新）。
+        """
+        from_db = self._persistence.load_tasks_by_user(username, limit=100)
+        by_id: Dict[str, TaskModel] = {t.task_id: t for t in from_db}
+        for t in self._tasks.values():
+            if t.username == username:
+                by_id[t.task_id] = t
+        return sorted(by_id.values(), key=lambda x: x.created_at, reverse=True)
 
     def list_active_tasks(self, username: str) -> List[TaskModel]:
         """列出用户的活跃任务（运行中、暂停中、分析中）"""

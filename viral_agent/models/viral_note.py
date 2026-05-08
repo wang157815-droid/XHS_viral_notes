@@ -151,6 +151,20 @@ class ViralNote:
         # 获取图片列表（兼容搜索结果和详情数据格式）
         image_list = cls._extract_image_list(note_data)
 
+        upload_time = str(note_data.get("upload_time", "") or "").strip()
+        if not upload_time:
+            raw_t = note_data.get("time") or note_data.get("create_time")
+            if raw_t is None and isinstance(note_data.get("note_card"), dict):
+                nc = note_data["note_card"]
+                raw_t = nc.get("time") or nc.get("create_time")
+            if raw_t not in (None, "", 0):
+                try:
+                    from xhs_utils.data_util import timestamp_to_str
+
+                    upload_time = timestamp_to_str(raw_t)
+                except Exception:  # noqa: BLE001
+                    upload_time = str(raw_t).strip()[:19]
+
         return cls(
             note_id=note_data.get('note_id', ''),
             note_url=note_data.get('note_url', ''),
@@ -171,7 +185,7 @@ class ViralNote:
             video_cover=video_cover,
             video_urls=note_data.get('video_urls', []),  # 多源视频URL列表
             source_keywords=note_data.get('source_keywords', []),  # 来源关键词列表
-            upload_time=note_data.get('upload_time', ''),
+            upload_time=upload_time,
             ip_location=note_data.get('ip_location', '')
         )
 

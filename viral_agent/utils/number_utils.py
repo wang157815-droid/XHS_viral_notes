@@ -42,6 +42,9 @@ def parse_chinese_number(value: Union[str, int, float]) -> int:
     # 转换为字符串并去除空格
     value_str = str(value).strip()
 
+    # 小红书 API 有时返回 "100+" / "1000+"（全半角加号）表示"xx 以上",按下界处理
+    value_str = value_str.rstrip("+＋").strip()
+
     # 如果是空字符串，返回0
     if not value_str:
         return 0

@@ -4,7 +4,16 @@ import re
 import urllib
 from urllib.parse import parse_qs
 import requests
-from xhs_utils.xhs_util import splice_str, generate_request_params, generate_x_b3_traceid, get_common_headers
+from xhs_utils.xhs_util import (
+    splice_str,
+    splice_str_get_xhs,
+    generate_request_params,
+    generate_x_b3_traceid,
+    get_common_headers,
+    get_request_headers_template,
+    xhs_api_base_url,
+    xhs_web_origin,
+)
 from loguru import logger
 
 # 默认请求超时时间（秒）
@@ -16,7 +25,7 @@ DEFAULT_TIMEOUT = 10
 """
 class XHS_Apis():
     def __init__(self):
-        self.base_url = "https://edith.xiaohongshu.com"
+        self.base_url = xhs_api_base_url()
 
     def get_homefeed_all_channel(self, cookies_str: str, proxies: dict = None):
         """
@@ -620,6 +629,8 @@ class XHS_Apis():
             :param cursor 指定位置的评论的cursor
             :param cookies_str 你的cookies
             返回指定位置的笔记一级评论
+
+        参数与查询串编码对齐 MediaCrawler `get_note_comments`（含 GET 签名）。
         """
         res_json = None
         try:
@@ -629,10 +640,12 @@ class XHS_Apis():
                 "cursor": cursor,
                 "top_comment_id": "",
                 "image_formats": "jpg,webp,avif",
-                "xsec_token": xsec_token
+                "xsec_token": xsec_token,
             }
-            splice_api = splice_str(api, params)
-            headers, cookies, data = generate_request_params(cookies_str, splice_api)
+            splice_api = splice_str_get_xhs(api, params)
+            headers, cookies, data = generate_request_params(
+                cookies_str, splice_api, "", method="GET"
+            )
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
@@ -652,7 +665,9 @@ class XHS_Apis():
         note_out_comment_list = []
         try:
             while True:
-                success, msg, res_json = self.get_note_out_comment(note_id, cursor, xsec_token, cookies_str, proxies)
+                success, msg, res_json = self.get_note_out_comment(
+                    note_id, cursor, xsec_token, cookies_str, proxies
+                )
                 if not success:
                     raise Exception(msg)
                 comments = res_json["data"]["comments"]
@@ -686,10 +701,12 @@ class XHS_Apis():
                 "cursor": cursor,
                 "image_formats": "jpg,webp,avif",
                 "top_comment_id": '',
-                "xsec_token": xsec_token
+                "xsec_token": xsec_token,
             }
-            splice_api = splice_str(api, params)
-            headers, cookies, data = generate_request_params(cookies_str, splice_api)
+            splice_api = splice_str_get_xhs(api, params)
+            headers, cookies, data = generate_request_params(
+                cookies_str, splice_api, "", method="GET"
+            )
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
@@ -711,7 +728,9 @@ class XHS_Apis():
             cursor = comment['sub_comment_cursor']
             inner_comment_list = []
             while True:
-                success, msg, res_json = self.get_note_inner_comment(comment, cursor, xsec_token, cookies_str, proxies)
+                success, msg, res_json = self.get_note_inner_comment(
+                    comment, cursor, xsec_token, cookies_str, proxies
+                )
                 if not success:
                     raise Exception(msg)
                 comments = res_json["data"]["comments"]
@@ -741,11 +760,15 @@ class XHS_Apis():
             note_id = urlParse.path.split("/")[-1]
             query_params = parse_qs(urlParse.query)
             xsec_token = query_params.get('xsec_token', [''])[0]
-            success, msg, out_comment_list = self.get_note_all_out_comment(note_id, xsec_token, cookies_str, proxies)
+            success, msg, out_comment_list = self.get_note_all_out_comment(
+                note_id, xsec_token, cookies_str, proxies
+            )
             if not success:
                 raise Exception(msg)
             for comment in out_comment_list:
-                success, msg, new_comment = self.get_note_all_inner_comment(comment, xsec_token, cookies_str, proxies)
+                success, msg, new_comment = self.get_note_all_inner_comment(
+                    comment, xsec_token, cookies_str, proxies
+                )
                 if not success:
                     raise Exception(msg)
         except Exception as e:
@@ -1025,35 +1048,33 @@ class XHS_Apis():
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             }
 
+            explore_url = f"{xhs_web_origin()}/explore"
             response = session.get(
-                "https://www.xiaohongshu.com/explore",
+                explore_url,
                 headers=headers,
                 proxies=proxies,
                 timeout=15,
                 allow_redirects=True
             )
 
-            cookies_dict = dict(session.cookies)
+            cookies_dict = {c.name: c.value for c in session.cookies}
             logger.debug(f"第一次请求获取的 Cookie: {list(cookies_dict.keys())}")
 
-            # 如果首页没有返回 a1，尝试访问登录相关页面
             if 'a1' not in cookies_dict or not cookies_dict['a1']:
-                # 访问 edith 域名的接口触发 a1 生成
                 api_headers = get_request_headers_template()
                 api_headers['x-s'] = ''
                 api_headers['x-t'] = ''
                 api_headers['x-s-common'] = ''
 
                 session.get(
-                    "https://edith.xiaohongshu.com/api/sns/web/v1/homefeed/category",
+                    f"{xhs_api_base_url()}/api/sns/web/v1/homefeed/category",
                     headers=api_headers,
                     proxies=proxies,
                     timeout=10
                 )
-                cookies_dict = dict(session.cookies)
+                cookies_dict = {c.name: c.value for c in session.cookies}
                 logger.debug(f"第二次请求获取的 Cookie: {list(cookies_dict.keys())}")
 
-            # 如果还是没有 a1，生成一个临时的
             if 'a1' not in cookies_dict or not cookies_dict['a1']:
                 generated_a1 = XHS_Apis.generate_a1()
                 cookies_dict['a1'] = generated_a1
@@ -1061,7 +1082,6 @@ class XHS_Apis():
             else:
                 logger.info(f"成功获取服务器 a1: {cookies_dict['a1'][:20]}...")
 
-            # 转换为 Cookie 字符串
             cookies_str = '; '.join([f"{k}={v}" for k, v in cookies_dict.items()])
 
             return True, "success", cookies_dict, cookies_str

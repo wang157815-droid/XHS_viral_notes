@@ -26,9 +26,36 @@ def sanitize_excel_value(value):
 
 
 def timestamp_to_str(timestamp):
-    time_local = time.localtime(timestamp / 1000)
-    dt = time.strftime("%Y-%m-%d %H:%M:%S", time_local)
-    return dt
+    """将小红书时间戳转为本地时间字符串。
+
+    兼容: 毫秒 int、秒 int、数字字符串;已是 `YYYY-MM-DD` 形态则原样截断返回。
+    """
+    if timestamp is None or timestamp == "":
+        return ""
+    if isinstance(timestamp, str):
+        s = timestamp.strip()
+        if not s:
+            return ""
+        if not s.isdigit():
+            return s[:19]
+        try:
+            ts = int(s)
+        except ValueError:
+            return s[:19]
+    else:
+        try:
+            ts = int(float(timestamp))
+        except (TypeError, ValueError):
+            return str(timestamp).strip()[:19]
+    if ts <= 0:
+        return ""
+    if ts > 1_000_000_000_000:
+        ts = ts // 1000
+    try:
+        time_local = time.localtime(ts)
+        return time.strftime("%Y-%m-%d %H:%M:%S", time_local)
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 def handle_user_info(data, user_id):
     home_url = f'https://www.xiaohongshu.com/user/profile/{user_id}'
@@ -197,7 +224,11 @@ def handle_note_info(data):
             tags.append(tag['name'])
         except:
             pass
-    upload_time = timestamp_to_str(data['note_card']['time'])
+    nc = data.get("note_card") or {}
+    raw_time = nc.get("time")
+    if raw_time in (None, "", 0):
+        raw_time = data.get("create_time") or nc.get("create_time")
+    upload_time = timestamp_to_str(raw_time) if raw_time not in (None, "", 0) else ""
     if 'ip_location' in data['note_card']:
         ip_location = data['note_card']['ip_location']
     else:

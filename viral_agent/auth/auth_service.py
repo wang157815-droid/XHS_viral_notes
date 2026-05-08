@@ -19,6 +19,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 
+from viral_agent.project_paths import get_data_root
+
 # 使用 passlib 的 bcrypt
 try:
     from passlib.context import CryptContext
@@ -33,10 +35,12 @@ JWT_SECRET: Optional[str] = None
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
 
-# 用户数据文件（放在可持久化数据目录）
-USERS_FILE = Path("datas/auth/users.json")
-
 security = HTTPBearer(auto_error=False)
+
+
+def get_users_file() -> Path:
+    """用户账户 JSON（绝对路径，不随 cwd 变化）。"""
+    return get_data_root() / "auth" / "users.json"
 
 
 def init_auth() -> None:
@@ -59,11 +63,21 @@ def init_auth() -> None:
         logger.error("=" * 60)
         raise RuntimeError("JWT_SECRET 未配置，拒绝启动")
 
+    users_file = get_users_file()
     # 确保目录存在
-    USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    users_file.parent.mkdir(parents=True, exist_ok=True)
+
+    if not users_file.exists():
+        cwd_auth = Path.cwd() / "datas" / "auth" / "users.json"
+        if cwd_auth.is_file():
+            logger.warning(
+                f"未找到账户文件 {users_file}，但当前工作目录下存在 {cwd_auth.resolve()}。"
+                "若曾从子目录启动应用，请将原 datas 整目录合并到项目根下 datas，"
+                "或设置环境变量 XHS_DATA_ROOT 指向原 datas 目录的绝对路径后重启。"
+            )
 
     # 首次运行时创建随机密码的管理员
-    if not USERS_FILE.exists():
+    if not users_file.exists():
         random_password = generate_random_password(16)
         default_users = {
             "admin": {
@@ -73,13 +87,13 @@ def init_auth() -> None:
                 "created_at": datetime.now().isoformat()
             }
         }
-        USERS_FILE.write_text(
+        users_file.write_text(
             json.dumps(default_users, indent=2, ensure_ascii=False)
         )
 
         # 设置文件权限为仅所有者可读写
         try:
-            USERS_FILE.chmod(0o600)
+            users_file.chmod(0o600)
         except OSError:
             pass  # Windows 不支持 chmod
 
@@ -106,16 +120,18 @@ def hash_password(password: str) -> str:
 
 def load_users() -> dict:
     """加载用户数据"""
-    if not USERS_FILE.exists():
+    uf = get_users_file()
+    if not uf.exists():
         return {}
-    return json.loads(USERS_FILE.read_text())
+    return json.loads(uf.read_text())
 
 
 def save_users(users: dict) -> None:
     """保存用户数据"""
-    USERS_FILE.write_text(json.dumps(users, indent=2, ensure_ascii=False))
+    uf = get_users_file()
+    uf.write_text(json.dumps(users, indent=2, ensure_ascii=False))
     try:
-        USERS_FILE.chmod(0o600)
+        uf.chmod(0o600)
     except OSError:
         pass
 

@@ -33,16 +33,12 @@ from pathlib import Path
 from typing import Optional
 from loguru import logger
 
+from viral_agent.project_paths import get_data_root
+
 
 class UserDataService:
     """用户数据隔离服务"""
 
-    # 数据根目录
-    DATA_ROOT = Path("datas")
-    # 用户数据目录
-    USERS_ROOT = DATA_ROOT / "users"
-    # 共享资源目录
-    SHARED_ROOT = DATA_ROOT / "shared"
     # 默认用户名（向后兼容）
     DEFAULT_USER = "admin"
 
@@ -74,7 +70,7 @@ class UserDataService:
 
     def get_user_data_dir(self) -> Path:
         """获取用户数据根目录"""
-        return self.USERS_ROOT / self.username
+        return get_data_root() / "users" / self.username
 
     def get_analysis_dir(self) -> Path:
         """获取用户分析结果目录"""
@@ -114,8 +110,20 @@ class UserDataService:
         from datetime import datetime
 
         cookie_file = self.get_cookies_file()
+
+        # 保留首次保存时间 created_at（天数计算用），不随更新而重置
+        created_at = datetime.now().isoformat()
+        if cookie_file.exists():
+            try:
+                existing = json.loads(cookie_file.read_text(encoding="utf-8"))
+                if existing.get("created_at"):
+                    created_at = existing["created_at"]
+            except Exception:
+                pass
+
         cookie_data = {
             "cookie": cookie,
+            "created_at": created_at,
             "updated_at": datetime.now().isoformat(),
             "cookie_length": len(cookie)
         }
@@ -207,21 +215,21 @@ class UserDataService:
     @classmethod
     def get_shared_knowledge_dir(cls) -> Path:
         """获取公共知识库配置目录"""
-        path = cls.SHARED_ROOT / "knowledge_base"
+        path = get_data_root() / "shared" / "knowledge_base"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     @classmethod
     def get_shared_chromadb_dir(cls) -> Path:
         """获取共享向量数据库目录"""
-        path = cls.SHARED_ROOT / "chromadb"
+        path = get_data_root() / "shared" / "chromadb"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     @classmethod
     def get_auth_dir(cls) -> Path:
         """获取认证数据目录"""
-        path = cls.DATA_ROOT / "auth"
+        path = get_data_root() / "auth"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -305,7 +313,7 @@ def migrate_legacy_data(target_user: str = "admin") -> bool:
     Returns:
         迁移是否成功
     """
-    data_root = Path("datas")
+    data_root = get_data_root()
     user_service = UserDataService(target_user)
 
     # 旧目录 → 新目录映射

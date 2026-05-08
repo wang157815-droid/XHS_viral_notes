@@ -30,10 +30,15 @@ class QRCodeSession:
     username: str = ""                 # 关联的用户名
     status: QRLoginStatus = QRLoginStatus.INITIALIZING
     qrcode_base64: Optional[str] = None  # 二维码图片 base64
+    screenshot_version: int = 0  # 截图版本，前端用来强制刷新图片
     created_at: datetime = field(default_factory=datetime.now)
     expires_at: Optional[datetime] = None  # 二维码过期时间（通常2分钟）
     error_message: Optional[str] = None
     cookies_str: Optional[str] = None  # 提取到的Cookie字符串
+    expected_user_id: Optional[str] = None  # 当前访问设备上次登录的 XHS 用户 ID
+    client_device_id: Optional[str] = None  # 前端设备 ID，用于隔离服务器侧浏览器 profile
+    sms_code_requested: bool = False  # 已触发短信验证码发送
+    sms_code_submitted: bool = False  # 用户已提交短信验证码，允许继续校验 Cookie
 
     @property
     def is_active(self) -> bool:
@@ -63,6 +68,7 @@ class QRCodeSession:
             "username": self.username,
             "status": self.status.value,
             "qrcode_base64": self.qrcode_base64,
+            "screenshot_version": self.screenshot_version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "error_message": self.error_message,

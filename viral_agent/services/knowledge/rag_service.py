@@ -1,15 +1,16 @@
-"""
-RAG服务 - 基于ChromaDB的向量检索
-"""
+"""RAG service backed by PostgreSQL/pgvector."""
 import os
 import json
+import urllib.request
 from typing import List, Dict, Any, Optional
-from pathlib import Path
 from loguru import logger
 from openai import OpenAI
 from dotenv import load_dotenv
 
 from viral_agent.models.document import KnowledgeDocument, DocumentSearchResult
+
+from backend.app.infrastructure.db.engine import get_business_db_session
+from backend.app.infrastructure.db.schema import ensure_business_schema
 
 # 加载环境变量
 load_dotenv()
@@ -23,60 +24,38 @@ class RAGService:
         persist_directory: str = "viral_agent/storage/chromadb",
         collection_name: str = "knowledge_base"
     ):
-        """
-        初始化RAG服务
+        """初始化 RAG 服务。
 
-        Args:
-            persist_directory: ChromaDB持久化目录
-            collection_name: 集合名称
+        ``persist_directory`` and ``collection_name`` are kept for backwards
+        compatibility; pgvector is the only runtime backend after phase 4.6.
         """
         self.persist_directory = persist_directory
         self.collection_name = collection_name
-
-        # 确保目录存在
-        Path(persist_directory).mkdir(parents=True, exist_ok=True)
-
-        # 初始化ChromaDB
-        try:
-            import chromadb
-            from chromadb.config import Settings
-
-            self.client = chromadb.PersistentClient(
-                path=persist_directory,
-                settings=Settings(anonymized_telemetry=False)
-            )
-
-            # 创建或获取集合
-            self.collection = self.client.get_or_create_collection(
-                name=collection_name,
-                metadata={"description": "小红书爆文知识库"}
-            )
-
-            logger.info(f"ChromaDB初始化成功: {persist_directory}")
-
-        except ImportError:
-            logger.error("ChromaDB未安装，请运行: pip install chromadb")
-            raise
-
-        # 初始化Embedding模型
         self._init_embedding_client()
+        ensure_business_schema()
+        logger.info(f"pgvector RAG 初始化成功 (embedding_model='{self.embedding_model}')")
+
+    def _ensure_collection_dimension_matches(self) -> None:
+        return None
 
     def _init_embedding_client(self):
         """初始化Embedding客户端"""
         # 优先使用单独配置的Embedding API，如果没有则回退到主模型配置
         api_key = os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
         api_base = os.getenv("EMBEDDING_API_BASE") or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+        self.embedding_api_base = api_base.rstrip("/")
+        self.ollama_embed_base = self._detect_ollama_base(self.embedding_api_base)
 
         if not api_key:
-            logger.warning("未配置EMBEDDING_API_KEY或OPENAI_API_KEY，将使用ChromaDB默认embedding")
+            logger.warning("未配置EMBEDDING_API_KEY或OPENAI_API_KEY，pgvector RAG 无法生成向量")
             self.embedding_client = None
             self.embedding_model = "default"
             return
 
         try:
-            self.embedding_client = OpenAI(
+            self.embedding_client = None if self.ollama_embed_base else OpenAI(
                 api_key=api_key,
-                base_url=api_base
+                base_url=api_base,
             )
             # 使用小模型降低成本
             self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -88,6 +67,8 @@ class RAGService:
                 logger.info(f"使用主模型API配置")
             logger.info(f"Embedding模型: {self.embedding_model}")
             logger.info(f"Embedding API Base: {api_base}")
+            if self.ollama_embed_base:
+                logger.info(f"检测到 Ollama，本地向量化将使用原生 /api/embed: {self.ollama_embed_base}")
         except Exception as e:
             logger.error(f"Embedding客户端初始化失败: {e}")
             self.embedding_client = None
@@ -120,41 +101,22 @@ class RAGService:
 
             logger.info(f"添加文档: {doc.title}, 分块数: {len(doc.chunks)}")
 
-            # 生成向量
-            if self.embedding_client:
-                embeddings = self._get_embeddings(doc.chunks)
-            else:
-                embeddings = None  # 使用ChromaDB默认embedding
-
-            # 存入ChromaDB
-            for i, chunk in enumerate(doc.chunks):
-                chunk_id = f"{doc.doc_id}_chunk_{i}"
-
-                metadata = {
+            embeddings = self._get_embeddings(doc.chunks)
+            self.upsert_chunks(
+                doc_id=doc.doc_id,
+                title=doc.title,
+                chunks=doc.chunks,
+                domains=doc.domains,
+                embeddings=embeddings,
+                base_metadata={
                     'doc_id': doc.doc_id,
                     'title': doc.title,
-                    'chunk_index': i,
-                    'domains': json.dumps(doc.domains, ensure_ascii=False),
                     'description': doc.description,
                     'filename': doc.metadata.filename,
                     'format': doc.metadata.format,
-                    'upload_time': doc.metadata.upload_time
-                }
-
-                if embeddings:
-                    self.collection.add(
-                        ids=[chunk_id],
-                        embeddings=[embeddings[i]],
-                        documents=[chunk],
-                        metadatas=[metadata]
-                    )
-                else:
-                    # 使用默认embedding
-                    self.collection.add(
-                        ids=[chunk_id],
-                        documents=[chunk],
-                        metadatas=[metadata]
-                    )
+                    'upload_time': doc.metadata.upload_time,
+                },
+            )
 
             logger.success(f"文档添加成功: {doc.title}")
             return True
@@ -183,51 +145,45 @@ class RAGService:
             搜索结果列表
         """
         try:
-            # 生成查询向量
-            if self.embedding_client:
-                query_embedding = self._get_embeddings([query])[0]
-            else:
-                query_embedding = None
+            query_embedding = self._get_embeddings([query])[0]
+            params: Dict[str, Any] = {
+                "embedding": _format_vector(query_embedding),
+                "top_k": top_k,
+                "embedding_model": self.embedding_model,
+            }
+            domain_clause = ""
+            if domains:
+                domain_clause = "AND domains ?| :domains"
+                params["domains"] = domains
 
-            # ChromaDB 不支持 $contains，使用后处理过滤
-            # 先获取更多结果，再在 Python 中过滤
-            fetch_count = top_k * 3 if domains else top_k
-
-            # 向量检索（不使用 where 过滤）
-            if query_embedding:
-                results = self.collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=fetch_count
+            with get_business_db_session() as session:
+                rows = session.execute(
+                    _sql_text(
+                        f"""
+                        SELECT doc_id, chunk_index, text, metadata,
+                               1 - (embedding <=> CAST(:embedding AS vector)) AS score
+                        FROM knowledge_chunks
+                        WHERE embedding IS NOT NULL
+                          AND embedding_model = :embedding_model
+                          {domain_clause}
+                        ORDER BY embedding <=> CAST(:embedding AS vector)
+                        LIMIT :top_k
+                        """
+                    ),
+                    params,
+                ).mappings().all()
+            results = [
+                DocumentSearchResult(
+                    doc_id=str(row["doc_id"]),
+                    chunk_index=int(row["chunk_index"]),
+                    text=str(row["text"] or ""),
+                    score=round(float(row["score"] or 0), 4),
+                    metadata=dict(row["metadata"] or {}),
                 )
-            else:
-                # 使用默认embedding
-                results = self.collection.query(
-                    query_texts=[query],
-                    n_results=fetch_count
-                )
-
-            # 格式化并过滤结果
-            formatted = self._format_results(results, min_score)
-
-            # 如果指定了领域，在 Python 中过滤
-            if domains and formatted:
-                filtered = []
-                for result in formatted:
-                    # 从 metadata 中获取 domains（存储为 JSON 字符串）
-                    doc_domains_str = result.metadata.get('domains', '[]')
-                    try:
-                        doc_domains = json.loads(doc_domains_str)
-                    except json.JSONDecodeError:
-                        doc_domains = []
-
-                    # 检查是否有交集
-                    if any(d in doc_domains for d in domains):
-                        filtered.append(result)
-                        if len(filtered) >= top_k:
-                            break
-                return filtered
-
-            return formatted[:top_k]
+                for row in rows
+                if float(row["score"] or 0) >= min_score
+            ]
+            return results[:top_k]
 
         except Exception as e:
             logger.error(f"搜索失败: {e}")
@@ -244,18 +200,14 @@ class RAGService:
             是否成功
         """
         try:
-            # 获取所有相关chunk
-            results = self.collection.get(
-                where={"doc_id": doc_id}
-            )
-
-            if results['ids']:
-                self.collection.delete(ids=results['ids'])
-                logger.info(f"删除文档: {doc_id}, 删除{len(results['ids'])}个块")
-                return True
-            else:
-                logger.warning(f"文档不存在: {doc_id}")
-                return False
+            with get_business_db_session() as session:
+                result = session.execute(
+                    _sql_text("DELETE FROM knowledge_chunks WHERE doc_id = :doc_id"),
+                    {"doc_id": doc_id},
+                )
+            deleted = int(result.rowcount or 0)
+            logger.info(f"删除文档向量: {doc_id}, 删除{deleted}个块")
+            return deleted > 0
 
         except Exception as e:
             logger.error(f"删除文档失败 {doc_id}: {e}")
@@ -275,26 +227,49 @@ class RAGService:
             文档列表
         """
         try:
-            # 获取所有文档
-            where = {"domain": {"$contains": domain_filter}} if domain_filter else None
-            results = self.collection.get(where=where, limit=1000)
-
-            # 去重（每个文档有多个chunk，只返回一次）
-            docs_map = {}
-            for metadata in results['metadatas']:
-                doc_id = metadata.get('doc_id')
-                if doc_id and doc_id not in docs_map:
-                    docs_map[doc_id] = {
-                        'doc_id': doc_id,
-                        'title': metadata.get('title', ''),
-                        'description': metadata.get('description', ''),
-                        'domains': json.loads(metadata.get('domains', '[]')),
-                        'filename': metadata.get('filename', ''),
-                        'format': metadata.get('format', ''),
-                        'upload_time': metadata.get('upload_time', '')
+            params: Dict[str, Any] = {}
+            where = ""
+            if domain_filter:
+                where = "WHERE domains ? :domain_filter"
+                params["domain_filter"] = domain_filter
+            with get_business_db_session() as session:
+                rows = session.execute(
+                    _sql_text(
+                        f"""
+                        SELECT doc_id,
+                               MIN(metadata ->> 'title') AS title,
+                               MIN(metadata ->> 'description') AS description,
+                               MIN(metadata ->> 'filename') AS filename,
+                               MIN(metadata ->> 'format') AS format,
+                               MIN(metadata ->> 'upload_time') AS upload_time,
+                               MIN(domains::text) AS domains_text
+                        FROM knowledge_chunks
+                        {where}
+                        GROUP BY doc_id
+                        ORDER BY doc_id
+                        LIMIT 1000
+                        """
+                    ),
+                    params,
+                ).mappings().all()
+            docs = []
+            for row in rows:
+                try:
+                    domains = json.loads(row.get("domains_text") or "[]")
+                except json.JSONDecodeError:
+                    domains = []
+                docs.append(
+                    {
+                        "doc_id": row.get("doc_id"),
+                        "title": row.get("title") or "",
+                        "description": row.get("description") or "",
+                        "domains": domains,
+                        "filename": row.get("filename") or "",
+                        "format": row.get("format") or "",
+                        "upload_time": row.get("upload_time") or "",
                     }
-
-            return list(docs_map.values())
+                )
+            return docs
 
         except Exception as e:
             logger.error(f"列出文档失败: {e}")
@@ -302,6 +277,9 @@ class RAGService:
 
     def _get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """生成文本向量"""
+        if self.ollama_embed_base:
+            return self._get_ollama_embeddings(texts)
+
         if not self.embedding_client:
             raise ValueError("Embedding客户端未初始化")
 
@@ -314,6 +292,42 @@ class RAGService:
         except Exception as e:
             logger.error(f"生成向量失败: {e}")
             raise
+
+    def _get_ollama_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Use Ollama native /api/embed because /v1/embeddings can return 502 locally."""
+        url = f"{self.ollama_embed_base}/api/embed"
+        payload = json.dumps(
+            {"model": self.embedding_model, "input": texts},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            logger.error(f"Ollama 原生向量化失败: {exc}")
+            raise
+        embeddings = raw.get("embeddings") or []
+        if not embeddings:
+            raise ValueError("Ollama /api/embed 未返回 embeddings")
+        if len(embeddings) != len(texts):
+            raise ValueError(f"Ollama embeddings 数量不匹配: {len(embeddings)} != {len(texts)}")
+        return embeddings
+
+    @staticmethod
+    def _detect_ollama_base(api_base: str) -> Optional[str]:
+        base = (api_base or "").rstrip("/")
+        lowered = base.lower()
+        if "localhost:11434" not in lowered and "127.0.0.1:11434" not in lowered:
+            return None
+        if lowered.endswith("/v1"):
+            return base[:-3].rstrip("/")
+        return base
 
     def _format_results(
         self,
@@ -347,3 +361,78 @@ class RAGService:
             formatted.append(result)
 
         return formatted
+
+    def upsert_chunks(
+        self,
+        *,
+        doc_id: str,
+        title: str,
+        chunks: List[str],
+        domains: List[str],
+        embeddings: List[List[float]],
+        base_metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        if not chunks:
+            return 0
+        if len(embeddings) != len(chunks):
+            raise ValueError("embeddings 数量与 chunks 不一致")
+        base_metadata = base_metadata or {}
+        rows = []
+        for idx, chunk in enumerate(chunks):
+            metadata = {
+                **base_metadata,
+                "doc_id": doc_id,
+                "title": title,
+                "chunk_index": idx,
+                "domains": json.dumps(domains, ensure_ascii=False),
+            }
+            rows.append(
+                {
+                    "chunk_id": f"{doc_id}:chunk:{idx}",
+                    "doc_id": doc_id,
+                    "chunk_index": idx,
+                    "text": chunk,
+                    "domains": json.dumps(domains, ensure_ascii=False),
+                    "metadata": json.dumps(metadata, ensure_ascii=False),
+                    "embedding_model": self.embedding_model,
+                    "embedding": _format_vector(embeddings[idx]),
+                }
+            )
+        with get_business_db_session() as session:
+            session.execute(
+                _sql_text("DELETE FROM knowledge_chunks WHERE doc_id = :doc_id"),
+                {"doc_id": doc_id},
+            )
+            session.execute(
+                _sql_text(
+                    """
+                    INSERT INTO knowledge_chunks(
+                        chunk_id, doc_id, chunk_index, text, domains, metadata,
+                        embedding_model, embedding, updated_at
+                    ) VALUES (
+                        :chunk_id, :doc_id, :chunk_index, :text,
+                        CAST(:domains AS jsonb), CAST(:metadata AS jsonb),
+                        :embedding_model, CAST(:embedding AS vector), NOW()
+                    )
+                    ON CONFLICT (doc_id, chunk_index) DO UPDATE SET
+                        text = EXCLUDED.text,
+                        domains = EXCLUDED.domains,
+                        metadata = EXCLUDED.metadata,
+                        embedding_model = EXCLUDED.embedding_model,
+                        embedding = EXCLUDED.embedding,
+                        updated_at = NOW()
+                    """
+                ),
+                rows,
+            )
+        return len(rows)
+
+
+def _format_vector(vector: List[float]) -> str:
+    return "[" + ",".join(str(float(x)) for x in vector) + "]"
+
+
+def _sql_text(sql: str):
+    from sqlalchemy import text
+
+    return text(sql)

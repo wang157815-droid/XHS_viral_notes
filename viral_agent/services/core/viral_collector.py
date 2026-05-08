@@ -46,6 +46,7 @@ from viral_agent.models.viral_note import ViralNote
 from viral_agent.utils import parse_chinese_number
 from xhs_utils.cookie_util import trans_cookies
 from xhs_utils.data_util import handle_note_info
+from xhs_utils.xhs_util import xhs_web_origin
 
 
 class ViralNoteCollector:
@@ -639,8 +640,8 @@ class ViralNoteCollector:
             if success and res_json and 'data' in res_json:
                 # 返回笔记列表
                 items = res_json.get('data', {}).get('items', [])
-                logger.info(f"搜索返回 {len(items)} 条结果")
                 notes = []
+                non_note_count = 0
                 for item in items:
                     if 'note_card' in item:
                         note = item['note_card']
@@ -649,18 +650,30 @@ class ViralNoteCollector:
                         xsec_token = item.get('xsec_token', '')
 
                         if note_id:
-                            # 构造完整的URL，包含必要的参数
+                            # 构造完整的URL（国内 xiaohongshu / 国际 rednote 与 XHS_WEB_ORIGIN 一致，避免与 webapi 域 Cookie 错配）
+                            _origin = xhs_web_origin().rstrip("/")
                             if xsec_token:
-                                note['note_url'] = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token={xsec_token}&xsec_source=pc_search"
+                                note['note_url'] = (
+                                    f"{_origin}/explore/{note_id}"
+                                    f"?xsec_token={xsec_token}&xsec_source=pc_search"
+                                )
                             else:
-                                # 如果没有token，至少加上xsec_source
-                                note['note_url'] = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_source=pc_search"
+                                note['note_url'] = (
+                                    f"{_origin}/explore/{note_id}?xsec_source=pc_search"
+                                )
 
                             note['note_id'] = note_id  # 添加ID到note对象
                             notes.append(note)
                         else:
                             # 如果还是没有ID，打印调试信息
                             logger.debug(f"无法获取笔记ID，item字段: {list(item.keys())}")
+                    else:
+                        # model_type=rec_query / hot_query 等平台推荐项,非笔记
+                        non_note_count += 1
+                logger.info(
+                    f"搜索返回：真实笔记 {len(notes)} 条"
+                    + (f"，过滤掉 {non_note_count} 条平台推荐" if non_note_count else "")
+                )
                 return notes
             else:
                 logger.warning(f"搜索失败: {msg}")

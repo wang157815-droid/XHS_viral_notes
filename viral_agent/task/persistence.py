@@ -10,6 +10,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from loguru import logger
 
+from viral_agent.project_paths import get_data_root
+
 from .models import TaskModel, TaskState, TaskCheckpoint
 
 
@@ -23,10 +25,8 @@ class TaskPersistence:
     - 任务历史查询
     """
 
-    DB_PATH = Path("datas/tasks.db")
-
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or self.DB_PATH
+        self.db_path = db_path or (get_data_root() / "tasks.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
