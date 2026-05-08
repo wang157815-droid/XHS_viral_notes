@@ -145,6 +145,30 @@ class AuthOrchestrator:
             raise RuntimeError("当前扫码服务不支持短信验证码提交")
         return await qrcode_service.submit_sms_code(session_id, sms_code)
 
+    async def get_session_cookies_str(self, session_id: str) -> Optional[str]:
+        """Phase 2: 在 RedMuse 已登录的情况下，把扫码结果交给 binder 处理。"""
+        qrcode_service = self._get_qrcode_service()
+        session = await qrcode_service.get_session(session_id)
+        if not session:
+            return None
+        if session.status != QRLoginStatus.SUCCESS:
+            return None
+        cookies_str = (session.cookies_str or "").strip()
+        return cookies_str or None
+
+    # 公共入口：Phase 2 起被 XhsCredentialBinder 调用，不再走下划线私有方法。
+    def extract_xhs_identity_from_cookies(
+        self, cookies_str: str
+    ) -> Optional[Dict[str, Any]]:
+        """同步：调 selfinfo → upsert IdentityStore → 落 cookies.json。
+
+        返回结构：``{user_id, nickname, username, role, source, profile_synced_at}``，
+        失败返回 ``None``（已记录 warning）。
+
+        async 调用方应用 ``asyncio.to_thread`` 包装本方法，避免阻塞事件循环。
+        """
+        return self._extract_xhs_user_profile(cookies_str)
+
     def _extract_xhs_user_profile(self, cookies_str: str) -> Optional[Dict[str, Any]]:
         """
         从小红书 selfinfo 提取 user_id / nickname，并写入 IdentityStore。

@@ -31,6 +31,11 @@ from .credential_health import (
     XhsCredentialHealthChecker,
     get_credential_health_checker,
 )
+from .credential_binder import (
+    BindResult,
+    XhsCredentialBinder,
+    get_credential_binder,
+)
 
 __all__ = [
     "XhsCredential",
@@ -41,4 +46,7 @@ __all__ = [
     "XhsCredentialHealth",
     "XhsCredentialHealthChecker",
     "get_credential_health_checker",
+    "BindResult",
+    "XhsCredentialBinder",
+    "get_credential_binder",
 ]

@@ -136,5 +136,10 @@ def isolate_xhs_credential_store(tmp_path_factory, monkeypatch):
         monkeypatch.setattr(h_mod, "_default_checker", None, raising=False)
     except Exception:
         pass
+    try:
+        from backend.app.services.xhs_auth import credential_binder as b_mod
+        monkeypatch.setattr(b_mod, "_default_binder", None, raising=False)
+    except Exception:
+        pass
 
     yield
