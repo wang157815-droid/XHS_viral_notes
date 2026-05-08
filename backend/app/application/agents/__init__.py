@@ -26,12 +26,15 @@ from .rag_agent import RAGAgent
 from .sheet2_narrative_agent import Sheet2NarrativeAgent
 from .video_analysis_agent import VideoAnalysisAgent
 from .viral_model_agent import ViralModelAgent
+from .xhs_auth_agent import XhsAuthAgent, XhsAuthRequiredError
 
 __all__ = [
     "AgentContext",
     "AgentResult",
     "BaseAgent",
     "InputParserAgent",
+    "XhsAuthAgent",
+    "XhsAuthRequiredError",
     "CrawlerAgent",
     "ImageAnalysisAgent",
     "VideoAnalysisAgent",

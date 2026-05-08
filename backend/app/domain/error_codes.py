@@ -33,6 +33,10 @@ class ErrorCode(str, Enum):
     AUTH_FORBIDDEN = "AUTH_FORBIDDEN"
     AUTH_COOKIE_EXPIRED = "AUTH_COOKIE_EXPIRED"
     AUTH_TOKEN_EXPIRED = "AUTH_TOKEN_EXPIRED"
+    # Phase 2-B: 当前 RedMuse 用户尚未绑定 XHS 数据源 / 已过期。
+    # 与 AUTH_COOKIE_EXPIRED 区别：那是泛指（含旧扫码 token）；本码专指
+    # XhsCredentialStore 中 status=unbound/expired，前端可定向到「数据源授权」UI。
+    AUTH_XHS_NOT_BOUND = "AUTH_XHS_NOT_BOUND"
 
     # INPUT_*
     INPUT_VALIDATION_FAILED = "INPUT_VALIDATION_FAILED"
@@ -70,6 +74,7 @@ _HTTP_STATUS_BY_CODE: Dict[ErrorCode, int] = {
     ErrorCode.AUTH_FORBIDDEN: 403,
     ErrorCode.AUTH_COOKIE_EXPIRED: 409,
     ErrorCode.AUTH_TOKEN_EXPIRED: 401,
+    ErrorCode.AUTH_XHS_NOT_BOUND: 409,
     ErrorCode.INPUT_VALIDATION_FAILED: 400,
     ErrorCode.INPUT_IDEMPOTENCY_CONFLICT: 409,
     ErrorCode.INPUT_MODULE_VERSION_MISMATCH: 409,

@@ -33,6 +33,7 @@ _VALID_PARTITIONS = frozenset(
         "canvas_document",
         "cookie_health",
         "metrics",
+        "xhs_auth_status",  # Phase 2-B: XhsAuthAgent 写入凭据校验结果
     }
 )
 

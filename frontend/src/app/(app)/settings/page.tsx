@@ -6,6 +6,14 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api-client";
 import { useSession } from "@/lib/session-context";
+import {
+  bindXhsWithCookies,
+  describeXhsCredentialStatus,
+  fetchMyXhsCredential,
+  probeMyXhsCredentialStatus,
+  unbindMyXhsCredential,
+  type XhsCredentialPublic,
+} from "@/lib/xhs-credential";
 
 interface SystemSettings {
   text_model: string;
@@ -115,6 +123,78 @@ export default function SettingsPage() {
   const [cleaningTarget, setCleaningTarget] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: "ok" | "err"; message: string } | null>(null);
 
+  // Phase 2-C: XHS 数据源凭据
+  const [xhsCred, setXhsCred] = useState<XhsCredentialPublic | null>(null);
+  const [xhsCredBusy, setXhsCredBusy] = useState(false);
+
+  const loadXhsCredential = useCallback(async () => {
+    const res = await fetchMyXhsCredential();
+    if (res.ok) setXhsCred(res.data);
+    else setToast({ type: "err", message: res.error?.message ?? "凭据加载失败" });
+  }, []);
+
+  const handleProbeXhsCredential = useCallback(async () => {
+    setXhsCredBusy(true);
+    try {
+      const res = await probeMyXhsCredentialStatus(true);
+      if (res.ok) {
+        await loadXhsCredential();
+        setToast({
+          type: res.data.status === "active" ? "ok" : "err",
+          message: `凭据检查完成：${res.data.message || res.data.status}`,
+        });
+      } else {
+        setToast({ type: "err", message: res.error?.message ?? "凭据检查失败" });
+      }
+    } finally {
+      setXhsCredBusy(false);
+    }
+  }, [loadXhsCredential]);
+
+  const handleUnbindXhsCredential = useCallback(async () => {
+    if (!confirm("确定解绑当前小红书账号？解绑后任务无法采集，需要重新扫码。")) return;
+    setXhsCredBusy(true);
+    try {
+      const res = await unbindMyXhsCredential();
+      if (res.ok) {
+        setToast({ type: "ok", message: "已解绑小红书账号" });
+        await loadXhsCredential();
+      } else {
+        setToast({ type: "err", message: res.error?.message ?? "解绑失败" });
+      }
+    } finally {
+      setXhsCredBusy(false);
+    }
+  }, [loadXhsCredential]);
+
+  const handlePasteBindXhsCredential = useCallback(
+    async (cookiesStr: string) => {
+      if (!cookiesStr.trim()) {
+        setToast({ type: "err", message: "Cookie 字符串为空" });
+        return;
+      }
+      setXhsCredBusy(true);
+      try {
+        const res = await bindXhsWithCookies(cookiesStr.trim());
+        if (res.ok) {
+          setToast({
+            type: "ok",
+            message: `绑定成功：${res.data.xhs_nickname ?? res.data.xhs_user_id ?? ""}`,
+          });
+          await loadXhsCredential();
+        } else {
+          setToast({
+            type: "err",
+            message: res.error?.message ?? "绑定失败，请重试",
+          });
+        }
+      } finally {
+        setXhsCredBusy(false);
+      }
+    },
+    [loadXhsCredential],
+  );
+
   const loadSystem = useCallback(async () => {
     const res = await apiGet<SystemSettings>("/settings/system", { withAuth: true });
     if (res.ok) setSystem(res.data);
@@ -154,6 +234,7 @@ export default function SettingsPage() {
     void loadSystem();
     void loadFocusKeywords();
     void loadCrawlerStatus();
+    void loadXhsCredential();
     if (isAdmin) {
       void loadGovernance();
       void loadUsers();
@@ -164,6 +245,7 @@ export default function SettingsPage() {
     loadSystem,
     loadFocusKeywords,
     loadCrawlerStatus,
+    loadXhsCredential,
     loadGovernance,
     loadUsers,
     loadMaintenance,
@@ -332,6 +414,15 @@ export default function SettingsPage() {
           cookieHealth={cookieHealth}
           onRecheck={() => refreshCookie(true)}
           onReauth={() => void logout()}
+        />
+
+        <XhsCredentialSection
+          credential={xhsCred}
+          busy={xhsCredBusy}
+          onRefresh={() => void loadXhsCredential()}
+          onProbe={() => void handleProbeXhsCredential()}
+          onUnbind={() => void handleUnbindXhsCredential()}
+          onPasteBind={(cookies: string) => void handlePasteBindXhsCredential(cookies)}
         />
 
         <AIModelSection
@@ -506,6 +597,162 @@ function AccountSection({
             重新扫码登录
           </button>
         </Row>
+      </Card>
+    </section>
+  );
+}
+
+function XhsCredentialSection({
+  credential,
+  busy,
+  onRefresh,
+  onProbe,
+  onUnbind,
+  onPasteBind,
+}: {
+  credential: XhsCredentialPublic | null;
+  busy: boolean;
+  onRefresh: () => void;
+  onProbe: () => void;
+  onUnbind: () => void;
+  onPasteBind: (cookiesStr: string) => void;
+}) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [cookieDraft, setCookieDraft] = useState("");
+
+  const status = credential?.status ?? "unbound";
+  const meta = describeXhsCredentialStatus(status);
+  const isBound = !!credential?.is_bound && status !== "unbound";
+
+  const dotColor = (() => {
+    switch (meta.tone) {
+      case "ok":
+        return "#3D8C40";
+      case "warn":
+        return "#E8A84C";
+      case "err":
+        return "#E04040";
+      default:
+        return "#A8A4A0";
+    }
+  })();
+  const labelColor = meta.tone === "warn" ? "#B8860B" : dotColor;
+
+  return (
+    <section className="mb-8">
+      <SectionTitle
+        title="数据源授权"
+        desc="为当前 RedMuse 账号绑定一份小红书 Cookie；任务前置 XhsAuthAgent 会以此校验授权状态。"
+      />
+      <Card>
+        <Row label="授权状态" hint="未授权 / 已过期时所有任务会立即失败提示">
+          <span className="flex items-center gap-2 text-[13px]" style={{ color: labelColor }}>
+            <span className="h-2 w-2 rounded-full" style={{ background: dotColor }} />
+            {meta.label}
+          </span>
+        </Row>
+        <Row label="绑定的小红书账号" hint="来自 selfinfo 接口的最新昵称">
+          <span className="text-[13px] text-[#5A5550]">
+            {credential?.xhs_nickname ?? "-"}
+          </span>
+        </Row>
+        <Row label="XHS user_id" hint="后端 store 中的 xhs_user_id">
+          <span className="font-mono text-[12px] text-[#5A5550]">
+            {credential?.xhs_user_id ?? "-"}
+          </span>
+        </Row>
+        <Row label="状态描述" hint="后端 status_message">
+          <span className="text-[13px] text-[#5A5550]">
+            {credential?.status_message ?? "-"}
+          </span>
+        </Row>
+        <Row label="上次校验" hint="健康检查时间（ISO）">
+          <span className="text-[13px] text-[#5A5550]">
+            {credential?.last_validated_at
+              ? formatTime(credential.last_validated_at)
+              : "暂无"}
+          </span>
+        </Row>
+        <Row label="操作" hint="重新检查 / 解绑当前凭据">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={busy}
+              className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-60"
+            >
+              刷新状态
+            </button>
+            <button
+              type="button"
+              onClick={onProbe}
+              disabled={busy}
+              className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-60"
+            >
+              立即检查
+            </button>
+            <button
+              type="button"
+              onClick={onUnbind}
+              disabled={busy || !isBound}
+              className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#E04040] transition hover:bg-[#FFE8E0] disabled:opacity-50"
+            >
+              解绑
+            </button>
+          </div>
+        </Row>
+        <Row label="重新授权" hint="未绑定 / 过期时通过扫码登录页完成重新授权">
+          <a
+            href="/login"
+            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+          >
+            前往扫码绑定 →
+          </a>
+        </Row>
+        <Row label="高级：粘贴 Cookie 绑定" hint="从浏览器 DevTools 复制完整 cookie，仅管理员排障使用">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+          >
+            {showAdvanced ? "收起" : "展开"}
+          </button>
+        </Row>
+        {showAdvanced ? (
+          <div className="px-5 py-4 border-t border-[#F5F3F0] bg-[#FAFAF8]">
+            <textarea
+              value={cookieDraft}
+              onChange={(e) => setCookieDraft(e.target.value)}
+              placeholder="a1=...; web_session=...; webId=..."
+              spellCheck={false}
+              className="block w-full min-h-[96px] rounded-md border border-[#E8E5E0] bg-white px-3 py-2 font-mono text-[12px] text-[#3A3530] focus:border-[#FF4757] focus:outline-none"
+            />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCookieDraft("")}
+                disabled={busy || !cookieDraft}
+                className="rounded-md border border-[#E8E5E0] bg-white px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-50"
+              >
+                清空
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onPasteBind(cookieDraft);
+                  setCookieDraft("");
+                }}
+                disabled={busy || !cookieDraft.trim()}
+                className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E03B4A] disabled:opacity-50"
+              >
+                绑定到当前账号
+              </button>
+            </div>
+            <p className="mt-2 text-[12px] text-[#8A8580]">
+              系统会调用 selfinfo 校验 Cookie 有效性，成功后写入 XhsCredentialStore。失败原因会显示在右上角提示。
+            </p>
+          </div>
+        ) : null}
       </Card>
     </section>
   );

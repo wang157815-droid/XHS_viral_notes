@@ -46,6 +46,7 @@ from .agents import (
     InsightAgent,
     RAGAgent,
     VideoAnalysisAgent,
+    XhsAuthAgent,
 )
 from .agents.sheet2_narrative_agent import Sheet2NarrativeAgent
 from .agents.viral_model_agent import ViralModelAgent
@@ -64,6 +65,7 @@ class OrchestratorRunSummary:
 class AgentOrchestrator:
     def __init__(self) -> None:
         self._input_parser = InputParserAgent()
+        self._xhs_auth = XhsAuthAgent()
         self._crawler = CrawlerAgent()
         self._image = ImageAnalysisAgent()
         self._video = VideoAnalysisAgent()
@@ -109,6 +111,10 @@ class AgentOrchestrator:
 
             # Stage 1: InputParser
             await self._run_stage(agent_context, self._input_parser, stage="input_parser")
+            handle.raise_if_cancelled()
+
+            # Stage 1b: XhsAuth (Phase 2-B 前置 gate；未授权 → AUTH_XHS_NOT_BOUND)
+            await self._run_stage(agent_context, self._xhs_auth, stage="xhs_auth")
             handle.raise_if_cancelled()
 
             # Stage 2: Crawler (四源采集)

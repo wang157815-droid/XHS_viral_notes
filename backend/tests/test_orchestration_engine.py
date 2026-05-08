@@ -104,6 +104,7 @@ def test_langgraph_engine_has_nine_nodes_sheet2_narrative():
 
     expected = {
         "input_parser",
+        "xhs_auth",  # Phase 2-B 新增前置 gate
         "crawler",
         "image",
         "video",
@@ -155,6 +156,7 @@ def test_simple_engine_runs_end_to_end_with_mock_agents(monkeypatch):
     # 拓扑: 替换 AgentOrchestrator 内的 Agent 实例为 stub
     orch = orch_mod.agent_orchestrator
     monkeypatch.setattr(orch, "_input_parser", StubAgent("InputParserAgent"))
+    monkeypatch.setattr(orch, "_xhs_auth", StubAgent("XhsAuthAgent"))
     monkeypatch.setattr(orch, "_crawler", StubAgent("CrawlerAgent"))
     monkeypatch.setattr(orch, "_image", StubAgent("ImageAnalysisAgent"))
     monkeypatch.setattr(orch, "_video", StubAgent("VideoAnalysisAgent"))

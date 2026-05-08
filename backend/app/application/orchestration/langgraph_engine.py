@@ -62,6 +62,7 @@ from ..agents import (
     InsightAgent,
     RAGAgent,
     VideoAnalysisAgent,
+    XhsAuthAgent,
 )
 from ..agents.sheet2_narrative_agent import Sheet2NarrativeAgent
 from ..agents.viral_model_agent import ViralModelAgent
@@ -88,8 +89,10 @@ class LangGraphEngine(OrchestrationEngine):
             )
 
         # 阶段 4.3pre.2: 8 节点 + Sheet2Narrative(4.3pre.6);
+        # Phase 2-B: 在 input_parser 与 crawler 之间插入 xhs_auth gate。
         # Video 改为同步并发,与 Image 并行作为多模态 fan-out 分支
         self._input_parser = InputParserAgent()
+        self._xhs_auth = XhsAuthAgent()
         self._crawler = CrawlerAgent()
         self._image = ImageAnalysisAgent()
         self._video = VideoAnalysisAgent()
@@ -108,6 +111,7 @@ class LangGraphEngine(OrchestrationEngine):
     def _build_graph(self):
         builder = StateGraph(_GraphState)
         builder.add_node("input_parser", self._make_node(self._input_parser, "input_parser"))
+        builder.add_node("xhs_auth", self._make_node(self._xhs_auth, "xhs_auth"))
         builder.add_node("crawler", self._make_node(self._crawler, "crawler"))
         builder.add_node("image", self._make_node(self._image, "image"))
         builder.add_node("video", self._make_node(self._video, "video"))
@@ -121,7 +125,8 @@ class LangGraphEngine(OrchestrationEngine):
         builder.add_node("canvas", self._make_node(self._canvas, "canvas"))
 
         builder.add_edge(START, "input_parser")
-        builder.add_edge("input_parser", "crawler")
+        builder.add_edge("input_parser", "xhs_auth")
+        builder.add_edge("xhs_auth", "crawler")
         # fan-out: crawler → image ‖ video (并行多模态标注)
         builder.add_edge("crawler", "image")
         builder.add_edge("crawler", "video")

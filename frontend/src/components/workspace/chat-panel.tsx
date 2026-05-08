@@ -191,6 +191,21 @@ export function ChatPanel({
             </div>
           </div>
         ) : null}
+        {streamState.error?.code === "AUTH_XHS_NOT_BOUND" ? (
+          <div className="mt-3 rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3 py-2 text-[12px] text-[#C62828]">
+            <div className="flex items-center justify-between gap-2">
+              <span>
+                小红书数据源尚未授权 · {streamState.error.message || "请先在「数据源授权」绑定 Cookie"}
+              </span>
+              <a
+                href="/settings"
+                className="rounded border border-[#FF4757] bg-[#FF4757] px-2 py-0.5 text-white hover:bg-[#E03B4A]"
+              >
+                前往授权
+              </a>
+            </div>
+          </div>
+        ) : null}
         <div ref={bottomRef} />
       </div>
 

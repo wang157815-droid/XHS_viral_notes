@@ -65,6 +65,7 @@ def test_new_topology_stage_order(monkeypatch):
 
     orch = orch_mod.agent_orchestrator
     monkeypatch.setattr(orch, "_input_parser", _StubAgent("Input", calls))
+    monkeypatch.setattr(orch, "_xhs_auth", _StubAgent("XhsAuth", calls))
     monkeypatch.setattr(orch, "_crawler", _StubAgent("Crawler", calls))
     monkeypatch.setattr(orch, "_image", _StubAgent("Image", calls))
     monkeypatch.setattr(orch, "_video", _StubAgent("Video", calls))
@@ -76,9 +77,10 @@ def test_new_topology_stage_order(monkeypatch):
 
     _drive_until_done(tid, SimpleEngine())
 
-    # 完成所有 stage
+    # 完成所有 stage（Phase 2-B 新增 XhsAuth）
     assert set(calls) == {
         "Input",
+        "XhsAuth",
         "Crawler",
         "Image",
         "Video",
@@ -88,8 +90,9 @@ def test_new_topology_stage_order(monkeypatch):
         "RAG",
         "Canvas",
     }
-    # InputParser 第一
-    assert calls.index("Input") < calls.index("Crawler")
+    # InputParser 第一，XhsAuth 紧随其后，Crawler 之前必须经过 XhsAuth
+    assert calls.index("Input") < calls.index("XhsAuth")
+    assert calls.index("XhsAuth") < calls.index("Crawler")
     # Crawler 在 Image 和 Video 之前
     assert calls.index("Crawler") < calls.index("Image")
     assert calls.index("Crawler") < calls.index("Video")
@@ -121,6 +124,7 @@ def test_new_topology_image_video_run_in_parallel(monkeypatch):
 
     orch = orch_mod.agent_orchestrator
     monkeypatch.setattr(orch, "_input_parser", _StubAgent("Input", calls))
+    monkeypatch.setattr(orch, "_xhs_auth", _StubAgent("XhsAuth", calls))
     monkeypatch.setattr(orch, "_crawler", _StubAgent("Crawler", calls))
     monkeypatch.setattr(orch, "_image", _StubAgent("Image", calls, delay=0.2))
     monkeypatch.setattr(orch, "_video", _StubAgent("Video", calls, delay=0.2))
