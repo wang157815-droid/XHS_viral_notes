@@ -34,26 +34,36 @@ from .sms_login_driver import CookieSnapshot, SmsLoginDriver
 # ---------------------------------------------------------------------------
 
 _SELECTORS: Dict[str, str] = {
-    # 切换到「手机号登录」Tab。优先 :text-is，老 UI 里这个文案稳定。
+    # 切换到「手机号登录」Tab。多数情况下右侧表单已默认显示，不需要切；
+    # 仅在 A/B 流量出现独立 tab 时点一下。所有 _safe_click 都会 optional 处理。
     "phone_tab": os.getenv("XHS_SMS_TAB_SELECTOR")
     or ":text-is(\"手机号登录\")",
-    # 国家区号下拉
+    # 国家区号触发器：截图里是「+1▼」按钮；扩展多种命中方式
     "country_selector": os.getenv("XHS_SMS_COUNTRY_SELECTOR")
-    or ".country-flag, .country-code, [class*='country']",
+    or (
+        "button:has-text(\"+1\"), button:has-text(\"+86\"), "
+        "button:has-text(\"+852\"), .country-flag, .country-code, "
+        "[class*='country']"
+    ),
+    # 国家区号下拉项；模板中 +852 会按 country_code 实际值替换
     "country_option_template": os.getenv("XHS_SMS_COUNTRY_OPTION")
-    or ":text(\"+852\")",  # Hong Kong（用户固定）；其他国家走 override
-    # 手机号输入框
+    or ":text(\"+852\")",
+    # 手机号输入框（placeholder=「请输入手机号」）
     "phone_input": os.getenv("XHS_SMS_PHONE_INPUT")
     or "input[placeholder*='手机号'], input[type='tel'], input[name='phone']",
     # 「获取验证码 / 发送验证码」按钮
     "send_code_button": os.getenv("XHS_SMS_SEND_BUTTON")
-    or ":text-is(\"获取验证码\"), :text-is(\"发送验证码\")",
-    # 验证码输入框
+    or "button:has-text(\"获取验证码\"), :text-is(\"获取验证码\"), :text-is(\"发送验证码\")",
+    # 验证码输入框（placeholder=「输入验证码」）
     "sms_input": os.getenv("XHS_SMS_CODE_INPUT")
     or "input[placeholder*='验证码'], input[name='code'], input[name='verifyCode']",
-    # 登录提交按钮
+    # 登录提交大红按钮；显式排除「手机号登录」tab 文案，避免误匹配
     "submit_button": os.getenv("XHS_SMS_SUBMIT_BUTTON")
-    or ":text-is(\"登录\"), button[type='submit']",
+    or (
+        "button:has-text(\"登录\"):not(:has-text(\"手机号\"))"
+        ":not(:has-text(\"协议\")):not(:has-text(\"政策\")), "
+        "button[type='submit']"
+    ),
 }
 
 _LOGIN_URL = os.getenv("XHS_LOGIN_START_URL") or "https://www.xiaohongshu.com/explore"
@@ -111,22 +121,26 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
 
     async def fill_phone(self, *, country_code: str, phone: str) -> None:
         page = self._require_page()
-        # 切换国家代码（仅当默认不是目标）
+        # 1) 切国家区号下拉
         await self._safe_click(_SELECTORS["country_selector"], optional=True)
-        # +852 / +86 / +1 ...
+        cc_label = ""
         if country_code:
             cc = country_code.strip()
+            cc_label = cc if cc.startswith("+") else self._country_iso_to_label(cc)
             template = _SELECTORS["country_option_template"]
-            # 模板里出现 +852 时按 country_code 实际值替换
-            if "+" not in cc:
-                cc_label = self._country_iso_to_label(cc)
-            else:
-                cc_label = cc
             selector = template.replace("+852", cc_label)
             await self._safe_click(selector, optional=True)
-        # 填手机号
+
+        # 2) 剥离国家拨号前缀，只填本地号
+        local_phone = self._strip_dial_prefix(phone, country_code=country_code)
+        logger.info(
+            f"[sms_login] fill_phone: country={cc_label or country_code} "
+            f"raw=…{phone[-4:]} local=…{local_phone[-4:]} (len={len(local_phone)})"
+        )
         try:
-            await page.fill(_SELECTORS["phone_input"], phone, timeout=_NAV_TIMEOUT_MS)
+            await page.fill(
+                _SELECTORS["phone_input"], local_phone, timeout=_NAV_TIMEOUT_MS
+            )
         except Exception as exc:
             raise RuntimeError(f"填写手机号失败: {exc}") from exc
 
@@ -241,3 +255,52 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
             "GB": "+44",
         }
         return mapping.get(iso.upper(), iso)
+
+    @staticmethod
+    def _country_iso_to_dial(iso: str) -> str:
+        """ISO 缩写 → 纯数字拨号前缀（无 +）。"""
+        mapping = {
+            "HK": "852",
+            "CN": "86",
+            "US": "1",
+            "GB": "44",
+            "TW": "886",
+            "MO": "853",
+            "SG": "65",
+            "MY": "60",
+        }
+        return mapping.get((iso or "").upper(), "")
+
+    @classmethod
+    def _strip_dial_prefix(cls, phone: str, *, country_code: str) -> str:
+        """从 hero-sms 返回的完整号码 (如 "85291234567") 中剥离拨号前缀，
+        只保留小红书输入框需要的本地号 (如 "91234567")。
+
+        策略：
+        - 优先用 ``country_code``（ISO 或 +852）解出 dial code 数字，去前缀；
+        - 若 country_code 缺失，尝试常见前缀（852/86/1/44）启发式去除；
+        - 全数字检查：剥离结果必须是 6~12 位数字，否则回退原值（避免误删）。
+        """
+        digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+        if not digits:
+            return phone or ""
+
+        candidates: list[str] = []
+        cc = (country_code or "").strip()
+        if cc.startswith("+"):
+            candidates.append(cc[1:])
+        elif cc:
+            dial = cls._country_iso_to_dial(cc)
+            if dial:
+                candidates.append(dial)
+        # 兜底：常见接码服务返回的号都偏向 HK/CN/US/UK
+        for fallback in ("852", "86", "1", "44"):
+            if fallback not in candidates:
+                candidates.append(fallback)
+
+        for prefix in candidates:
+            if digits.startswith(prefix) and len(digits) > len(prefix):
+                local = digits[len(prefix):]
+                if 6 <= len(local) <= 12:
+                    return local
+        return digits
