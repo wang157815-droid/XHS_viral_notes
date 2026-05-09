@@ -175,6 +175,45 @@ def test_get_reusable_none_when_window_zero(tmp_path):
     assert store.get_reusable("u1") is None
 
 
+def test_age_uses_wall_clock_not_monotonic(tmp_path):
+    """**回归保护**：跨进程场景下 ``time.monotonic()`` 会重置，
+    age_seconds 必须用 wall-clock (purchased_at ISO) 计算，否则
+    会把 30 分钟前的旧 reservation 判成 age=0、错误地复用。"""
+    store = _store(tmp_path, window_sec=20 * 60)
+    old_iso = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    # 模拟早期版本写入：purchased_at_monotonic=100（来自上一进程，跨进程无意义）
+    store.save(
+        _make_reservation(
+            purchased_at=old_iso,
+            purchased_at_monotonic=100.0,  # 跨进程后 time.monotonic() 可能 < 100
+        )
+    )
+    fetched = store.get("u1")
+    assert fetched is not None
+    # age_seconds 必须基于 wall-clock 算出 ~1800s，>= 1200s 窗口
+    assert fetched.age_seconds() >= 20 * 60
+    assert fetched.is_reusable(window_sec=20 * 60) is False
+    assert store.get_reusable("u1") is None
+
+
+def test_reusable_reason_messages(tmp_path):
+    """诊断字符串能区分四种状态，便于联调日志阅读。"""
+    # 1) sms_received
+    r1 = _make_reservation(sms_received=True, seen_codes=["1234"])
+    assert "已收过验证码" in r1.reusable_reason(window_sec=1200)
+    # 2) 数据残缺
+    r2 = _make_reservation()
+    r2.order_id = ""
+    assert "数据残缺" in r2.reusable_reason(window_sec=1200)
+    # 3) 超出窗口
+    old_iso = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    r3 = _make_reservation(purchased_at=old_iso, purchased_at_monotonic=0.0)
+    assert "超出复用窗口" in r3.reusable_reason(window_sec=1200)
+    # 4) 可复用
+    r4 = _make_reservation()
+    assert "可复用" in r4.reusable_reason(window_sec=1200)
+
+
 # ---------------------------------------------------------------------------
 # 文件结构兼容
 # ---------------------------------------------------------------------------

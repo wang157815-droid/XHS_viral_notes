@@ -121,20 +121,53 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
 
     async def fill_phone(self, *, country_code: str, phone: str) -> None:
         page = self._require_page()
-        # 1) 切国家区号下拉
-        await self._safe_click(_SELECTORS["country_selector"], optional=True)
+
+        # 1) 切国家区号下拉。每一步成功/失败都打 INFO 日志，
+        #    便于联调时确认 selector 是否真命中。
         cc_label = ""
         if country_code:
             cc = country_code.strip()
             cc_label = cc if cc.startswith("+") else self._country_iso_to_label(cc)
-            template = _SELECTORS["country_option_template"]
-            selector = template.replace("+852", cc_label)
-            await self._safe_click(selector, optional=True)
+            logger.info(f"[sms_login] 准备切换国家码到 {cc_label}")
+
+            opened = await self._safe_click(
+                _SELECTORS["country_selector"], optional=True
+            )
+            if opened:
+                logger.info("[sms_login] 国家码下拉触发器已点击")
+                # 给下拉一个短暂的渲染时间
+                try:
+                    await page.wait_for_timeout(300)
+                except Exception:
+                    pass
+                template = _SELECTORS["country_option_template"]
+                option_selector = template.replace("+852", cc_label)
+                picked = await self._safe_click(option_selector, optional=True)
+                if picked:
+                    logger.info(f"[sms_login] 已选 {cc_label}")
+                else:
+                    logger.warning(
+                        f"[sms_login] ⚠ 国家码选项 {cc_label} 没找到 "
+                        f"(selector={option_selector!r})，将直接填手机号；"
+                        f"小红书登录页默认 +1，可能导致校验失败。"
+                        f"用 XHS_SMS_COUNTRY_OPTION 环境变量覆盖正确 selector。"
+                    )
+            else:
+                logger.warning(
+                    f"[sms_login] ⚠ 国家码下拉触发器没找到 "
+                    f"(selector={_SELECTORS['country_selector']!r})，"
+                    f"将直接填手机号。用 XHS_SMS_COUNTRY_SELECTOR 环境变量覆盖。"
+                )
+        else:
+            logger.warning(
+                "[sms_login] ⚠ country_code 为空，跳过国家码切换。"
+                "（这通常是配置或 reservation 字段丢失，请检查日志。）"
+            )
 
         # 2) 剥离国家拨号前缀，只填本地号
         local_phone = self._strip_dial_prefix(phone, country_code=country_code)
         logger.info(
-            f"[sms_login] fill_phone: country={cc_label or country_code} "
+            f"[sms_login] 填入手机号 country={cc_label or country_code or '(none)'} "
             f"raw=…{phone[-4:]} local=…{local_phone[-4:]} (len={len(local_phone)})"
         )
         try:

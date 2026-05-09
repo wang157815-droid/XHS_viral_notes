@@ -33,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import secrets
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -316,30 +315,65 @@ class SmsLoginService:
         返回 ``(purchase, seen_codes)``：
         - ``purchase``：本次会话使用的号（新购或复用）
         - ``seen_codes``：复用时上次已见过的验证码（给 ``wait_sms_code`` 过滤旧码）
+
+        诊断日志：每次决策都会打 INFO 级日志说明为什么复用 / 为什么购号，
+        方便联调时确认 sms_received / age / window 的真实状态。
         """
-        existing = self._reservation_store.get_reusable(session.redmuse_user_id)
-        if existing is not None:
-            session.phone_reused = True
-            await self._touch(session)
+        window_sec = self._reservation_store.reuse_window_sec
+        existing = self._reservation_store.get(session.redmuse_user_id)
+
+        # 检查复用条件并打印明确原因
+        if existing is None:
             logger.info(
-                f"[sms_login] {session.session_id} 复用 reservation "
-                f"order_id={existing.order_id} phone=…{existing.phone[-4:]} "
-                f"age={int(existing.age_seconds(now_monotonic=time.monotonic()))}s "
-                f"seen_codes={len(existing.seen_codes)}"
+                f"[sms_login] {session.session_id} 无历史 reservation，准备新购号"
             )
-            return existing.to_purchase(), list(existing.seen_codes)
+        else:
+            reason = existing.reusable_reason(window_sec=window_sec)
+            if existing.is_reusable(window_sec=window_sec):
+                # 复用分支：兜底校验 country_code，缺失时回退默认 HK
+                if not existing.country_code:
+                    logger.warning(
+                        f"[sms_login] {session.session_id} reservation "
+                        f"country_code 缺失，回退默认 HK 以保证 driver 能切区号"
+                    )
+                    existing.country_code = "HK"
+                    self._reservation_store.save(existing)
+
+                session.phone_reused = True
+                await self._touch(session)
+                logger.info(
+                    f"[sms_login] {session.session_id} ♻ 复用 reservation: "
+                    f"order_id={existing.order_id} phone=…{existing.phone[-4:]} "
+                    f"country={existing.country_code} {reason}"
+                )
+                return existing.to_purchase(), list(existing.seen_codes)
+            # 显式拒绝复用 → 走新购号
+            logger.info(
+                f"[sms_login] {session.session_id} 跳过复用 (原因：{reason})，"
+                f"准备新购号 phone=…{existing.phone[-4:]}"
+            )
 
         # 不可复用 → 真扣费购号；新号写 reservation
         purchase = await self._provider.acquire_phone()
+        if not purchase.country_code:
+            # acquire_phone 极少返回空 country_code，但保险起见兜底
+            logger.warning(
+                f"[sms_login] {session.session_id} provider 未给 country_code，"
+                f"按默认 HK 处理（driver 会用启发式去 852 前缀）"
+            )
+            purchase.country_code = "HK"
         reservation = PhoneReservation(
             redmuse_user_id=session.redmuse_user_id,
             order_id=purchase.order_id,
             phone=purchase.phone,
             country_code=purchase.country_code,
-            purchased_at_monotonic=time.monotonic(),
             raw=dict(purchase.raw or {}),
         )
         self._reservation_store.save(reservation)
+        logger.info(
+            f"[sms_login] {session.session_id} 已购新号 order_id={purchase.order_id} "
+            f"phone=…{purchase.phone[-4:]} country={purchase.country_code} → reservation 落盘"
+        )
         return purchase, []
 
     async def _set_status(

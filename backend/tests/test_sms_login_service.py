@@ -464,6 +464,71 @@ async def test_seen_codes_passed_to_wait_sms_code_on_reuse(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reuse_falls_back_country_code_to_hk_when_missing(tmp_path):
+    """复用分支：reservation.country_code 缺失时兜底为 HK，
+    保证 driver.fill_phone 能切区号下拉，不会跳过国家码切换。"""
+    store = _make_store(tmp_path)
+    # 预埋一条 country_code 缺失的 reservation
+    from backend.app.services.xhs_auth import PhoneReservation
+
+    store.save(
+        PhoneReservation(
+            redmuse_user_id="u_no_cc",
+            order_id="order_no_cc",
+            phone="85291234567",
+            country_code="",  # 关键：缺失
+            sms_received=False,
+        )
+    )
+
+    # 第一轮：让 driver 在 fill_phone 之后炸，让 reservation 留下来
+    # 这样我们可以验证「兜底为 HK 后被回写持久化」
+    provider1 = FakeSmsProvider(code="123123")
+    driver1 = FakeDriver()
+    driver1.fail_on = "click_send_sms"  # fill_phone 之后炸
+    service1 = _make_service(provider1, driver1, store=store)
+    s1 = await service1.create_session("u_no_cc")
+    final1 = await _wait_for_terminal(service1, s1.session_id)
+    assert final1.status == SmsLoginStatus.ERROR
+    assert final1.phone_reused is True
+    assert provider1.acquire_calls == 0  # 复用了号没新购
+    # 关键 1：driver.fill_phone 收到 country_code='HK' 不是空串
+    assert driver1.fill_phone_args is not None
+    assert driver1.fill_phone_args[0] == "HK"
+    # 关键 2：reservation 已经被回写为 HK
+    saved = store.get("u_no_cc")
+    assert saved is not None
+    assert saved.country_code == "HK"
+
+
+@pytest.mark.asyncio
+async def test_new_purchase_falls_back_country_code_to_hk_when_provider_returns_empty(
+    tmp_path,
+):
+    """provider 极少返回 country_code='' 时也兜底，保证 driver 切区号。"""
+    store = _make_store(tmp_path)
+    # driver 在 fill_phone 之后炸，让 reservation 留下来
+    provider = FakeSmsProvider(
+        purchase=PhonePurchase(
+            order_id="order_blank_cc",
+            phone="85299990000",
+            country_code="",
+        )
+    )
+    driver = FakeDriver()
+    driver.fail_on = "click_send_sms"
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_provider_blank")
+    final = await _wait_for_terminal(service, s.session_id)
+    assert final.status == SmsLoginStatus.ERROR
+    assert driver.fill_phone_args is not None
+    assert driver.fill_phone_args[0] == "HK"  # 兜底默认
+    saved = store.get("u_provider_blank")
+    assert saved is not None
+    assert saved.country_code == "HK"
+
+
+@pytest.mark.asyncio
 async def test_reservation_kept_on_user_cancel(tmp_path):
     """用户主动取消时 reservation 不删，下次还能复用。"""
     store = _make_store(tmp_path)

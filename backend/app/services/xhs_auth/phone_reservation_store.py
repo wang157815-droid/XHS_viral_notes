@@ -102,10 +102,17 @@ class PhoneReservation:
         )
 
     def age_seconds(self, *, now_monotonic: Optional[float] = None) -> float:
-        """计算年龄。优先用 ``purchased_at_monotonic``（同进程精确）；
-        若为 0（持久化恢复），回退用 ``purchased_at`` 的 wall-clock 计算。"""
-        if self.purchased_at_monotonic > 0 and now_monotonic is not None:
-            return max(0.0, now_monotonic - self.purchased_at_monotonic)
+        """计算 reservation 年龄（秒）。
+
+        统一用 wall-clock (``purchased_at`` ISO 文本)。早期版本曾优先用
+        ``time.monotonic()`` 计算同进程精确差值，但 ``monotonic`` 跨进程会重置 →
+        进程 A 写入 monotonic=100，进程 B 启动后 ``time.monotonic()=5``，
+        会算出 age=0 → 错误地把 30min 前的号判成"可复用"。
+
+        ``now_monotonic`` 形参保留是为了向后兼容老调用方，已无实际作用。
+        系统时间被改时可能误判，但对 20min 量级影响很小，且即使误判
+        也是保守地把"原本可复用"判成"不可用"，会触发新购号，不会造成损失。
+        """
         try:
             purchased_dt = datetime.fromisoformat(self.purchased_at)
         except ValueError:
@@ -121,7 +128,18 @@ class PhoneReservation:
             return False
         if not self.order_id or not self.phone:
             return False
-        return self.age_seconds(now_monotonic=time.monotonic()) < window_sec
+        return self.age_seconds() < window_sec
+
+    def reusable_reason(self, *, window_sec: float) -> str:
+        """诊断用：为什么这条 reservation 可 / 不可复用，给日志写明细。"""
+        if self.sms_received:
+            return f"已收过验证码 (seen_codes={len(self.seen_codes)})"
+        if not self.order_id or not self.phone:
+            return "数据残缺 (缺 order_id 或 phone)"
+        age = self.age_seconds()
+        if age >= window_sec:
+            return f"超出复用窗口 (age={int(age)}s >= window={int(window_sec)}s)"
+        return f"可复用 (age={int(age)}s < window={int(window_sec)}s, sms_received=False)"
 
 
 class PhoneReservationStore:
