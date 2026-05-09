@@ -314,6 +314,41 @@ class HeroSmsProvider(SmsProvider):
                 f"hero-sms 返回未知响应：{text}", code="SMS_RESPONSE_ERROR"
             )
 
+    async def peek_sms_code(self, order_id: str) -> Optional[SmsCodeResult]:
+        """单次查询 ``getAllSms``，立即判断该号是否已收过验证码。
+
+        与 :meth:`wait_sms_code` 不同：不轮询、不过滤 seen_codes、不会阻塞。
+        用于复用 reservation 前的"该号是否已经被消费过"健康检查。
+        """
+        if not order_id:
+            raise SmsResponseError("order_id 不能为空", code="SMS_RESPONSE_ERROR")
+        if not self._api_key:
+            raise SmsAuthError("SMS_PROVIDER_API_KEY 未配置", code="SMS_AUTH_ERROR")
+
+        text = await self._call({"action": "getAllSms", "id": order_id})
+        tag, payload = _parse_text_response(text)
+
+        if tag == "STATUS_OK":
+            code = _extract_code_from_payload(payload, raw=text)
+            logger.info(
+                f"[hero_sms] peek 发现 order_id={order_id} 已有验证码 {code}"
+            )
+            return SmsCodeResult(order_id=order_id, code=code, raw={"text": text})
+
+        if tag == "STATUS_CANCEL":
+            raise SmsCancelledError(
+                f"订单被取消：order_id={order_id}", code="SMS_CANCELLED"
+            )
+
+        if tag in _AUTH_ERROR_RESPONSES:
+            raise SmsAuthError(f"hero-sms 鉴权失败：{text}", code="SMS_AUTH_ERROR")
+
+        # 等待中 / 未知响应 → 视为"尚无验证码"，调用方可放心复用
+        logger.debug(
+            f"[hero_sms] peek order_id={order_id} 尚无验证码 (response={text!r})"
+        )
+        return None
+
     async def release_phone(self, order_id: str) -> bool:
         # 文档明确 hero-sms 不需要主动释放，留作 no-op 以满足接口
         return False

@@ -23,6 +23,7 @@ import pytest
 from backend.app.services.xhs_auth import (
     PhoneReservationStore,
     PhonePurchase,
+    SmsCancelledError,
     SmsCodeResult,
     SmsNoStockError,
     SmsTimeoutError,
@@ -94,6 +95,8 @@ class FakeSmsProvider:
         purchase_error: Optional[Exception] = None,
         sms_error: Optional[Exception] = None,
         sms_delay_seconds: float = 0.0,
+        peek_result: Optional[SmsCodeResult] = None,
+        peek_error: Optional[Exception] = None,
     ) -> None:
         self._purchase = purchase or PhonePurchase(
             order_id="order_xy", phone="85211112222", country_code="HK"
@@ -102,9 +105,12 @@ class FakeSmsProvider:
         self._purchase_error = purchase_error
         self._sms_error = sms_error
         self._sms_delay = sms_delay_seconds
+        self._peek_result = peek_result
+        self._peek_error = peek_error
         # 监控调用次数：复用 reservation 时不应再调 acquire_phone
         self.acquire_calls: int = 0
         self.wait_calls: List[tuple] = []  # (order_id, seen_codes)
+        self.peek_calls: List[str] = []   # order_id
 
     async def acquire_phone(self) -> PhonePurchase:
         self.acquire_calls += 1
@@ -120,6 +126,12 @@ class FakeSmsProvider:
         if self._sms_error:
             raise self._sms_error
         return SmsCodeResult(order_id=order_id, code=self._code)
+
+    async def peek_sms_code(self, order_id: str) -> Optional[SmsCodeResult]:
+        self.peek_calls.append(order_id)
+        if self._peek_error:
+            raise self._peek_error
+        return self._peek_result
 
     async def release_phone(self, order_id: str) -> bool:
         return False
@@ -526,6 +538,146 @@ async def test_new_purchase_falls_back_country_code_to_hk_when_provider_returns_
     saved = store.get("u_provider_blank")
     assert saved is not None
     assert saved.country_code == "HK"
+
+
+@pytest.mark.asyncio
+async def test_reuse_aborts_when_peek_finds_existing_code(tmp_path):
+    """**关键加固**：本地 sms_received=False 时也要先 peek hero-sms，
+    若 hero-sms 端已有验证码 → 该号已被消费，必须放弃复用、新购。"""
+    from backend.app.services.xhs_auth import PhoneReservation
+
+    store = _make_store(tmp_path)
+    # 预埋一条「本地以为未消费」的 reservation
+    store.save(
+        PhoneReservation(
+            redmuse_user_id="u_peek_hot",
+            order_id="order_already_burned",
+            phone="85291110000",
+            country_code="HK",
+            sms_received=False,  # 关键：本地标记还没写
+        )
+    )
+
+    # provider 的 peek 返回真实的码 → 表示该号已被消费过
+    provider = FakeSmsProvider(
+        peek_result=SmsCodeResult(
+            order_id="order_already_burned", code="555888"
+        ),
+        purchase=PhonePurchase(
+            order_id="order_fresh", phone="85277770000", country_code="HK"
+        ),
+    )
+    driver = FakeDriver()
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_peek_hot")
+    final = await _wait_for_terminal(service, s.session_id)
+    assert final.status == SmsLoginStatus.SUCCESS
+
+    # 关键 1：peek 必须被调用过
+    assert provider.peek_calls == ["order_already_burned"]
+    # 关键 2：发现已有码后转去新购号
+    assert provider.acquire_calls == 1
+    assert final.phone_reused is False
+    assert final.order_id == "order_fresh"
+    # 关键 3：旧 reservation 上的 sms_received 必须被持久化为 True，
+    # 防止后续会话再次复用它
+    # （登录成功后 store 删除了；如果是失败路径才看得到。这里改测中间状态）
+
+
+@pytest.mark.asyncio
+async def test_reuse_aborts_when_peek_returns_cancelled(tmp_path):
+    """peek 返回 SmsCancelledError → reservation 删除，新购。"""
+    from backend.app.services.xhs_auth import PhoneReservation
+
+    store = _make_store(tmp_path)
+    store.save(
+        PhoneReservation(
+            redmuse_user_id="u_cancelled",
+            order_id="order_cancelled",
+            phone="85288889999",
+            country_code="HK",
+            sms_received=False,
+        )
+    )
+
+    provider = FakeSmsProvider(
+        peek_error=SmsCancelledError("订单取消", code="SMS_CANCELLED"),
+        purchase=PhonePurchase(
+            order_id="order_replacement", phone="85211112222", country_code="HK"
+        ),
+    )
+    driver = FakeDriver()
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_cancelled")
+    final = await _wait_for_terminal(service, s.session_id)
+    assert final.status == SmsLoginStatus.SUCCESS
+    # peek + acquire 各一次
+    assert provider.peek_calls == ["order_cancelled"]
+    assert provider.acquire_calls == 1
+    assert final.phone_reused is False
+    assert final.order_id == "order_replacement"
+
+
+@pytest.mark.asyncio
+async def test_reuse_proceeds_when_peek_returns_none(tmp_path):
+    """peek 返回 None（hero-sms 端确认没收过码）→ 真复用，acquire_phone 不调用。"""
+    from backend.app.services.xhs_auth import PhoneReservation
+
+    store = _make_store(tmp_path)
+    store.save(
+        PhoneReservation(
+            redmuse_user_id="u_clean",
+            order_id="order_clean",
+            phone="85266667777",
+            country_code="HK",
+            sms_received=False,
+        )
+    )
+
+    provider = FakeSmsProvider(peek_result=None, code="200300")
+    driver = FakeDriver()
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_clean")
+    final = await _wait_for_terminal(service, s.session_id)
+    assert final.status == SmsLoginStatus.SUCCESS
+    # 关键：peek 调用过，acquire 没调用
+    assert provider.peek_calls == ["order_clean"]
+    assert provider.acquire_calls == 0
+    assert final.phone_reused is True
+    assert final.order_id == "order_clean"
+
+
+@pytest.mark.asyncio
+async def test_reuse_aborts_when_peek_raises_transport_error(tmp_path):
+    """peek 因网络抖动抛 SmsTransportError → 保守起见放弃复用，新购。"""
+    from backend.app.services.xhs_auth import PhoneReservation
+    from backend.app.services.xhs_auth import SmsTransportError
+
+    store = _make_store(tmp_path)
+    store.save(
+        PhoneReservation(
+            redmuse_user_id="u_flaky",
+            order_id="order_flaky",
+            phone="85299995555",
+            country_code="HK",
+            sms_received=False,
+        )
+    )
+
+    provider = FakeSmsProvider(
+        peek_error=SmsTransportError("network", code="SMS_TRANSPORT_ERROR"),
+        purchase=PhonePurchase(
+            order_id="order_safe", phone="85222223333", country_code="HK"
+        ),
+    )
+    driver = FakeDriver()
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_flaky")
+    final = await _wait_for_terminal(service, s.session_id)
+    assert final.status == SmsLoginStatus.SUCCESS
+    assert provider.peek_calls == ["order_flaky"]
+    assert provider.acquire_calls == 1  # 网络抖动 → 保守新购
+    assert final.phone_reused is False
 
 
 @pytest.mark.asyncio

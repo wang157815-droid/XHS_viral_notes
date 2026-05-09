@@ -139,6 +139,29 @@ class SmsProvider(abc.ABC):
         实现方需要将这些码视为"旧码"继续轮询，避免误判。
         """
 
+    async def peek_sms_code(
+        self, order_id: str
+    ) -> Optional[SmsCodeResult]:
+        """**单次查询**该 order 是否已有验证码（不轮询、不阻塞、不过滤旧码）。
+
+        语义：
+        - 返回 ``None``：order 上**没有**任何验证码 → 该号尚未被消费，可复用
+        - 返回 ``SmsCodeResult``：order 上**已经**有过验证码 → 该号已被消费，
+          调用方应当放弃复用、重新购号
+        - 抛 :class:`SmsCancelledError`：订单已被运营商取消，重新购号
+        - 抛 :class:`SmsAuthError`：API key 失效，应中止整个流程
+
+        默认基于 :meth:`wait_sms_code` 实现：``timeout_seconds=0`` 单次轮询。
+        子类（如 ``HeroSmsProvider``）应当提供更高效的实现，避免 wait_sms_code
+        的 retry 循环逻辑。
+        """
+        try:
+            return await self.wait_sms_code(
+                order_id, timeout_seconds=0, poll_interval_seconds=1
+            )
+        except SmsTimeoutError:
+            return None
+
     async def release_phone(self, order_id: str) -> bool:  # pragma: no cover - 默认 no-op
         """可选：通知供应商释放号码。hero-sms 默认不调用。
 

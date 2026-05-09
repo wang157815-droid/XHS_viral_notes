@@ -48,6 +48,7 @@ from .phone_reservation_store import (
 from .sms_login_driver import CookieSnapshot, SmsLoginDriver
 from .sms_provider import (
     PhonePurchase,
+    SmsAuthError,
     SmsCancelledError,
     SmsCodeResult,
     SmsNoStockError,
@@ -330,28 +331,40 @@ class SmsLoginService:
         else:
             reason = existing.reusable_reason(window_sec=window_sec)
             if existing.is_reusable(window_sec=window_sec):
-                # 复用分支：兜底校验 country_code，缺失时回退默认 HK
-                if not existing.country_code:
-                    logger.warning(
-                        f"[sms_login] {session.session_id} reservation "
-                        f"country_code 缺失，回退默认 HK 以保证 driver 能切区号"
+                # **关键加固**：本地 sms_received 标记可能漏写（异步竞态 / 进程崩 /
+                # 调用顺序），所以即使本地认为「未消费」，也必须先调一次 hero-sms
+                # peek 接口确认 order 上是否已经有过验证码。这是 source-of-truth。
+                if await self._reservation_already_consumed(existing, session):
+                    # peek 已把 sms_received 写入 store，下面走新购号路径
+                    logger.info(
+                        f"[sms_login] {session.session_id} 跳过复用 "
+                        f"(peek 发现 hero-sms 端已收过验证码)，准备新购号 "
+                        f"phone=…{existing.phone[-4:]}"
                     )
-                    existing.country_code = "HK"
-                    self._reservation_store.save(existing)
+                else:
+                    # 复用分支：兜底校验 country_code，缺失时回退默认 HK
+                    if not existing.country_code:
+                        logger.warning(
+                            f"[sms_login] {session.session_id} reservation "
+                            f"country_code 缺失，回退默认 HK 以保证 driver 能切区号"
+                        )
+                        existing.country_code = "HK"
+                        self._reservation_store.save(existing)
 
-                session.phone_reused = True
-                await self._touch(session)
+                    session.phone_reused = True
+                    await self._touch(session)
+                    logger.info(
+                        f"[sms_login] {session.session_id} ♻ 复用 reservation: "
+                        f"order_id={existing.order_id} phone=…{existing.phone[-4:]} "
+                        f"country={existing.country_code} {reason}"
+                    )
+                    return existing.to_purchase(), list(existing.seen_codes)
+            else:
+                # 显式拒绝复用（本地标记 / 超窗口 / 数据残缺）→ 走新购号
                 logger.info(
-                    f"[sms_login] {session.session_id} ♻ 复用 reservation: "
-                    f"order_id={existing.order_id} phone=…{existing.phone[-4:]} "
-                    f"country={existing.country_code} {reason}"
+                    f"[sms_login] {session.session_id} 跳过复用 (原因：{reason})，"
+                    f"准备新购号 phone=…{existing.phone[-4:]}"
                 )
-                return existing.to_purchase(), list(existing.seen_codes)
-            # 显式拒绝复用 → 走新购号
-            logger.info(
-                f"[sms_login] {session.session_id} 跳过复用 (原因：{reason})，"
-                f"准备新购号 phone=…{existing.phone[-4:]}"
-            )
 
         # 不可复用 → 真扣费购号；新号写 reservation
         purchase = await self._provider.acquire_phone()
@@ -375,6 +388,47 @@ class SmsLoginService:
             f"phone=…{purchase.phone[-4:]} country={purchase.country_code} → reservation 落盘"
         )
         return purchase, []
+
+    async def _reservation_already_consumed(
+        self,
+        existing: PhoneReservation,
+        session: SmsLoginSession,
+    ) -> bool:
+        """复用前的健康检查：调一次 hero-sms peek 接口确认 order 上是否已经
+        收到过任何验证码。若已收过 → 该号已被消费，必须放弃复用。
+
+        异常处理策略：
+        - SmsCancelledError：订单已被取消 → 删除 reservation，返回 True 触发新购
+        - SmsAuthError：API key 失效，复用没意义，向上抛由 _run_session 终态化
+        - 其它（网络抖动 / 5xx / 未知响应）：记 warning，**保守地**返回 True
+          触发新购，避免基于不可信状态做错误复用决策
+        """
+        try:
+            probe = await self._provider.peek_sms_code(existing.order_id)
+        except SmsCancelledError as exc:
+            logger.info(
+                f"[sms_login] {session.session_id} peek 发现订单已取消 "
+                f"order_id={existing.order_id}，删除 reservation 后新购 ({exc})"
+            )
+            self._reservation_store.delete(session.redmuse_user_id)
+            return True
+        except SmsAuthError:
+            # API key 失效，让上层 _run_session 终态化为 ERROR
+            raise
+        except SmsProviderError as exc:
+            logger.warning(
+                f"[sms_login] {session.session_id} peek 失败 "
+                f"order_id={existing.order_id} ({exc})；保守起见放弃复用"
+            )
+            return True
+
+        if probe is not None:
+            # hero-sms 端已存在验证码 → 该号已被消费，本地持久化以阻断后续复用
+            self._reservation_store.mark_sms_received(
+                session.redmuse_user_id, code=probe.code
+            )
+            return True
+        return False
 
     async def _set_status(
         self, session: SmsLoginSession, status: SmsLoginStatus

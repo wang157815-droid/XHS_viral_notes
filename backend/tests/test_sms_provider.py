@@ -344,6 +344,62 @@ async def test_wait_sms_code_unknown_response_until_timeout_raises_sms_timeout(
 
 
 # ---------------------------------------------------------------------------
+# peek_sms_code: 单次查询，复用前的健康检查
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_peek_returns_code_when_status_ok(fake_client):
+    """STATUS_OK:1234 → 返回 SmsCodeResult，告诉调用方该号已被消费。"""
+    fake_client.queue("getAllSms", _FakeResponse(200, "STATUS_OK:778899"))
+    p = _provider(fake_client)
+    result = await p.peek_sms_code("order_a")
+    assert result is not None
+    assert result.code == "778899"
+    assert result.order_id == "order_a"
+
+
+@pytest.mark.asyncio
+async def test_peek_returns_none_when_waiting(fake_client):
+    """STATUS_WAIT_CODE → None，调用方可放心复用该号。"""
+    fake_client.queue("getAllSms", _FakeResponse(200, "STATUS_WAIT_CODE"))
+    p = _provider(fake_client)
+    result = await p.peek_sms_code("order_b")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_peek_returns_none_for_unknown_response(fake_client):
+    """未知响应（非 OK/CANCEL/AUTH_ERROR）按 None 处理，不阻塞复用判断。"""
+    fake_client.queue("getAllSms", _FakeResponse(200, "WHATEVER_BLOB"))
+    p = _provider(fake_client)
+    assert await p.peek_sms_code("order_c") is None
+
+
+@pytest.mark.asyncio
+async def test_peek_raises_cancelled_for_status_cancel(fake_client):
+    fake_client.queue("getAllSms", _FakeResponse(200, "STATUS_CANCEL"))
+    p = _provider(fake_client)
+    with pytest.raises(SmsCancelledError):
+        await p.peek_sms_code("order_d")
+
+
+@pytest.mark.asyncio
+async def test_peek_raises_auth_error_for_bad_key(fake_client):
+    fake_client.queue("getAllSms", _FakeResponse(200, "BAD_KEY"))
+    p = _provider(fake_client)
+    with pytest.raises(SmsAuthError):
+        await p.peek_sms_code("order_e")
+
+
+@pytest.mark.asyncio
+async def test_peek_validates_order_id(fake_client):
+    p = _provider(fake_client)
+    with pytest.raises(SmsResponseError):
+        await p.peek_sms_code("")
+
+
+# ---------------------------------------------------------------------------
 # release_phone（默认 no-op）
 # ---------------------------------------------------------------------------
 
