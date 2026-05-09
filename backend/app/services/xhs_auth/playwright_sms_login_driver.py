@@ -249,11 +249,12 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         所以**核心策略是先用搜索框过滤，再点唯一项**。
 
         步骤（一轮）：
-        1. 点国家码触发器，下拉打开
-        2. 等下拉渲染 + 搜索框出现
-        3. 在搜索框输入 cc_label（如 "+852"）→ 列表过滤到 1-2 行
-        4. 点 :text-is("+852") → 命中唯一可见行
-        5. 失败兜底：直接点 option_selector（适用于无搜索框的 A/B 变体）
+        1. **幂等检查**：触发器当前已显示目标 cc_label → 直接 return True
+        2. 点国家码触发器，下拉打开
+        3. 等下拉渲染 + 搜索框出现
+        4. 在搜索框输入 cc_label（如 "+852"）→ 列表过滤到 1-2 行
+        5. 点 :text-is("+852") → 命中唯一可见行
+        6. 失败兜底：直接点 option_selector（适用于无搜索框的 A/B 变体）
 
         返回 True 表示成功选中。
         """
@@ -261,6 +262,15 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         template = _SELECTORS["country_option_template"]
         option_selector = template.replace("+852", cc_label)
         search_selector = _SELECTORS["country_search_input"]
+
+        # ---- 0. 幂等检查：触发器是否已经是目标国家码 ----
+        # 节省一次"打开下拉 → 搜索 → 点击"的耗时；尤其重要：换号循环里
+        # 第 2、3 个号沿用同一 page，无需重切。
+        if await self._is_country_code_already_selected(cc_label):
+            logger.info(
+                f"[sms_login] 国家码触发器已显示 {cc_label}，跳过切换（幂等命中）"
+            )
+            return True
 
         # 最多两轮尝试：第一轮失败后等 1s 让 modal 完整渲染再试一次
         for attempt in (1, 2):
@@ -327,6 +337,27 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
                 except Exception:
                     pass
         return False
+
+    async def _is_country_code_already_selected(self, cc_label: str) -> bool:
+        """触发器是否已经显示目标国家码（如 "+852"）。
+
+        判定原理：
+        - 下拉**关闭**时，页面上可见的 ``+852`` 文字节点只可能出现在触发器
+          位置（下拉列表项要么 unmount 要么 ``display:none``）。
+        - 因此 ``:text-is("+852"):visible`` 命中数 > 0 即说明触发器已选中。
+
+        任何异常都返回 False，让上层走完整切换流程兜底。
+        """
+        page = self._require_page()
+        try:
+            locator = page.locator(f':text-is("{cc_label}"):visible')
+            count = await locator.count()
+            return count > 0
+        except Exception as exc:
+            logger.debug(
+                f"[sms_login] 幂等检查异常 ({exc})，按需切换 {cc_label}"
+            )
+            return False
 
     async def _diagnostic_dump(self, step: str, *, reason: str = "") -> None:
         """selector 失败时自动落盘一份截图 + 可选 DOM 片段，让联调时看清现场。
