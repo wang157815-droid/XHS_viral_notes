@@ -114,7 +114,7 @@ interface MetricsSummary {
 }
 
 export default function SettingsPage() {
-  const { user, cookieHealth, refreshCookie, logout } = useSession();
+  const { user, logout } = useSession();
   const isAdmin = user?.role === "admin";
 
   const [system, setSystem] = useState<SystemSettings | null>(null);
@@ -415,12 +415,7 @@ export default function SettingsPage() {
           </div>
         ) : null}
 
-        <AccountSection
-          user={user}
-          cookieHealth={cookieHealth}
-          onRecheck={() => refreshCookie(true)}
-          onReauth={() => void logout()}
-        />
+        <AccountSection user={user} />
 
         <XhsCredentialSection
           credential={xhsCred}
@@ -528,37 +523,23 @@ function Row({
 
 function AccountSection({
   user,
-  cookieHealth,
-  onRecheck,
-  onReauth,
 }: {
   user: { user_id: string; nickname: string; role: "admin" | "user" } | null;
-  cookieHealth: { status?: string; saved_days?: number; last_checked_at?: string | null; message?: string } | null;
-  onRecheck: () => void;
-  onReauth: () => void;
 }) {
-  const status = cookieHealth?.status ?? "unknown";
-  const statusMeta = (() => {
-    switch (status) {
-      case "valid":
-        return { dot: "#3D8C40", text: "有效", color: "#3D8C40" };
-      case "expiring_soon":
-        return { dot: "#E8A84C", text: "即将过期（建议重新登录）", color: "#B8860B" };
-      case "expired":
-        return { dot: "#E04040", text: "已过期（无法采集）", color: "#E04040" };
-      default:
-        return { dot: "#A8A4A0", text: "状态未知", color: "#5A5550" };
-    }
-  })();
-
+  // 仅展示 RedMuse 系统账号本身的信息。
+  // 小红书数据源（cookies / xhs_user_id / 健康检查 / 重新授权）
+  // 全部归到下方的 XhsCredentialSection，避免与系统身份混淆。
   return (
     <section className="mb-8">
-      <SectionTitle title="账号信息" desc="当前登录的小红书账号信息" />
+      <SectionTitle
+        title="系统账号"
+        desc="当前登录 RedMuse 的账号信息（与小红书数据源无关）"
+      />
       <Card>
-        <Row label="小红书昵称" hint="绑定的小红书账号">
+        <Row label="账号昵称" hint="RedMuse 系统账号显示名">
           <span className="text-[13px] text-[#5A5550]">{user?.nickname ?? "-"}</span>
         </Row>
-        <Row label="用户 ID" hint="小红书平台 ID">
+        <Row label="用户 ID" hint="RedMuse 系统用户 ID">
           <span className="font-mono text-[12px] text-[#5A5550]">{user?.user_id ?? "-"}</span>
         </Row>
         <Row label="系统角色" hint="决定可访问的功能范围">
@@ -571,37 +552,6 @@ function AccountSection({
           >
             {user?.role === "admin" ? "管理员" : "普通用户"}
           </span>
-        </Row>
-        <Row label="Cookie 状态" hint="小红书登录凭证有效性">
-          <span className="flex items-center gap-2 text-[13px]" style={{ color: statusMeta.color }}>
-            <span className="h-2 w-2 rounded-full" style={{ background: statusMeta.dot }} />
-            {statusMeta.text}
-          </span>
-        </Row>
-        <Row label="Cookie 保存时间" hint="超过 5 天建议重新登录">
-          <span className="text-[13px] text-[#5A5550]">已保存 {cookieHealth?.saved_days ?? 0} 天</span>
-        </Row>
-        <Row label="健康检查" hint="后台定时自动验证 Cookie 是否仍然有效">
-          <span className="text-[13px] text-[#5A5550]">
-            上次检查：
-            {cookieHealth?.last_checked_at ? formatTime(cookieHealth.last_checked_at) : "暂无"}
-          </span>
-          <button
-            type="button"
-            onClick={onRecheck}
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
-          >
-            立即检查
-          </button>
-        </Row>
-        <Row label="重新登录" hint="Cookie 失效或即将过期时需要重新扫码">
-          <button
-            type="button"
-            onClick={onReauth}
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
-          >
-            重新扫码登录
-          </button>
         </Row>
       </Card>
     </section>
