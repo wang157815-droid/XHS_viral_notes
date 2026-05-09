@@ -931,6 +931,14 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
             {session.phone_country ? `（${session.phone_country}）` : ""}
           </span>
         ) : null}
+        {session.phone_reused ? (
+          <span
+            className="rounded-md border border-[#D4ECD6] bg-[#F3F9F4] px-1.5 py-0.5 text-[10px] text-[#3D8C40]"
+            title="本次复用上次失败的虚拟号（20 分钟内、未收过验证码），未重复扣费"
+          >
+            ♻ 复用
+          </span>
+        ) : null}
         {session.order_id ? <span>hero-sms 订单：{session.order_id}</span> : null}
       </div>
 

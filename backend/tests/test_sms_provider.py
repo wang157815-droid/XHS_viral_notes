@@ -183,7 +183,10 @@ async def test_acquire_phone_unknown_response(fake_client):
 
 
 @pytest.mark.asyncio
-async def test_acquire_phone_missing_api_key(fake_client):
+async def test_acquire_phone_missing_api_key(fake_client, monkeypatch):
+    # 测试期望「传空 api_key + 没 env 兜底」时立即 SmsAuthError；
+    # 显式 delenv 防止本地 .env 真填了 key 时干扰
+    monkeypatch.delenv("SMS_PROVIDER_API_KEY", raising=False)
     p = _provider(fake_client, api_key="")
     with pytest.raises(SmsAuthError):
         await p.acquire_phone()
@@ -290,6 +293,33 @@ async def test_release_phone_default_noop(fake_client):
 # ---------------------------------------------------------------------------
 # 端到端：acquire → wait
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_skips_seen_old_code(fake_client):
+    """复用号场景：getAllSms 仍返回上次的旧码 → 必须继续轮询，直到新码到达。"""
+    fake_client.queue(
+        "getAllSms",
+        _FakeResponse(200, "STATUS_OK:111222"),  # 旧码（在 seen_codes 中）
+        _FakeResponse(200, "STATUS_OK:111222"),  # 还是旧码
+        _FakeResponse(200, "STATUS_OK:333444"),  # 新码
+    )
+    p = _provider(fake_client, sms_poll_interval_sec=0)
+    code = await p.wait_sms_code("order_reuse", seen_codes=["111222"])
+    assert code.code == "333444"
+    # 必须发起 3 次 getAllSms 调用：旧、旧、新
+    sms_calls = [c for c in fake_client.calls if c["action"] == "getAllSms"]
+    assert len(sms_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_seen_only_timeout(fake_client):
+    """如果 hero-sms 一直只回旧码到超时，应抛 SMS_TIMEOUT。"""
+    for _ in range(10):
+        fake_client.queue("getAllSms", _FakeResponse(200, "STATUS_OK:777888"))
+    p = _provider(fake_client, sms_poll_timeout_sec=0)
+    with pytest.raises(SmsTimeoutError):
+        await p.wait_sms_code("order_old", seen_codes=["777888"])
 
 
 @pytest.mark.asyncio

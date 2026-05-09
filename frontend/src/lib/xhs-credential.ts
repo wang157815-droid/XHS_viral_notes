@@ -107,6 +107,8 @@ export interface SmsLoginSessionDto {
   order_id: string | null;
   error_code: string | null;
   error_message: string | null;
+  /** True 表示本次会话复用了上一次失败的虚拟号（未再扣费购号）。 */
+  phone_reused: boolean;
   is_terminal: boolean;
   cookies_ready: boolean;
   created_at: string;

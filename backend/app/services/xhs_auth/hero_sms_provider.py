@@ -38,7 +38,7 @@ import asyncio
 import json
 import os
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
 import httpx
 from loguru import logger
@@ -206,7 +206,14 @@ class HeroSmsProvider(SmsProvider):
         *,
         timeout_seconds: Optional[int] = None,
         poll_interval_seconds: Optional[int] = None,
+        seen_codes: Optional[Iterable[str]] = None,
     ) -> SmsCodeResult:
+        """轮询 ``getAllSms`` 直到拿到验证码、超时或被取消。
+
+        ``seen_codes``：复用同一手机号重发短信时传入。hero-sms 的 ``getAllSms``
+        会返回该 order 收到的全部短信；若复用号上一次失败前已经收到的码出现在
+        ``seen_codes`` 里，应当忽略它继续轮询，避免把"上一次的旧码"当成本次新码。
+        """
         if not order_id:
             raise SmsResponseError("order_id 不能为空", code="SMS_RESPONSE_ERROR")
         if not self._api_key:
@@ -215,6 +222,7 @@ class HeroSmsProvider(SmsProvider):
         timeout = timeout_seconds or self._sms_poll_timeout
         interval = poll_interval_seconds or self._sms_poll_interval
         deadline = self._loop_deadline(timeout)
+        seen: Set[str] = {str(c).strip() for c in (seen_codes or []) if str(c).strip()}
 
         attempts = 0
         while True:
@@ -224,6 +232,18 @@ class HeroSmsProvider(SmsProvider):
 
             if tag == "STATUS_OK":
                 code = _extract_code_from_payload(payload, raw=text)
+                if code in seen:
+                    # 复用号场景：返回的还是上一次失败前看到的旧码，等小红书发新短信
+                    if self._now_seconds() >= deadline:
+                        raise SmsTimeoutError(
+                            f"等待新验证码超时（{timeout}s）；hero-sms 仍返回旧码 {code}",
+                            code="SMS_TIMEOUT",
+                        )
+                    logger.debug(
+                        f"[hero_sms] order_id={order_id} 仍是旧码 {code}，{interval}s 后再查"
+                    )
+                    await asyncio.sleep(interval)
+                    continue
                 logger.info(
                     f"[hero_sms] 拉到验证码 order_id={order_id} attempts={attempts}"
                 )

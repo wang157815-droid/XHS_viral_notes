@@ -49,6 +49,11 @@ from .sms_provider import (
     SmsTransportError,
 )
 from .hero_sms_provider import HeroSmsProvider
+from .phone_reservation_store import (
+    PhoneReservation,
+    PhoneReservationStore,
+    get_phone_reservation_store,
+)
 
 __all__ = [
     "XhsCredential",
@@ -73,4 +78,7 @@ __all__ = [
     "SmsTimeoutError",
     "SmsTransportError",
     "HeroSmsProvider",
+    "PhoneReservation",
+    "PhoneReservationStore",
+    "get_phone_reservation_store",
 ]

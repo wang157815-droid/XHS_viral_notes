@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +131,13 @@ class SmsProvider(abc.ABC):
         *,
         timeout_seconds: int = 300,
         poll_interval_seconds: int = 60,
+        seen_codes: Optional[Iterable[str]] = None,
     ) -> SmsCodeResult:
-        """阻塞轮询验证码；超时抛 :class:`SmsTimeoutError`。"""
+        """阻塞轮询验证码；超时抛 :class:`SmsTimeoutError`。
+
+        ``seen_codes``：复用同一手机号场景下传入历史已见过的验证码集合；
+        实现方需要将这些码视为"旧码"继续轮询，避免误判。
+        """
 
     async def release_phone(self, order_id: str) -> bool:  # pragma: no cover - 默认 no-op
         """可选：通知供应商释放号码。hero-sms 默认不调用。

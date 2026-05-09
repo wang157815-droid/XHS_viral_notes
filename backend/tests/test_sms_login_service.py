@@ -21,6 +21,7 @@ from typing import List, Optional
 import pytest
 
 from backend.app.services.xhs_auth import (
+    PhoneReservationStore,
     PhonePurchase,
     SmsCodeResult,
     SmsNoStockError,
@@ -101,13 +102,19 @@ class FakeSmsProvider:
         self._purchase_error = purchase_error
         self._sms_error = sms_error
         self._sms_delay = sms_delay_seconds
+        # 监控调用次数：复用 reservation 时不应再调 acquire_phone
+        self.acquire_calls: int = 0
+        self.wait_calls: List[tuple] = []  # (order_id, seen_codes)
 
     async def acquire_phone(self) -> PhonePurchase:
+        self.acquire_calls += 1
         if self._purchase_error:
             raise self._purchase_error
         return self._purchase
 
     async def wait_sms_code(self, order_id: str, **kwargs) -> SmsCodeResult:
+        seen = list(kwargs.get("seen_codes") or [])
+        self.wait_calls.append((order_id, tuple(seen)))
         if self._sms_delay:
             await asyncio.sleep(self._sms_delay)
         if self._sms_error:
@@ -123,11 +130,26 @@ class FakeSmsProvider:
 # ---------------------------------------------------------------------------
 
 
-def _make_service(provider: FakeSmsProvider, driver: FakeDriver, *, ttl: int = 8) -> SmsLoginService:
+def _make_service(
+    provider: FakeSmsProvider,
+    driver: FakeDriver,
+    *,
+    ttl: int = 8,
+    store: Optional[PhoneReservationStore] = None,
+) -> SmsLoginService:
     async def factory(_session: SmsLoginSession) -> SmsLoginDriver:
         return driver
 
-    return SmsLoginService(provider, factory, session_ttl_sec=ttl)
+    return SmsLoginService(
+        provider, factory, session_ttl_sec=ttl, reservation_store=store
+    )
+
+
+def _make_store(tmp_path, *, window_sec: int = 1200) -> PhoneReservationStore:
+    return PhoneReservationStore(
+        store_file=str(tmp_path / "sms_phone_reservations.json"),
+        reuse_window_sec=window_sec,
+    )
 
 
 async def _wait_for_terminal(
@@ -148,10 +170,11 @@ async def _wait_for_terminal(
 
 
 @pytest.mark.asyncio
-async def test_happy_path_success():
+async def test_happy_path_success(tmp_path):
     provider = FakeSmsProvider(code="789012")
     driver = FakeDriver(cookies="a1=val; web_session=abc")
-    service = _make_service(provider, driver)
+    store = _make_store(tmp_path)
+    service = _make_service(provider, driver, store=store)
 
     session = await service.create_session("redmuse_user_1")
     assert session.status == SmsLoginStatus.INITIALIZING
@@ -189,12 +212,12 @@ async def test_happy_path_success():
 
 
 @pytest.mark.asyncio
-async def test_no_stock_error_terminates_with_sms_no_stock():
+async def test_no_stock_error_terminates_with_sms_no_stock(tmp_path):
     provider = FakeSmsProvider(
         purchase_error=SmsNoStockError("暂无库存", code="SMS_NO_STOCK")
     )
     driver = FakeDriver()
-    service = _make_service(provider, driver)
+    service = _make_service(provider, driver, store=_make_store(tmp_path))
 
     session = await service.create_session("u")
     final = await _wait_for_terminal(service, session.session_id)
@@ -208,10 +231,10 @@ async def test_no_stock_error_terminates_with_sms_no_stock():
 
 
 @pytest.mark.asyncio
-async def test_sms_timeout_terminates_with_sms_timeout():
+async def test_sms_timeout_terminates_with_sms_timeout(tmp_path):
     provider = FakeSmsProvider(sms_error=SmsTimeoutError("等待超时", code="SMS_TIMEOUT"))
     driver = FakeDriver()
-    service = _make_service(provider, driver)
+    service = _make_service(provider, driver, store=_make_store(tmp_path))
 
     session = await service.create_session("u")
     final = await _wait_for_terminal(service, session.session_id)
@@ -224,11 +247,11 @@ async def test_sms_timeout_terminates_with_sms_timeout():
 
 
 @pytest.mark.asyncio
-async def test_driver_open_failure_terminates_with_driver_error():
+async def test_driver_open_failure_terminates_with_driver_error(tmp_path):
     provider = FakeSmsProvider()
     driver = FakeDriver()
     driver.fail_on = "open_login_page"
-    service = _make_service(provider, driver)
+    service = _make_service(provider, driver, store=_make_store(tmp_path))
 
     session = await service.create_session("u")
     final = await _wait_for_terminal(service, session.session_id)
@@ -238,10 +261,10 @@ async def test_driver_open_failure_terminates_with_driver_error():
 
 
 @pytest.mark.asyncio
-async def test_cancel_session_marks_cancelled_and_calls_cleanup():
+async def test_cancel_session_marks_cancelled_and_calls_cleanup(tmp_path):
     provider = FakeSmsProvider(sms_delay_seconds=5.0)  # 故意拖在 wait_sms_code
     driver = FakeDriver()
-    service = _make_service(provider, driver)
+    service = _make_service(provider, driver, store=_make_store(tmp_path))
 
     session = await service.create_session("u")
     # 等到 driver 至少进了 click_send_sms 阶段
@@ -267,10 +290,12 @@ async def test_cancel_session_marks_cancelled_and_calls_cleanup():
 
 
 @pytest.mark.asyncio
-async def test_session_auto_expires_when_ttl_passed():
+async def test_session_auto_expires_when_ttl_passed(tmp_path):
     provider = FakeSmsProvider(sms_delay_seconds=10.0)
     driver = FakeDriver()
-    service = _make_service(provider, driver, ttl=0)  # 立刻过期
+    service = _make_service(
+        provider, driver, ttl=0, store=_make_store(tmp_path)
+    )  # 立刻过期
 
     session = await service.create_session("u")
     # 直接 get → 因为 ttl=0，第一次 get 就会被标记 EXPIRED
@@ -280,18 +305,186 @@ async def test_session_auto_expires_when_ttl_passed():
 
 
 @pytest.mark.asyncio
-async def test_get_session_returns_none_for_unknown_id():
+async def test_get_session_returns_none_for_unknown_id(tmp_path):
     provider = FakeSmsProvider()
     driver = FakeDriver()
-    service = _make_service(provider, driver)
+    service = _make_service(provider, driver, store=_make_store(tmp_path))
     s = await service.get_session("nope")
     assert s is None
 
 
 @pytest.mark.asyncio
-async def test_create_session_rejects_empty_user_id():
+async def test_create_session_rejects_empty_user_id(tmp_path):
     provider = FakeSmsProvider()
     driver = FakeDriver()
-    service = _make_service(provider, driver)
+    service = _make_service(provider, driver, store=_make_store(tmp_path))
     with pytest.raises(ValueError):
         await service.create_session("")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 重构补丁：PhoneReservation 复用相关
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_then_retry_reuses_phone_when_sms_not_received(tmp_path):
+    """driver 在 fill_phone 失败 → 重试时应复用同一虚拟号，acquire_phone 仅 1 次。"""
+    store = _make_store(tmp_path)
+
+    # 第一轮：driver 在 fill_phone 阶段炸 → ERROR
+    provider1 = FakeSmsProvider()
+    driver1 = FakeDriver()
+    driver1.fail_on = "fill_phone"
+    service1 = _make_service(provider1, driver1, store=store)
+    s1 = await service1.create_session("u_reuse")
+    final1 = await _wait_for_terminal(service1, s1.session_id)
+    assert final1.status == SmsLoginStatus.ERROR
+    assert final1.phone_reused is False
+    assert provider1.acquire_calls == 1
+
+    # reservation 应当落盘且 sms_received=False
+    saved = store.get("u_reuse")
+    assert saved is not None
+    assert saved.sms_received is False
+    assert saved.order_id == "order_xy"
+
+    # 第二轮：换一个完整可走通的 driver；同 store
+    provider2 = FakeSmsProvider(code="999000")
+    driver2 = FakeDriver()
+    service2 = _make_service(provider2, driver2, store=store)
+    s2 = await service2.create_session("u_reuse")
+    final2 = await _wait_for_terminal(service2, s2.session_id)
+    assert final2.status == SmsLoginStatus.SUCCESS
+    # 关键：第二轮应复用，不再调 acquire_phone
+    assert provider2.acquire_calls == 0
+    assert final2.phone_reused is True
+    assert final2.phone == "85211112222"
+    assert final2.order_id == "order_xy"
+    # 成功后 reservation 必须删除（cookies 已落地）
+    assert store.get("u_reuse") is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_not_reused_after_window_expiry(tmp_path):
+    """超过 reuse_window_sec 后，下一次会话必须重新购号。"""
+    # 1 秒窗口，足够小
+    store = _make_store(tmp_path, window_sec=1)
+
+    provider1 = FakeSmsProvider()
+    driver1 = FakeDriver()
+    driver1.fail_on = "fill_phone"
+    service1 = _make_service(provider1, driver1, store=store)
+    s1 = await service1.create_session("u_old")
+    await _wait_for_terminal(service1, s1.session_id)
+    assert store.get("u_old") is not None
+
+    # 等过窗口
+    await asyncio.sleep(1.2)
+
+    provider2 = FakeSmsProvider(
+        purchase=PhonePurchase(
+            order_id="order_new", phone="85299998888", country_code="HK"
+        )
+    )
+    driver2 = FakeDriver()
+    service2 = _make_service(provider2, driver2, store=store)
+    s2 = await service2.create_session("u_old")
+    final2 = await _wait_for_terminal(service2, s2.session_id)
+    assert final2.status == SmsLoginStatus.SUCCESS
+    assert provider2.acquire_calls == 1  # 重新购号
+    assert final2.phone_reused is False
+    assert final2.order_id == "order_new"
+
+
+@pytest.mark.asyncio
+async def test_reservation_not_reused_when_sms_already_received(tmp_path):
+    """sms_received=True 后即使在 20 分钟内也不复用，避免拿到旧码。"""
+    store = _make_store(tmp_path)
+
+    # 第一轮：成功收到验证码后在 fill_and_submit_sms 阶段炸
+    provider1 = FakeSmsProvider(code="111222")
+    driver1 = FakeDriver()
+    driver1.fail_on = "fill_and_submit_sms"
+    service1 = _make_service(provider1, driver1, store=store)
+    s1 = await service1.create_session("u_burned")
+    final1 = await _wait_for_terminal(service1, s1.session_id)
+    assert final1.status == SmsLoginStatus.ERROR
+    # 关键：sms_received 必须被标记
+    saved = store.get("u_burned")
+    assert saved is not None
+    assert saved.sms_received is True
+    assert "111222" in saved.seen_codes
+
+    # 第二轮：必须重新购号
+    provider2 = FakeSmsProvider(
+        purchase=PhonePurchase(
+            order_id="order_fresh", phone="85277776666", country_code="HK"
+        )
+    )
+    driver2 = FakeDriver()
+    service2 = _make_service(provider2, driver2, store=store)
+    s2 = await service2.create_session("u_burned")
+    final2 = await _wait_for_terminal(service2, s2.session_id)
+    assert final2.status == SmsLoginStatus.SUCCESS
+    assert provider2.acquire_calls == 1
+    assert final2.phone_reused is False
+
+
+@pytest.mark.asyncio
+async def test_seen_codes_passed_to_wait_sms_code_on_reuse(tmp_path):
+    """复用号时，wait_sms_code 应收到上次已见过的码作为 seen_codes。"""
+    store = _make_store(tmp_path)
+    # 直接预埋一条已见过码 999111 的 reservation（模拟极端边界：
+    # 上次在 fill_and_submit_sms 之前 marker 已经写了 sms_received=True 不可复用，
+    # 我们这里手动构造 sms_received=False + seen_codes 不为空 的"准复用"场景）
+    from backend.app.services.xhs_auth import PhoneReservation
+
+    store.save(
+        PhoneReservation(
+            redmuse_user_id="u_seen",
+            order_id="order_keep",
+            phone="85233334444",
+            country_code="HK",
+            sms_received=False,
+            seen_codes=["999111"],
+        )
+    )
+
+    provider = FakeSmsProvider(code="888777")
+    driver = FakeDriver()
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_seen")
+    final = await _wait_for_terminal(service, s.session_id)
+    assert final.status == SmsLoginStatus.SUCCESS
+    assert final.phone_reused is True
+    assert provider.acquire_calls == 0
+    # provider.wait_sms_code 必须看到 seen_codes
+    assert provider.wait_calls == [("order_keep", ("999111",))]
+
+
+@pytest.mark.asyncio
+async def test_reservation_kept_on_user_cancel(tmp_path):
+    """用户主动取消时 reservation 不删，下次还能复用。"""
+    store = _make_store(tmp_path)
+
+    provider = FakeSmsProvider(sms_delay_seconds=5.0)
+    driver = FakeDriver()
+    service = _make_service(provider, driver, store=store)
+    s = await service.create_session("u_cancel")
+
+    # 等到 reservation 已写入（acquiring_phone 之后）
+    for _ in range(60):
+        if store.get("u_cancel") is not None:
+            break
+        await asyncio.sleep(0.02)
+    assert store.get("u_cancel") is not None
+
+    await service.cancel_session(s.session_id)
+    s_after = await service.get_session(s.session_id)
+    assert s_after.status == SmsLoginStatus.CANCELLED
+
+    # cancel 后 reservation 仍在
+    saved = store.get("u_cancel")
+    assert saved is not None
+    assert saved.sms_received is False  # 没收到验证码 → 仍可复用

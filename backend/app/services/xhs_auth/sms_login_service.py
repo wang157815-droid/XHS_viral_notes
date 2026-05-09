@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -40,6 +41,11 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from loguru import logger
 
+from .phone_reservation_store import (
+    PhoneReservation,
+    PhoneReservationStore,
+    get_phone_reservation_store,
+)
 from .sms_login_driver import CookieSnapshot, SmsLoginDriver
 from .sms_provider import (
     PhonePurchase,
@@ -88,6 +94,8 @@ class SmsLoginSession:
     cookies_str: Optional[str] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    phone_reused: bool = False
+    """True 表示本次会话复用了上一次失败的 reservation（未再调 acquire_phone）。"""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -105,6 +113,7 @@ class SmsLoginSession:
             "order_id": self.order_id,
             "error_code": self.error_code,
             "error_message": self.error_message,
+            "phone_reused": self.phone_reused,
             "is_terminal": self.status.is_terminal,
             "cookies_ready": bool(self.cookies_str),
             "created_at": self.created_at.isoformat(),
@@ -132,10 +141,13 @@ class SmsLoginService:
         driver_factory: DriverFactory,
         *,
         session_ttl_sec: int = _DEFAULT_SESSION_TTL_SEC,
+        reservation_store: Optional[PhoneReservationStore] = None,
     ) -> None:
         self._provider = sms_provider
         self._driver_factory = driver_factory
         self._session_ttl_sec = session_ttl_sec
+        # 测试可注入隔离的 store；生产走 ``get_phone_reservation_store()``
+        self._reservation_store = reservation_store or get_phone_reservation_store()
 
         self._sessions: Dict[str, SmsLoginSession] = {}
         self._tasks: Dict[str, asyncio.Task[Any]] = {}
@@ -227,9 +239,9 @@ class SmsLoginService:
             await self._set_status(session, SmsLoginStatus.INITIALIZING)
             await driver.open_login_page()
 
-            # 1. 购号
+            # 1. 购号 / 复用号
             await self._set_status(session, SmsLoginStatus.ACQUIRING_PHONE)
-            purchase: PhonePurchase = await self._provider.acquire_phone()
+            purchase, seen_codes = await self._acquire_or_reuse_phone(session)
             session.phone = purchase.phone
             session.phone_country = purchase.country_code
             session.order_id = purchase.order_id
@@ -242,9 +254,15 @@ class SmsLoginService:
             )
             await driver.click_send_sms()
 
-            # 3. 等验证码
+            # 3. 等验证码（复用号时把历史已见过的码当作旧码过滤）
             await self._set_status(session, SmsLoginStatus.WAITING_SMS)
-            sms: SmsCodeResult = await self._provider.wait_sms_code(purchase.order_id)
+            sms: SmsCodeResult = await self._provider.wait_sms_code(
+                purchase.order_id, seen_codes=seen_codes
+            )
+            # 一旦真收到验证码 → 该号永久不可复用
+            self._reservation_store.mark_sms_received(
+                session.redmuse_user_id, code=sms.code
+            )
 
             # 4. 填验证码
             await self._set_status(session, SmsLoginStatus.SUBMITTING_SMS)
@@ -258,6 +276,8 @@ class SmsLoginService:
             await self._mark_terminal(
                 session, SmsLoginStatus.SUCCESS, None, "登录成功"
             )
+            # 登录闭环成功 → cookies 已落地，号没意义，删 reservation
+            self._reservation_store.delete(session.redmuse_user_id)
             logger.info(f"[sms_login] {session.session_id} 登录成功")
 
         except asyncio.CancelledError:
@@ -287,6 +307,40 @@ class SmsLoginService:
             )
         finally:
             await self._cleanup_driver(session.session_id)
+
+    async def _acquire_or_reuse_phone(
+        self, session: SmsLoginSession
+    ) -> tuple[PhonePurchase, list[str]]:
+        """决定是复用上次的虚拟号还是重新购号。
+
+        返回 ``(purchase, seen_codes)``：
+        - ``purchase``：本次会话使用的号（新购或复用）
+        - ``seen_codes``：复用时上次已见过的验证码（给 ``wait_sms_code`` 过滤旧码）
+        """
+        existing = self._reservation_store.get_reusable(session.redmuse_user_id)
+        if existing is not None:
+            session.phone_reused = True
+            await self._touch(session)
+            logger.info(
+                f"[sms_login] {session.session_id} 复用 reservation "
+                f"order_id={existing.order_id} phone=…{existing.phone[-4:]} "
+                f"age={int(existing.age_seconds(now_monotonic=time.monotonic()))}s "
+                f"seen_codes={len(existing.seen_codes)}"
+            )
+            return existing.to_purchase(), list(existing.seen_codes)
+
+        # 不可复用 → 真扣费购号；新号写 reservation
+        purchase = await self._provider.acquire_phone()
+        reservation = PhoneReservation(
+            redmuse_user_id=session.redmuse_user_id,
+            order_id=purchase.order_id,
+            phone=purchase.phone,
+            country_code=purchase.country_code,
+            purchased_at_monotonic=time.monotonic(),
+            raw=dict(purchase.raw or {}),
+        )
+        self._reservation_store.save(reservation)
+        return purchase, []
 
     async def _set_status(
         self, session: SmsLoginSession, status: SmsLoginStatus
@@ -345,6 +399,7 @@ def get_sms_login_service() -> Optional[SmsLoginService]:
     with _default_service_lock:
         if _default_service is not None:
             return _default_service
+        import os
         from .hero_sms_provider import HeroSmsProvider
         from .playwright_sms_login_driver import PlaywrightSmsLoginDriver
 
@@ -355,7 +410,22 @@ def get_sms_login_service() -> Optional[SmsLoginService]:
         async def _factory(_session: SmsLoginSession) -> SmsLoginDriver:
             return PlaywrightSmsLoginDriver()
 
-        _default_service = SmsLoginService(provider, _factory)
+        # 允许 env 覆盖虚拟号复用窗口（默认 20 分钟，PhoneReservationStore 内置）
+        reuse_window = os.getenv("SMS_PHONE_REUSE_WINDOW_SEC", "").strip()
+        store: Optional[PhoneReservationStore] = None
+        if reuse_window:
+            try:
+                store = PhoneReservationStore(
+                    reuse_window_sec=max(0, int(reuse_window))
+                )
+            except ValueError:
+                logger.warning(
+                    f"[sms_login] 非法 SMS_PHONE_REUSE_WINDOW_SEC={reuse_window!r}，使用默认值"
+                )
+
+        _default_service = SmsLoginService(
+            provider, _factory, reservation_store=store
+        )
         return _default_service
 
 
