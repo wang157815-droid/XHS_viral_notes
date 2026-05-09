@@ -36,6 +36,19 @@ from .credential_binder import (
     XhsCredentialBinder,
     get_credential_binder,
 )
+from .sms_provider import (
+    PhonePurchase,
+    SmsAuthError,
+    SmsCancelledError,
+    SmsCodeResult,
+    SmsNoStockError,
+    SmsProvider,
+    SmsProviderError,
+    SmsResponseError,
+    SmsTimeoutError,
+    SmsTransportError,
+)
+from .hero_sms_provider import HeroSmsProvider
 
 __all__ = [
     "XhsCredential",
@@ -49,4 +62,15 @@ __all__ = [
     "BindResult",
     "XhsCredentialBinder",
     "get_credential_binder",
+    "PhonePurchase",
+    "SmsCodeResult",
+    "SmsProvider",
+    "SmsProviderError",
+    "SmsAuthError",
+    "SmsCancelledError",
+    "SmsNoStockError",
+    "SmsResponseError",
+    "SmsTimeoutError",
+    "SmsTransportError",
+    "HeroSmsProvider",
 ]

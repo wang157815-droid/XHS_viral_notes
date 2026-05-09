@@ -1,13 +1,17 @@
-"""XHS 数据源凭据相关 API（Phase 1 + Phase 2-A）。
+"""XHS 数据源凭据相关 API（Phase 1 + Phase 2-A + Phase 3）。
 
 接口列表：
 
-- ``GET /xhs-auth/credential``           —— 当前 RedMuse 用户的凭据（含状态）
-- ``GET /xhs-auth/credential/status``    —— 主动跑一次健康检查（轻量）
-- ``DELETE /xhs-auth/credential``        —— 解绑当前用户的 XHS 凭据（不删 cookies.json 物理文件）
-- ``GET /xhs-auth/credentials``          —— admin 列出所有用户的凭据状态
-- ``POST /xhs-auth/bind/cookies``        —— Phase 2-A：当前用户用裸 cookies_str 绑定
-- ``POST /xhs-auth/bind/from-session``   —— Phase 2-A：扫码完成后把结果绑到当前用户
+- ``GET /xhs-auth/credential``              —— 当前 RedMuse 用户的凭据（含状态）
+- ``GET /xhs-auth/credential/status``       —— 主动跑一次健康检查（轻量）
+- ``DELETE /xhs-auth/credential``           —— 解绑当前用户的 XHS 凭据（不删 cookies.json 物理文件）
+- ``GET /xhs-auth/credentials``             —— admin 列出所有用户的凭据状态
+- ``POST /xhs-auth/bind/cookies``           —— Phase 2-A：当前用户用裸 cookies_str 绑定
+- ``POST /xhs-auth/bind/from-session``      —— Phase 2-A：扫码完成后把结果绑到当前用户
+- ``POST /xhs-auth/sms-login/session``      —— Phase 3：启动"虚拟手机号自动登录"会话
+- ``GET /xhs-auth/sms-login/session/{id}``  —— Phase 3：查询会话状态（前端轮询）
+- ``DELETE /xhs-auth/sms-login/session/{id}`` —— Phase 3：取消会话
+- ``POST /xhs-auth/sms-login/session/{id}/bind`` —— Phase 3：会话成功后把 cookie 绑定到当前用户
 
 Phase 2-B 起会增加"重新授权"专用扫码入口；当前 ``from-session`` 复用既有
 ``/auth/xhs-login/session`` 完成的扫码会话即可。
@@ -26,6 +30,10 @@ from ...services.xhs_auth import (
     get_credential_binder,
     get_credential_health_checker,
     get_credential_store,
+)
+from ...services.xhs_auth.sms_login_service import (
+    SmsLoginStatus,
+    get_sms_login_service,
 )
 
 
@@ -152,6 +160,118 @@ async def bind_from_qr_session(
         status_code = 409 if result.error_code == "session_not_ready" else 400
         raise HTTPException(
             status_code=status_code,
+            detail={
+                "code": result.error_code or "bind_failed",
+                "message": result.error_message or "绑定失败",
+                "details": {},
+            },
+        )
+    return ok(result.to_dict())
+
+
+# =============================================================================
+# Phase 3: 虚拟手机号 / SMS 自动登录
+# =============================================================================
+
+
+def _require_sms_login_service():
+    svc = get_sms_login_service()
+    if svc is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SMS_PROVIDER_NOT_CONFIGURED",
+                "message": "尚未配置 SMS_PROVIDER_API_KEY；请在 .env 填入 hero-sms api_key 后重启。",
+                "details": {},
+            },
+        )
+    return svc
+
+
+@router.post("/sms-login/session")
+async def create_sms_login_session(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """启动一个"虚拟手机号自动登录"会话；立即返回 session，前端轮询 GET。"""
+    svc = _require_sms_login_service()
+    session = await svc.create_session(current_user["user_id"])
+    return ok(session.public_dict())
+
+
+@router.get("/sms-login/session/{session_id}")
+async def get_sms_login_session(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """查询会话状态（前端每 1-2s 轮询一次）。"""
+    svc = _require_sms_login_service()
+    session = await svc.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="SMS 会话不存在或已释放")
+    # 归属校验：只能查自己的会话
+    if session.redmuse_user_id != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问他人会话")
+    return ok(session.public_dict())
+
+
+@router.delete("/sms-login/session/{session_id}")
+async def cancel_sms_login_session(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """取消会话；关闭浏览器 + 释放号码。"""
+    svc = _require_sms_login_service()
+    session = await svc.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="SMS 会话不存在")
+    if session.redmuse_user_id != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权取消他人会话")
+    await svc.cancel_session(session_id)
+    return ok({"session_id": session_id, "cancelled": True})
+
+
+@router.post("/sms-login/session/{session_id}/bind")
+async def bind_from_sms_login_session(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """会话 ``success`` 后把抓到的 cookies_str 绑定到当前 RedMuse 用户。
+
+    一次性接口：成功后 cookies 在 service 内被消费置空，避免被二次使用。
+    """
+    svc = _require_sms_login_service()
+    session = await svc.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="SMS 会话不存在")
+    if session.redmuse_user_id != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权使用他人会话")
+
+    if session.status != SmsLoginStatus.SUCCESS:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMS_SESSION_NOT_READY",
+                "message": f"会话尚未成功完成（当前状态：{session.status.value}）",
+                "details": {"status": session.status.value},
+            },
+        )
+
+    cookies_str = await svc.consume_cookies(session_id)
+    if not cookies_str:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "SMS_COOKIES_CONSUMED",
+                "message": "会话 cookie 已被消费，请重新走 SMS 登录",
+                "details": {},
+            },
+        )
+
+    binder = get_credential_binder()
+    result = await binder.bind_with_cookies(current_user["user_id"], cookies_str)
+    if not result.success:
+        raise HTTPException(
+            status_code=400,
             detail={
                 "code": result.error_code or "bind_failed",
                 "message": result.error_message or "绑定失败",

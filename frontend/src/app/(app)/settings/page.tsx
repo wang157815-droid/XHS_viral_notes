@@ -7,11 +7,17 @@ import { PageHeader } from "@/components/layout/page-header";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api-client";
 import { useSession } from "@/lib/session-context";
 import {
+  bindFromSmsLoginSession,
   bindXhsWithCookies,
+  cancelSmsLoginSession,
+  createSmsLoginSession,
+  describeSmsLoginStatus,
   describeXhsCredentialStatus,
   fetchMyXhsCredential,
+  fetchSmsLoginSession,
   probeMyXhsCredentialStatus,
   unbindMyXhsCredential,
+  type SmsLoginSessionDto,
   type XhsCredentialPublic,
 } from "@/lib/xhs-credential";
 
@@ -709,6 +715,12 @@ function XhsCredentialSection({
             前往扫码绑定 →
           </a>
         </Row>
+        <Row
+          label="自动 SMS 重新授权"
+          hint="调 hero-sms 虚拟号 + Playwright 自动登录；需在 .env 配置 SMS_PROVIDER_API_KEY"
+        >
+          <SmsAutoLoginPanel onBound={onRefresh} />
+        </Row>
         <Row label="高级：粘贴 Cookie 绑定" hint="从浏览器 DevTools 复制完整 cookie，仅管理员排障使用">
           <button
             type="button"
@@ -755,6 +767,190 @@ function XhsCredentialSection({
         ) : null}
       </Card>
     </section>
+  );
+}
+
+function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
+  const [session, setSession] = useState<SmsLoginSessionDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [bindMessage, setBindMessage] = useState<string | null>(null);
+
+  // 轮询：非终态时每 1.5s 拉一次
+  useEffect(() => {
+    if (!session?.session_id) return;
+    if (session.is_terminal) return;
+    const timer = window.setInterval(async () => {
+      const res = await fetchSmsLoginSession(session.session_id);
+      if (res.ok) setSession(res.data);
+      else setError(res.error?.message ?? "查询会话失败");
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [session?.session_id, session?.is_terminal]);
+
+  const handleStart = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setBindMessage(null);
+    try {
+      const res = await createSmsLoginSession();
+      if (res.ok) {
+        setSession(res.data);
+      } else {
+        setError(res.error?.message ?? "启动会话失败");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const handleCancel = useCallback(async () => {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const res = await cancelSmsLoginSession(session.session_id);
+      if (!res.ok) {
+        setError(res.error?.message ?? "取消失败");
+        return;
+      }
+      const refreshed = await fetchSmsLoginSession(session.session_id);
+      if (refreshed.ok) setSession(refreshed.data);
+    } finally {
+      setBusy(false);
+    }
+  }, [session]);
+
+  const handleBind = useCallback(async () => {
+    if (!session) return;
+    setBusy(true);
+    setError(null);
+    setBindMessage(null);
+    try {
+      const res = await bindFromSmsLoginSession(session.session_id);
+      if (!res.ok) {
+        setError(res.error?.message ?? "绑定失败");
+        return;
+      }
+      setBindMessage(
+        `已绑定：${res.data.xhs_nickname ?? res.data.xhs_user_id ?? ""}`,
+      );
+      onBound();
+      // 刷新一次以更新 cookies_ready=false
+      const refreshed = await fetchSmsLoginSession(session.session_id);
+      if (refreshed.ok) setSession(refreshed.data);
+    } finally {
+      setBusy(false);
+    }
+  }, [session, onBound]);
+
+  if (!session) {
+    return (
+      <button
+        type="button"
+        onClick={() => void handleStart()}
+        disabled={busy}
+        className="rounded-md border border-[#FF4757] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#FF4757] transition hover:bg-[#FFE8E0] disabled:opacity-60"
+      >
+        {busy ? "启动中…" : "开始自动登录"}
+      </button>
+    );
+  }
+
+  const meta = describeSmsLoginStatus(session.status);
+  const toneColor =
+    meta.tone === "ok"
+      ? "#3D8C40"
+      : meta.tone === "err"
+        ? "#E04040"
+        : meta.tone === "warn"
+          ? "#B8860B"
+          : "#5A5550";
+
+  return (
+    <div className="flex w-full flex-col gap-2 text-[12px]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2" style={{ color: toneColor }}>
+          <span
+            className="h-2 w-2 rounded-full"
+            style={{ background: toneColor }}
+          />
+          <span>{meta.label}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {session.is_terminal ? (
+            <button
+              type="button"
+              onClick={() => setSession(null)}
+              className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0]"
+            >
+              重新开始
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleCancel()}
+              disabled={busy}
+              className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0] disabled:opacity-60"
+            >
+              取消
+            </button>
+          )}
+          {session.status === "success" && session.cookies_ready ? (
+            <button
+              type="button"
+              onClick={() => void handleBind()}
+              disabled={busy}
+              className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3 py-1 text-white hover:bg-[#E03B4A] disabled:opacity-60"
+            >
+              绑定到当前账号
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#F5F3F0]">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{
+            width: `${meta.progress}%`,
+            background:
+              meta.tone === "ok"
+                ? "#3D8C40"
+                : meta.tone === "err"
+                  ? "#E04040"
+                  : "#FF4757",
+          }}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#8A8580]">
+        <span>会话：{session.session_id}</span>
+        {session.phone ? (
+          <span>
+            手机号：{session.phone}
+            {session.phone_country ? `（${session.phone_country}）` : ""}
+          </span>
+        ) : null}
+        {session.order_id ? <span>hero-sms 订单：{session.order_id}</span> : null}
+      </div>
+
+      {session.error_message ? (
+        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+          {session.error_code ? `[${session.error_code}] ` : ""}
+          {session.error_message}
+        </div>
+      ) : null}
+      {bindMessage ? (
+        <div className="rounded-md border border-[#D4ECD6] bg-[#F3F9F4] px-2 py-1 text-[#3D8C40]">
+          {bindMessage}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+          {error}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
