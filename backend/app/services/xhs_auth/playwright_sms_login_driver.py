@@ -38,22 +38,26 @@ _SELECTORS: Dict[str, str] = {
     # 仅在 A/B 流量出现独立 tab 时点一下。所有 _safe_click 都会 optional 处理。
     "phone_tab": os.getenv("XHS_SMS_TAB_SELECTOR")
     or ":text-is(\"手机号登录\")",
-    # 国家区号触发器：截图里是「+1▼」按钮；扩展多种命中方式
+    # 国家区号触发器：截图里是「+1▼」按钮，但 DOM 上几乎不会是裸 <button>，
+    # 更可能是 <div>/<span>/带 role=combobox 容器包着 "+1" 文本节点。
+    # 用 :text-is 精确匹配文字节点（能命中任何标签），点击会冒泡触发父容器。
     "country_selector": os.getenv("XHS_SMS_COUNTRY_SELECTOR")
     or (
-        "button:has-text(\"+1\"), button:has-text(\"+86\"), "
-        "button:has-text(\"+852\"), .country-flag, .country-code, "
-        "[class*='country']"
+        ":text-is(\"+1\"), :text-is(\"+86\"), :text-is(\"+852\"), "
+        ":text-is(\"+44\"), [role='combobox'], "
+        "[class*='country' i], [class*='dial' i], [class*='area-code' i], "
+        ".reds-select__trigger, .reds-select-trigger"
     ),
-    # 国家区号下拉项；模板中 +852 会按 country_code 实际值替换
+    # 国家区号下拉项；模板中 +852 会按 country_code 实际值替换。
+    # :text-is 精确匹配，避免误中"+1 (US)"这种长文本。
     "country_option_template": os.getenv("XHS_SMS_COUNTRY_OPTION")
-    or ":text(\"+852\")",
+    or ":text-is(\"+852\")",
     # 手机号输入框（placeholder=「请输入手机号」）
     "phone_input": os.getenv("XHS_SMS_PHONE_INPUT")
     or "input[placeholder*='手机号'], input[type='tel'], input[name='phone']",
     # 「获取验证码 / 发送验证码」按钮
     "send_code_button": os.getenv("XHS_SMS_SEND_BUTTON")
-    or "button:has-text(\"获取验证码\"), :text-is(\"获取验证码\"), :text-is(\"发送验证码\")",
+    or ":text-is(\"获取验证码\"), :text-is(\"发送验证码\"), button:has-text(\"获取验证码\")",
     # 验证码输入框（placeholder=「输入验证码」）
     "sms_input": os.getenv("XHS_SMS_CODE_INPUT")
     or "input[placeholder*='验证码'], input[name='code'], input[name='verifyCode']",
@@ -65,6 +69,18 @@ _SELECTORS: Dict[str, str] = {
         "button[type='submit']"
     ),
 }
+
+# 截图诊断目录：fill_phone / click_send_sms 失败时自动写入
+_SCREENSHOT_DIR = (
+    Path(os.getenv("XHS_SMS_SCREENSHOT_DIR") or "datas/sms_screenshots")
+    .expanduser()
+    .resolve()
+)
+_DEBUG_DUMP = (os.getenv("XHS_SMS_DEBUG_DUMP") or "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 _LOGIN_URL = os.getenv("XHS_LOGIN_START_URL") or "https://www.xiaohongshu.com/explore"
 _PROFILE_DIR = (
@@ -122,41 +138,23 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
     async def fill_phone(self, *, country_code: str, phone: str) -> None:
         page = self._require_page()
 
-        # 1) 切国家区号下拉。每一步成功/失败都打 INFO 日志，
-        #    便于联调时确认 selector 是否真命中。
+        # 1) 切国家区号下拉。selector 失败不致命（optional），但全程打日志 +
+        #    截图，便于联调时定位真实 DOM 结构。
         cc_label = ""
+        country_picked = False
         if country_code:
             cc = country_code.strip()
             cc_label = cc if cc.startswith("+") else self._country_iso_to_label(cc)
             logger.info(f"[sms_login] 准备切换国家码到 {cc_label}")
-
-            opened = await self._safe_click(
-                _SELECTORS["country_selector"], optional=True
-            )
-            if opened:
-                logger.info("[sms_login] 国家码下拉触发器已点击")
-                # 给下拉一个短暂的渲染时间
-                try:
-                    await page.wait_for_timeout(300)
-                except Exception:
-                    pass
-                template = _SELECTORS["country_option_template"]
-                option_selector = template.replace("+852", cc_label)
-                picked = await self._safe_click(option_selector, optional=True)
-                if picked:
-                    logger.info(f"[sms_login] 已选 {cc_label}")
-                else:
-                    logger.warning(
-                        f"[sms_login] ⚠ 国家码选项 {cc_label} 没找到 "
-                        f"(selector={option_selector!r})，将直接填手机号；"
-                        f"小红书登录页默认 +1，可能导致校验失败。"
-                        f"用 XHS_SMS_COUNTRY_OPTION 环境变量覆盖正确 selector。"
-                    )
-            else:
+            country_picked = await self._switch_country_code(cc_label)
+            if not country_picked:
+                # 国家码切换失败：写截图 + 输出 DOM 摘要，让用户能看清 selector 应该怎么写
+                await self._diagnostic_dump("country_code_failed", reason=f"未能选中 {cc_label}")
                 logger.warning(
-                    f"[sms_login] ⚠ 国家码下拉触发器没找到 "
-                    f"(selector={_SELECTORS['country_selector']!r})，"
-                    f"将直接填手机号。用 XHS_SMS_COUNTRY_SELECTOR 环境变量覆盖。"
+                    f"[sms_login] ⚠ 国家码 {cc_label} 切换失败，"
+                    f"将直接填手机号；小红书默认 +1 可能导致校验失败。"
+                    f"截图保存在 {_SCREENSHOT_DIR}，请检查后用 "
+                    f"XHS_SMS_COUNTRY_SELECTOR / XHS_SMS_COUNTRY_OPTION 环境变量覆盖。"
                 )
         else:
             logger.warning(
@@ -164,10 +162,12 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
                 "（这通常是配置或 reservation 字段丢失，请检查日志。）"
             )
 
-        # 2) 剥离国家拨号前缀，只填本地号
+        # 2) 剥离国家拨号前缀，只填本地号（前提是国家码切换成功；如果切换失败
+        #    保险起见仍剥前缀，这样万一小红书自动识别国家码也能正常发码）
         local_phone = self._strip_dial_prefix(phone, country_code=country_code)
         logger.info(
             f"[sms_login] 填入手机号 country={cc_label or country_code or '(none)'} "
+            f"country_picked={country_picked} "
             f"raw=…{phone[-4:]} local=…{local_phone[-4:]} (len={len(local_phone)})"
         )
         try:
@@ -175,26 +175,114 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
                 _SELECTORS["phone_input"], local_phone, timeout=_NAV_TIMEOUT_MS
             )
         except Exception as exc:
+            await self._diagnostic_dump("phone_input_failed", reason=str(exc))
             raise RuntimeError(f"填写手机号失败: {exc}") from exc
+
+    async def _switch_country_code(self, cc_label: str) -> bool:
+        """切国家码下拉：尝试 trigger × option 多种 selector 组合 + 重试。
+
+        返回 True 表示成功选中，False 表示尝试了所有 selector / 重试都没命中。
+        """
+        page = self._require_page()
+        template = _SELECTORS["country_option_template"]
+        option_selector = template.replace("+852", cc_label)
+
+        # 最多两轮尝试：第一轮失败后等 1s 让 modal 完整渲染再试一次
+        for attempt in (1, 2):
+            opened = await self._safe_click(
+                _SELECTORS["country_selector"], optional=True
+            )
+            if not opened:
+                logger.info(
+                    f"[sms_login] attempt={attempt} 国家码触发器 click 未命中 "
+                    f"(selector={_SELECTORS['country_selector']!r})"
+                )
+            else:
+                logger.info(
+                    f"[sms_login] attempt={attempt} 国家码触发器已点击，等待下拉渲染"
+                )
+                try:
+                    await page.wait_for_timeout(400)
+                except Exception:
+                    pass
+                picked = await self._safe_click(option_selector, optional=True)
+                if picked:
+                    logger.info(f"[sms_login] ✓ 已选 {cc_label}")
+                    return True
+                logger.info(
+                    f"[sms_login] attempt={attempt} 选项 {cc_label} 未命中 "
+                    f"(selector={option_selector!r})"
+                )
+            # 第一轮失败 → 等 modal 重新渲染再试
+            if attempt == 1:
+                try:
+                    await page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+        return False
+
+    async def _diagnostic_dump(self, step: str, *, reason: str = "") -> None:
+        """selector 失败时自动落盘一份截图 + 可选 DOM 片段，让联调时看清现场。
+
+        - 截图：``datas/sms_screenshots/<step>_<timestamp>.png``
+        - DOM 摘要：仅在 ``XHS_SMS_DEBUG_DUMP=true`` 时写入相邻的 ``.html`` 文件
+        """
+        if self._page is None:
+            return
+        try:
+            _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.debug(f"[sms_login] 创建截图目录失败: {exc}")
+            return
+        from datetime import datetime as _dt
+
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        png_path = _SCREENSHOT_DIR / f"{step}_{ts}.png"
+        try:
+            await self._page.screenshot(path=str(png_path), full_page=True)
+            logger.warning(
+                f"[sms_login] ⚠ {step} 失败 ({reason})，截图已保存到 {png_path}"
+            )
+        except Exception as exc:
+            logger.debug(f"[sms_login] 截图保存失败: {exc}")
+        if _DEBUG_DUMP:
+            try:
+                html = await self._page.content()
+                html_path = _SCREENSHOT_DIR / f"{step}_{ts}.html"
+                html_path.write_text(html[:200_000], encoding="utf-8")
+                logger.warning(
+                    f"[sms_login] DOM 已 dump 到 {html_path} (前 200KB)"
+                )
+            except Exception as exc:
+                logger.debug(f"[sms_login] DOM dump 失败: {exc}")
 
     async def click_send_sms(self) -> None:
         page = self._require_page()
         try:
             await page.click(_SELECTORS["send_code_button"], timeout=_NAV_TIMEOUT_MS)
+            logger.info("[sms_login] ✓ 已点击「获取验证码」按钮")
         except Exception as exc:
+            await self._diagnostic_dump("send_sms_failed", reason=str(exc))
             raise RuntimeError(f"点击「获取验证码」失败: {exc}") from exc
 
     async def fill_and_submit_sms(self, code: str) -> None:
         page = self._require_page()
         try:
             await page.fill(_SELECTORS["sms_input"], code, timeout=_NAV_TIMEOUT_MS)
+            logger.info(f"[sms_login] ✓ 已填入验证码 …{code[-2:]}")
         except Exception as exc:
+            await self._diagnostic_dump("sms_input_failed", reason=str(exc))
             raise RuntimeError(f"填写验证码失败: {exc}") from exc
         # 提交：尝试点提交按钮，失败回退按 Enter
-        if not await self._safe_click(_SELECTORS["submit_button"], optional=True):
+        submitted = await self._safe_click(_SELECTORS["submit_button"], optional=True)
+        if submitted:
+            logger.info("[sms_login] ✓ 已点击「登录」按钮")
+        else:
+            logger.info("[sms_login] 未命中登录按钮，回退按 Enter 提交")
             try:
                 await page.keyboard.press("Enter")
             except Exception as exc:
+                await self._diagnostic_dump("submit_failed", reason=str(exc))
                 raise RuntimeError(f"提交验证码失败: {exc}") from exc
 
     async def wait_for_login_success(
