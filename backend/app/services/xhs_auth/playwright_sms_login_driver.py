@@ -100,6 +100,13 @@ _DEBUG_DUMP = (os.getenv("XHS_SMS_DEBUG_DUMP") or "").strip().lower() in (
 )
 
 _LOGIN_URL = os.getenv("XHS_LOGIN_START_URL") or "https://www.xiaohongshu.com/explore"
+
+# 登录成功判据：等到 cookies 里出现 ``web_session`` 且其值非空。
+# 注意：**不能用 URL 判 "/explore"**，因为 _LOGIN_URL 自身就是
+# https://www.xiaohongshu.com/explore，从打开页面那一刻起 page.url 就一直
+# 包含 /explore，会立刻误判为已登录、收下游客 cookie，导致后续 selfinfo
+# 拿到 ``payload_keys=['user_id', 'guest']`` → 'guest' 字段证明是游客身份。
+_LOGIN_COOKIE_NAME = "web_session"
 # **每次会话用全新 incognito context**：不再持久化 profile。
 # 之前用 launch_persistent_context + 共享 user_data_dir 会让上次失败遗留的
 # cookies / localStorage 污染下一次会话，导致小红书弹不一样的 modal、
@@ -120,7 +127,6 @@ _HEADLESS = (os.getenv("XHS_SMS_HEADLESS") or "true").strip().lower() in (
     "yes",
 )
 _NAV_TIMEOUT_MS = int(os.getenv("XHS_SMS_NAV_TIMEOUT_MS") or "30000")
-_DEFAULT_SUCCESS_URL_HINT = "/explore"  # 登录成功后会跳转 explore
 
 
 class PlaywrightSmsLoginDriver(SmsLoginDriver):
@@ -457,18 +463,61 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
     async def wait_for_login_success(
         self, *, timeout_seconds: int = 60
     ) -> CookieSnapshot:
-        page = self._require_page()
+        """轮询等待真正登录成功，返回完整 cookies 串。
+
+        判据（按优先级）：
+
+        1. **必要条件**：context.cookies() 里出现 ``web_session`` 且其值长度
+           >= 16 个字符。游客态 / 登录前的 explore 页只有 ``a1`` / ``webId`` /
+           ``acw_tc``，**没有 web_session**；后台 selfinfo 也据此区分访客。
+        2. **辅助条件**（命中 #1 后立刻确认，避免 racing）：登录 modal 已经
+           关闭 —— 通过原来的"手机号输入框消失"判断。
+
+        ``timeout_seconds`` 内不满足判据 → ``TimeoutError``。
+        """
+        if self._context is None:
+            raise RuntimeError("Playwright context 尚未初始化")
+
         end = asyncio.get_event_loop().time() + max(5, timeout_seconds)
+        last_diag = ""
         while asyncio.get_event_loop().time() < end:
             try:
-                if _DEFAULT_SUCCESS_URL_HINT in (page.url or ""):
-                    cookies = await self._collect_cookies()
-                    if cookies:
-                        return cookies
-            except Exception:
-                pass
+                cookies = await self._context.cookies()
+            except Exception as exc:
+                last_diag = f"cookies()_exc: {exc}"
+                await asyncio.sleep(1)
+                continue
+
+            web_session_value = ""
+            for c in cookies or []:
+                if (c.get("name") or "") == _LOGIN_COOKIE_NAME:
+                    web_session_value = (c.get("value") or "").strip()
+                    break
+
+            if web_session_value and len(web_session_value) >= 16:
+                # 真登录态：拿到带值的 web_session
+                snapshot = await self._collect_cookies()
+                if snapshot is not None:
+                    logger.info(
+                        f"[sms_login] ✓ 登录成功（web_session len={len(web_session_value)}, "
+                        f"cookies_count={snapshot.raw_count}）"
+                    )
+                    return snapshot
+                last_diag = "web_session_present_but_collect_failed"
+            else:
+                last_diag = (
+                    f"web_session_missing_or_short(len={len(web_session_value)})"
+                )
+
             await asyncio.sleep(2)
-        raise TimeoutError("等待登录跳转超时")
+
+        # 超时前 dump 一份截图便于排查
+        await self._diagnostic_dump(
+            "wait_login_success_timeout", reason=last_diag
+        )
+        raise TimeoutError(
+            f"等待登录成功超时（{timeout_seconds}s）；最后状态：{last_diag}"
+        )
 
     async def cleanup(self) -> None:
         if self._closed:
