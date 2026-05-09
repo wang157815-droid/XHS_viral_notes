@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import pytest
 
@@ -67,6 +67,10 @@ class FakeDriver(SmsLoginDriver):
         self.calls.append("click_send_sms")
         self._check("click_send_sms")
 
+    async def click_resend_sms(self) -> None:
+        self.calls.append("click_resend_sms")
+        self._check("click_resend_sms")
+
     async def fill_and_submit_sms(self, code: str) -> None:
         self.calls.append("fill_and_submit_sms")
         self.fill_sms_arg = code
@@ -91,38 +95,58 @@ class FakeSmsProvider:
         self,
         *,
         purchase: Optional[PhonePurchase] = None,
+        purchases: Optional[List[PhonePurchase]] = None,
         code: str = "123456",
         purchase_error: Optional[Exception] = None,
         sms_error: Optional[Exception] = None,
         sms_delay_seconds: float = 0.0,
         peek_result: Optional[SmsCodeResult] = None,
         peek_error: Optional[Exception] = None,
+        wait_outcomes: Optional[List[Any]] = None,
     ) -> None:
+        # 单次复用场景仍可传 purchase；多次 acquire 场景传 purchases 列表
         self._purchase = purchase or PhonePurchase(
             order_id="order_xy", phone="85211112222", country_code="HK"
         )
+        self._purchases_queue: List[PhonePurchase] = list(purchases or [])
         self._code = code
         self._purchase_error = purchase_error
         self._sms_error = sms_error
         self._sms_delay = sms_delay_seconds
         self._peek_result = peek_result
         self._peek_error = peek_error
+        # ``wait_outcomes`` 序列：每次 wait_sms_code 按顺序消费一个元素：
+        # - SmsCodeResult / Exception 实例：直接返回 / 抛
+        # - None：表示"用默认 SmsCodeResult(_code)"
+        # 序列耗尽后回退默认行为（_sms_error or _code）。
+        self._wait_outcomes: List[Any] = list(wait_outcomes or [])
         # 监控调用次数：复用 reservation 时不应再调 acquire_phone
         self.acquire_calls: int = 0
-        self.wait_calls: List[tuple] = []  # (order_id, seen_codes)
+        self.wait_calls: List[tuple] = []  # (order_id, seen_codes, timeout)
         self.peek_calls: List[str] = []   # order_id
 
     async def acquire_phone(self) -> PhonePurchase:
         self.acquire_calls += 1
         if self._purchase_error:
             raise self._purchase_error
+        if self._purchases_queue:
+            return self._purchases_queue.pop(0)
         return self._purchase
 
     async def wait_sms_code(self, order_id: str, **kwargs) -> SmsCodeResult:
         seen = list(kwargs.get("seen_codes") or [])
-        self.wait_calls.append((order_id, tuple(seen)))
+        timeout = kwargs.get("timeout_seconds")
+        self.wait_calls.append((order_id, tuple(seen), timeout))
         if self._sms_delay:
             await asyncio.sleep(self._sms_delay)
+        # 序列优先
+        if self._wait_outcomes:
+            outcome = self._wait_outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome is None:
+                return SmsCodeResult(order_id=order_id, code=self._code)
+            return outcome
         if self._sms_error:
             raise self._sms_error
         return SmsCodeResult(order_id=order_id, code=self._code)
@@ -148,12 +172,21 @@ def _make_service(
     *,
     ttl: int = 8,
     store: Optional[PhoneReservationStore] = None,
+    resend_interval_sec: int = 1,
+    max_sends_per_phone: int = 1,
+    max_phones_per_session: int = 1,
 ) -> SmsLoginService:
     async def factory(_session: SmsLoginSession) -> SmsLoginDriver:
         return driver
 
     return SmsLoginService(
-        provider, factory, session_ttl_sec=ttl, reservation_store=store
+        provider,
+        factory,
+        session_ttl_sec=ttl,
+        reservation_store=store,
+        resend_interval_sec=resend_interval_sec,
+        max_sends_per_phone=max_sends_per_phone,
+        max_phones_per_session=max_phones_per_session,
     )
 
 
@@ -472,7 +505,9 @@ async def test_seen_codes_passed_to_wait_sms_code_on_reuse(tmp_path):
     assert final.phone_reused is True
     assert provider.acquire_calls == 0
     # provider.wait_sms_code 必须看到 seen_codes
-    assert provider.wait_calls == [("order_keep", ("999111",))]
+    assert len(provider.wait_calls) == 1
+    assert provider.wait_calls[0][0] == "order_keep"
+    assert provider.wait_calls[0][1] == ("999111",)
 
 
 @pytest.mark.asyncio
@@ -705,3 +740,185 @@ async def test_reservation_kept_on_user_cancel(tmp_path):
     saved = store.get("u_cancel")
     assert saved is not None
     assert saved.sms_received is False  # 没收到验证码 → 仍可复用
+
+
+# ---------------------------------------------------------------------------
+# 重发 + 换号循环（用户实测需求：3 分钟间隔、N 次重发、M 次换号）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resend_after_timeout_then_succeed(tmp_path):
+    """同一个号：第一次 wait_sms 超时 → driver.click_resend_sms → 第二次收到验证码。
+
+    断言：
+    - SUCCESS 终态、cookies 拿到
+    - driver.calls 恰好 click_send_sms 一次 + click_resend_sms 一次
+    - provider.wait_calls 两次，timeout=resend_interval_sec
+    - acquire_phone 只调一次（同一个号）
+    """
+    timeout_err = SmsTimeoutError("等待超时", code="SMS_TIMEOUT")
+    provider = FakeSmsProvider(
+        wait_outcomes=[
+            timeout_err,  # 第 1 次 180s 没等到
+            SmsCodeResult(order_id="order_xy", code="246810"),  # 第 2 次收到
+        ]
+    )
+    driver = FakeDriver()
+    service = _make_service(
+        provider,
+        driver,
+        store=_make_store(tmp_path),
+        resend_interval_sec=1,
+        max_sends_per_phone=2,
+        max_phones_per_session=1,
+    )
+
+    session = await service.create_session("u_resend")
+    final = await _wait_for_terminal(service, session.session_id, timeout=8.0)
+
+    assert final.status == SmsLoginStatus.SUCCESS
+    assert final.cookies_str  # cookies 已写入
+    # 第一次发送 + 一次重发
+    assert driver.calls.count("click_send_sms") == 1
+    assert driver.calls.count("click_resend_sms") == 1
+    assert driver.fill_sms_arg == "246810"
+    # provider 被轮询了 2 次
+    assert len(provider.wait_calls) == 2
+    assert all(call[2] == 1 for call in provider.wait_calls)  # timeout=1
+    # 同号：acquire 只一次
+    assert provider.acquire_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_switch_phone_after_all_resends_timeout(tmp_path):
+    """同号 N 次发送都超时 → 删 reservation → 换号 → 第二个号成功。"""
+    timeout_err = SmsTimeoutError("等待超时", code="SMS_TIMEOUT")
+    provider = FakeSmsProvider(
+        purchases=[
+            PhonePurchase(order_id="order_A", phone="85211110001", country_code="HK"),
+            PhonePurchase(order_id="order_B", phone="85211110002", country_code="HK"),
+        ],
+        wait_outcomes=[
+            timeout_err,  # phone A: send 1 超时
+            timeout_err,  # phone A: send 2 超时
+            SmsCodeResult(order_id="order_B", code="135790"),  # phone B: send 1 收到
+        ],
+    )
+    driver = FakeDriver()
+    store = _make_store(tmp_path)
+    service = _make_service(
+        provider,
+        driver,
+        store=store,
+        resend_interval_sec=1,
+        max_sends_per_phone=2,
+        max_phones_per_session=2,
+    )
+
+    session = await service.create_session("u_switch")
+    final = await _wait_for_terminal(service, session.session_id, timeout=10.0)
+
+    assert final.status == SmsLoginStatus.SUCCESS
+    # 两个号都被购了
+    assert provider.acquire_calls == 2
+    # 顺序：fill A → send → resend → fill B → send（不再 resend，第一次就成）
+    fill_phone_indices = [i for i, c in enumerate(driver.calls) if c == "fill_phone"]
+    assert len(fill_phone_indices) == 2  # A 和 B 各填一次
+    # 总共 send + resend 调用次数 = 2(A) + 1(B) = 3
+    total_sends = driver.calls.count("click_send_sms") + driver.calls.count(
+        "click_resend_sms"
+    )
+    assert total_sends == 3
+    # 最终 cookies 是 phone B 的码
+    assert driver.fill_sms_arg == "135790"
+    # 成功后 reservation 被删
+    assert store.get("u_switch") is None
+
+
+@pytest.mark.asyncio
+async def test_all_phones_exhausted_terminates_with_sms_timeout(tmp_path):
+    """3 个号 × 2 次发送都超时 → ERROR + SMS_TIMEOUT。"""
+    timeout_err = SmsTimeoutError("等待超时", code="SMS_TIMEOUT")
+    provider = FakeSmsProvider(
+        purchases=[
+            PhonePurchase(order_id=f"order_{i}", phone=f"8521111000{i}", country_code="HK")
+            for i in range(3)
+        ],
+        wait_outcomes=[timeout_err] * 6,  # 3 个号 × 2 次发送 = 6 次超时
+    )
+    driver = FakeDriver()
+    service = _make_service(
+        provider,
+        driver,
+        store=_make_store(tmp_path),
+        resend_interval_sec=1,
+        max_sends_per_phone=2,
+        max_phones_per_session=3,
+    )
+
+    session = await service.create_session("u_exhaust")
+    final = await _wait_for_terminal(service, session.session_id, timeout=15.0)
+
+    assert final.status == SmsLoginStatus.ERROR
+    assert final.error_code == "SMS_TIMEOUT"
+    # 真的购了 3 个号
+    assert provider.acquire_calls == 3
+    # 真的发了 6 次（3 × 2）
+    total_sends = driver.calls.count("click_send_sms") + driver.calls.count(
+        "click_resend_sms"
+    )
+    assert total_sends == 6
+    # 没有进入 fill_and_submit
+    assert "fill_and_submit_sms" not in driver.calls
+    assert driver.cleanup_called
+
+
+@pytest.mark.asyncio
+async def test_default_session_ttl_derived_from_retry_params():
+    """SmsLoginService 不传 session_ttl_sec 时，默认 = M*N*interval+120。"""
+    provider = FakeSmsProvider()
+    driver = FakeDriver()
+
+    async def factory(_session: SmsLoginSession) -> SmsLoginDriver:
+        return driver
+
+    service = SmsLoginService(
+        provider,
+        factory,
+        resend_interval_sec=180,
+        max_sends_per_phone=2,
+        max_phones_per_session=3,
+    )
+    # 3 * 2 * 180 + 120 = 1200
+    assert service._session_ttl_sec == 1200
+
+
+@pytest.mark.asyncio
+async def test_session_dto_exposes_phone_attempt_and_send_attempt(tmp_path):
+    """前端能看到「正在用第几个号、第几次发送」。"""
+    timeout_err = SmsTimeoutError("等待超时", code="SMS_TIMEOUT")
+    provider = FakeSmsProvider(
+        wait_outcomes=[
+            timeout_err,  # send 1 超时
+            SmsCodeResult(order_id="order_xy", code="246810"),  # send 2 收到
+        ]
+    )
+    driver = FakeDriver()
+    service = _make_service(
+        provider,
+        driver,
+        store=_make_store(tmp_path),
+        resend_interval_sec=1,
+        max_sends_per_phone=2,
+        max_phones_per_session=1,
+    )
+
+    session = await service.create_session("u_dto")
+    final = await _wait_for_terminal(service, session.session_id, timeout=8.0)
+
+    assert final.status == SmsLoginStatus.SUCCESS
+    dto = final.public_dict()
+    # 收到验证码时刚好在 send_attempt=2 的 phone_attempt=1
+    assert dto["phone_attempt"] == 1
+    assert dto["send_attempt"] == 2

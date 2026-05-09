@@ -36,7 +36,16 @@ class SmsLoginDriver(abc.ABC):
 
     @abc.abstractmethod
     async def click_send_sms(self) -> None:
-        """点击「获取验证码」按钮。"""
+        """点击「获取验证码」按钮（首次发送）。"""
+
+    async def click_resend_sms(self) -> None:
+        """点击「重新获取」按钮（倒计时归零后再次发送）。
+
+        默认实现：fallback 调 :meth:`click_send_sms`。
+        子类可重写以走真正的「重新获取」selector，倒计时归零后小红书 UI
+        通常会让按钮文本变回「获取验证码」，因此 fallback 是安全的。
+        """
+        await self.click_send_sms()
 
     @abc.abstractmethod
     async def fill_and_submit_sms(self, code: str) -> None:

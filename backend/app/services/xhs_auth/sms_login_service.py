@@ -1,21 +1,33 @@
 """SmsLoginService（Phase 3-B）。
 
 功能：编排 :class:`SmsProvider` + :class:`SmsLoginDriver`，把"虚拟号自动登录小红书"
-拆成可观测的 8 个状态：
+拆成可观测的多个状态。**核心循环**：
+
+    每个手机号最多发送 N 次（默认 N=2，即首发 + 1 次重发，间隔 3 分钟），
+    全部发送都未收到验证码 → 释放本号、换新号；最多换 M 个号（默认 M=3）。
+    最坏情况总耗时 ≈ M × N × 180s。
+
+状态机：
 
     initializing
         ↓
-    acquiring_phone   (调 SmsProvider.acquire_phone)
-        ↓
-    sending_sms       (driver.fill_phone + driver.click_send_sms)
-        ↓
-    waiting_sms       (调 SmsProvider.wait_sms_code)
-        ↓
-    submitting_sms    (driver.fill_and_submit_sms)
-        ↓
-    extracting_cookies (driver.wait_for_login_success)
-        ↓
-    success           (cookies_str 就绪，可交给 binder)
+    acquiring_phone   ←─────────────────┐  (循环换号入口)
+        ↓                               │
+    sending_sms       (fill_phone + click_send_sms)
+        ↓                               │
+    waiting_sms ─ 收到 ─→ submitting_sms ─→ extracting_cookies ─→ success
+        ↓                               │
+        │ 180s 超时                     │
+        ↓                               │
+    resending_sms      (click_resend_sms，倒计时归零后再点)
+        ↓                               │
+    waiting_sms ─ 收到 → submitting_sms ─→ ...
+        ↓                               │
+        │ 再 180s 超时                  │
+        ↓                               │
+    switching_phone   (释放本号) ───────┘
+        ↓ 已尝试 M 个号
+    error (SMS_TIMEOUT)
 
 任意阶段错误 → ``error / cancelled / expired``，并记录 ``error_code / error_message``。
 
@@ -31,6 +43,7 @@ session 仅保存在内存。重启后端会丢失；Phase 3 不需要持久化�
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -58,7 +71,40 @@ from .sms_provider import (
 )
 
 
-_DEFAULT_SESSION_TTL_SEC = 8 * 60  # 8 分钟，覆盖号码 + SMS 等待 + 最后跳转
+# ---------------------------------------------------------------------------
+# 重试参数（env 可覆盖）
+# ---------------------------------------------------------------------------
+
+def _read_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"[sms_login] 非法 {name}={raw!r}，使用默认值 {default}")
+        return default
+    return max(minimum, value)
+
+
+_RESEND_INTERVAL_SEC = _read_int_env("XHS_SMS_RESEND_INTERVAL_SEC", 180, minimum=30)
+"""单次「获取/重新获取」后等多久（默认 3 分钟）。
+小红书发送验证码的最小间隔是 3 分钟，所以 180s 是 hard floor。"""
+
+_MAX_SENDS_PER_PHONE = _read_int_env("XHS_SMS_MAX_SENDS_PER_PHONE", 2, minimum=1)
+"""同一个号最多按几次发送按钮（含首次）。默认 2，即首发 + 1 次重发。
+2 次 × 180s = 6 分钟，覆盖小红书最大重发 cooldown。"""
+
+_MAX_PHONES_PER_SESSION = _read_int_env(
+    "XHS_SMS_MAX_PHONES_PER_SESSION", 3, minimum=1
+)
+"""一个 session 最多换几个号。最坏耗时 ≈ M × N × 180s。
+默认 3 → 最坏 18 分钟；用户主动 cancel 会立即终止。"""
+
+# 默认 TTL = 最坏完整循环 + 2 分钟余量给 cookie 抓取等收尾
+_DEFAULT_SESSION_TTL_SEC = (
+    _MAX_PHONES_PER_SESSION * _MAX_SENDS_PER_PHONE * _RESEND_INTERVAL_SEC + 120
+)
 
 
 class SmsLoginStatus(str, Enum):
@@ -66,6 +112,8 @@ class SmsLoginStatus(str, Enum):
     ACQUIRING_PHONE = "acquiring_phone"
     SENDING_SMS = "sending_sms"
     WAITING_SMS = "waiting_sms"
+    RESENDING_SMS = "resending_sms"
+    SWITCHING_PHONE = "switching_phone"
     SUBMITTING_SMS = "submitting_sms"
     EXTRACTING_COOKIES = "extracting_cookies"
     SUCCESS = "success"
@@ -96,6 +144,10 @@ class SmsLoginSession:
     error_message: Optional[str] = None
     phone_reused: bool = False
     """True 表示本次会话复用了上一次失败的 reservation（未再调 acquire_phone）。"""
+    phone_attempt: int = 0
+    """当前是该 session 第几个手机号（1-based；0 表示尚未购号）。"""
+    send_attempt: int = 0
+    """当前手机号第几次按发送按钮（1-based；0 表示尚未发送）。"""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -114,6 +166,8 @@ class SmsLoginSession:
             "error_code": self.error_code,
             "error_message": self.error_message,
             "phone_reused": self.phone_reused,
+            "phone_attempt": self.phone_attempt,
+            "send_attempt": self.send_attempt,
             "is_terminal": self.status.is_terminal,
             "cookies_ready": bool(self.cookies_str),
             "created_at": self.created_at.isoformat(),
@@ -140,12 +194,39 @@ class SmsLoginService:
         sms_provider: SmsProvider,
         driver_factory: DriverFactory,
         *,
-        session_ttl_sec: int = _DEFAULT_SESSION_TTL_SEC,
+        session_ttl_sec: Optional[int] = None,
         reservation_store: Optional[PhoneReservationStore] = None,
+        resend_interval_sec: Optional[int] = None,
+        max_sends_per_phone: Optional[int] = None,
+        max_phones_per_session: Optional[int] = None,
     ) -> None:
         self._provider = sms_provider
         self._driver_factory = driver_factory
-        self._session_ttl_sec = session_ttl_sec
+        # 重试参数：测试可显式覆盖，生产从 env 读默认
+        self._resend_interval_sec = (
+            resend_interval_sec
+            if resend_interval_sec is not None
+            else _RESEND_INTERVAL_SEC
+        )
+        self._max_sends_per_phone = (
+            max_sends_per_phone
+            if max_sends_per_phone is not None
+            else _MAX_SENDS_PER_PHONE
+        )
+        self._max_phones_per_session = (
+            max_phones_per_session
+            if max_phones_per_session is not None
+            else _MAX_PHONES_PER_SESSION
+        )
+        # TTL：未显式指定时根据上面 3 个参数推导
+        self._session_ttl_sec = (
+            session_ttl_sec
+            if session_ttl_sec is not None
+            else self._max_phones_per_session
+            * self._max_sends_per_phone
+            * self._resend_interval_sec
+            + 120
+        )
         # 测试可注入隔离的 store；生产走 ``get_phone_reservation_store()``
         self._reservation_store = reservation_store or get_phone_reservation_store()
 
@@ -239,36 +320,14 @@ class SmsLoginService:
             await self._set_status(session, SmsLoginStatus.INITIALIZING)
             await driver.open_login_page()
 
-            # 1. 购号 / 复用号
-            await self._set_status(session, SmsLoginStatus.ACQUIRING_PHONE)
-            purchase, seen_codes = await self._acquire_or_reuse_phone(session)
-            session.phone = purchase.phone
-            session.phone_country = purchase.country_code
-            session.order_id = purchase.order_id
-            await self._touch(session)
+            # 1-4. 循环换号 + 多次发送，直到收到验证码或耗尽预算
+            sms = await self._acquire_phone_and_wait_sms(session, driver)
 
-            # 2. 填手机号 + 发送验证码
-            await self._set_status(session, SmsLoginStatus.SENDING_SMS)
-            await driver.fill_phone(
-                country_code=purchase.country_code, phone=purchase.phone
-            )
-            await driver.click_send_sms()
-
-            # 3. 等验证码（复用号时把历史已见过的码当作旧码过滤）
-            await self._set_status(session, SmsLoginStatus.WAITING_SMS)
-            sms: SmsCodeResult = await self._provider.wait_sms_code(
-                purchase.order_id, seen_codes=seen_codes
-            )
-            # 一旦真收到验证码 → 该号永久不可复用
-            self._reservation_store.mark_sms_received(
-                session.redmuse_user_id, code=sms.code
-            )
-
-            # 4. 填验证码
+            # 5. 填验证码
             await self._set_status(session, SmsLoginStatus.SUBMITTING_SMS)
             await driver.fill_and_submit_sms(sms.code)
 
-            # 5. 抓 cookie
+            # 6. 抓 cookie
             await self._set_status(session, SmsLoginStatus.EXTRACTING_COOKIES)
             snap: CookieSnapshot = await driver.wait_for_login_success()
             session.cookies_str = snap.cookies_str
@@ -307,6 +366,111 @@ class SmsLoginService:
             )
         finally:
             await self._cleanup_driver(session.session_id)
+
+    async def _acquire_phone_and_wait_sms(
+        self,
+        session: SmsLoginSession,
+        driver: SmsLoginDriver,
+    ) -> SmsCodeResult:
+        """循环换号 + 多次发送，直到收到验证码。
+
+        语义：
+        - 每个号最多按 ``self._max_sends_per_phone`` 次发送按钮（含首次）；
+          每次按完等 ``self._resend_interval_sec`` 秒（默认 180s = 3 分钟）。
+        - 同号 N 次都没收到验证码 → 释放该号，换新号；最多换
+          ``self._max_phones_per_session`` 个号。
+        - 中途用户调 ``cancel_session`` → ``asyncio.CancelledError`` 自然冒泡。
+
+        全部预算耗尽仍未收到 → 抛 :class:`SmsTimeoutError` 让 ``_run_session``
+        终态化为 ``ERROR``。
+        """
+        last_phone: Optional[str] = None
+        for phone_attempt in range(1, self._max_phones_per_session + 1):
+            # ---- 1. 购号 / 复用号 ----
+            await self._set_status(session, SmsLoginStatus.ACQUIRING_PHONE)
+            purchase, seen_codes = await self._acquire_or_reuse_phone(session)
+            session.phone = purchase.phone
+            session.phone_country = purchase.country_code
+            session.order_id = purchase.order_id
+            session.phone_attempt = phone_attempt
+            await self._touch(session)
+            logger.info(
+                f"[sms_login] {session.session_id} 第 {phone_attempt}/"
+                f"{self._max_phones_per_session} 个号 phone=…{purchase.phone[-4:]}"
+            )
+
+            # ---- 2. 填手机号（playwright fill 自带清空再填，幂等） ----
+            await self._set_status(session, SmsLoginStatus.SENDING_SMS)
+            await driver.fill_phone(
+                country_code=purchase.country_code, phone=purchase.phone
+            )
+            last_phone = purchase.phone
+
+            # ---- 3. 同号最多 N 次发送 ----
+            sms_received: Optional[SmsCodeResult] = None
+            for send_attempt in range(1, self._max_sends_per_phone + 1):
+                if send_attempt == 1:
+                    await self._set_status(session, SmsLoginStatus.SENDING_SMS)
+                    await driver.click_send_sms()
+                    logger.info(
+                        f"[sms_login] {session.session_id} 首次发送 "
+                        f"(phone={phone_attempt}, send={send_attempt})"
+                    )
+                else:
+                    await self._set_status(session, SmsLoginStatus.RESENDING_SMS)
+                    await driver.click_resend_sms()
+                    logger.info(
+                        f"[sms_login] {session.session_id} 重新发送 "
+                        f"(phone={phone_attempt}, send={send_attempt}/"
+                        f"{self._max_sends_per_phone})"
+                    )
+                session.send_attempt = send_attempt
+                await self._touch(session)
+
+                # 等待本轮验证码（180s）
+                await self._set_status(session, SmsLoginStatus.WAITING_SMS)
+                try:
+                    sms_received = await self._provider.wait_sms_code(
+                        purchase.order_id,
+                        timeout_seconds=self._resend_interval_sec,
+                        seen_codes=seen_codes,
+                    )
+                    break  # 收到了，跳出 send 循环
+                except SmsTimeoutError:
+                    logger.info(
+                        f"[sms_login] {session.session_id} 第 {send_attempt}/"
+                        f"{self._max_sends_per_phone} 次发送 "
+                        f"{self._resend_interval_sec}s 后未收到，"
+                        f"准备{'重发' if send_attempt < self._max_sends_per_phone else '换号'}"
+                    )
+                    # 如果还可以重发就继续 send 循环；否则跳出去 switch_phone
+                    continue
+
+            if sms_received is not None:
+                # 收到验证码 → 标记本号已消费 + 返回
+                self._reservation_store.mark_sms_received(
+                    session.redmuse_user_id, code=sms_received.code
+                )
+                return sms_received
+
+            # ---- 4. 同号 N 次都失败 → 释放本号、换下一个 ----
+            if phone_attempt >= self._max_phones_per_session:
+                break  # 不再尝试，下面抛 timeout
+            await self._set_status(session, SmsLoginStatus.SWITCHING_PHONE)
+            self._reservation_store.delete(session.redmuse_user_id)
+            logger.warning(
+                f"[sms_login] {session.session_id} 号 …{purchase.phone[-4:]} "
+                f"共 {self._max_sends_per_phone} 次发送均超时，删除 reservation 后换新号 "
+                f"(还剩 {self._max_phones_per_session - phone_attempt} 个号可尝试)"
+            )
+
+        # 所有号 × 所有发送都超时
+        last_suffix = f"…{last_phone[-4:]}" if last_phone else "(未购到)"
+        raise SmsTimeoutError(
+            f"已尝试 {self._max_phones_per_session} 个号 × "
+            f"{self._max_sends_per_phone} 次发送（每次等 "
+            f"{self._resend_interval_sec}s），均未收到验证码 (最后号 {last_suffix})"
+        )
 
     async def _acquire_or_reuse_phone(
         self, session: SmsLoginSession
@@ -487,7 +651,6 @@ def get_sms_login_service() -> Optional[SmsLoginService]:
     with _default_service_lock:
         if _default_service is not None:
             return _default_service
-        import os
         from .hero_sms_provider import HeroSmsProvider
         from .playwright_sms_login_driver import PlaywrightSmsLoginDriver
 

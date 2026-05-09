@@ -52,12 +52,29 @@ _SELECTORS: Dict[str, str] = {
     # :text-is 精确匹配，避免误中"+1 (US)"这种长文本。
     "country_option_template": os.getenv("XHS_SMS_COUNTRY_OPTION")
     or ":text-is(\"+852\")",
+    # 国家码下拉打开后内置的搜索框（截图: placeholder="搜索国家/地区"）。
+    # 长列表+虚拟滚动场景下，直接 :text-is 选项无法命中（DOM 里没渲染出来），
+    # 必须先用这个搜索框过滤到只剩目标行再点。
+    "country_search_input": os.getenv("XHS_SMS_COUNTRY_SEARCH")
+    or (
+        "input[placeholder*='搜索']"
+        ", input[placeholder*='国家']"
+        ", input[placeholder*='地区']"
+    ),
     # 手机号输入框（placeholder=「请输入手机号」）
     "phone_input": os.getenv("XHS_SMS_PHONE_INPUT")
     or "input[placeholder*='手机号'], input[type='tel'], input[name='phone']",
     # 「获取验证码 / 发送验证码」按钮
     "send_code_button": os.getenv("XHS_SMS_SEND_BUTTON")
     or ":text-is(\"获取验证码\"), :text-is(\"发送验证码\"), button:has-text(\"获取验证码\")",
+    # 「重新获取 / 重新发送 / 再次获取」按钮：3 分钟倒计时归零后点击会再次发短信。
+    # 大多数小红书 UI 倒计时结束会让按钮文本变回「获取验证码」，所以 fallback 用
+    # send_code_button 再点一次也能起到同样效果（service 层会做 fallback）。
+    "resend_code_button": os.getenv("XHS_SMS_RESEND_BUTTON")
+    or (
+        ":text-is(\"重新获取\"), :text-is(\"重新发送\"), :text-is(\"再次获取\"), "
+        "button:has-text(\"重新获取\")"
+    ),
     # 验证码输入框（placeholder=「输入验证码」）
     "sms_input": os.getenv("XHS_SMS_CODE_INPUT")
     or "input[placeholder*='验证码'], input[name='code'], input[name='verifyCode']",
@@ -225,13 +242,25 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
             raise RuntimeError(f"填写手机号失败: {exc}") from exc
 
     async def _switch_country_code(self, cc_label: str) -> bool:
-        """切国家码下拉：尝试 trigger × option 多种 selector 组合 + 重试。
+        """切国家码下拉：
 
-        返回 True 表示成功选中，False 表示尝试了所有 selector / 重试都没命中。
+        实测下拉是带搜索框的长列表（截图：placeholder="搜索国家/地区"），
+        且很可能是虚拟滚动 → 不在视口的项目根本不在 DOM 里。
+        所以**核心策略是先用搜索框过滤，再点唯一项**。
+
+        步骤（一轮）：
+        1. 点国家码触发器，下拉打开
+        2. 等下拉渲染 + 搜索框出现
+        3. 在搜索框输入 cc_label（如 "+852"）→ 列表过滤到 1-2 行
+        4. 点 :text-is("+852") → 命中唯一可见行
+        5. 失败兜底：直接点 option_selector（适用于无搜索框的 A/B 变体）
+
+        返回 True 表示成功选中。
         """
         page = self._require_page()
         template = _SELECTORS["country_option_template"]
         option_selector = template.replace("+852", cc_label)
+        search_selector = _SELECTORS["country_search_input"]
 
         # 最多两轮尝试：第一轮失败后等 1s 让 modal 完整渲染再试一次
         for attempt in (1, 2):
@@ -243,22 +272,54 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
                     f"[sms_login] attempt={attempt} 国家码触发器 click 未命中 "
                     f"(selector={_SELECTORS['country_selector']!r})"
                 )
-            else:
-                logger.info(
-                    f"[sms_login] attempt={attempt} 国家码触发器已点击，等待下拉渲染"
+                if attempt == 1:
+                    try:
+                        await page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
+                continue
+
+            logger.info(
+                f"[sms_login] attempt={attempt} 国家码触发器已点击，等待下拉渲染"
+            )
+            try:
+                await page.wait_for_timeout(400)
+            except Exception:
+                pass
+
+            # ---- 优先路径：搜索框过滤 ----
+            # 长列表 + 虚拟滚动场景下，:text-is("+852") 永远命不中（DOM 里
+            # 没渲染该行）；必须先在搜索框输入区号让列表过滤到只剩目标行。
+            search_used = False
+            try:
+                search_locator = page.locator(search_selector).first
+                if await search_locator.count() > 0:
+                    await search_locator.fill(cc_label, timeout=2000)
+                    logger.info(
+                        f"[sms_login] 已在国家码搜索框输入 {cc_label}，等待列表过滤"
+                    )
+                    search_used = True
+                    try:
+                        await page.wait_for_timeout(300)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.debug(
+                    f"[sms_login] 国家码搜索框不可用 ({exc})，回退直接点选项"
                 )
-                try:
-                    await page.wait_for_timeout(400)
-                except Exception:
-                    pass
-                picked = await self._safe_click(option_selector, optional=True)
-                if picked:
-                    logger.info(f"[sms_login] ✓ 已选 {cc_label}")
-                    return True
+
+            picked = await self._safe_click(option_selector, optional=True)
+            if picked:
                 logger.info(
-                    f"[sms_login] attempt={attempt} 选项 {cc_label} 未命中 "
-                    f"(selector={option_selector!r})"
+                    f"[sms_login] ✓ 已选 {cc_label} "
+                    f"(via {'search+click' if search_used else 'click'})"
                 )
+                return True
+            logger.info(
+                f"[sms_login] attempt={attempt} 选项 {cc_label} 未命中 "
+                f"(selector={option_selector!r}, search_used={search_used})"
+            )
+
             # 第一轮失败 → 等 modal 重新渲染再试
             if attempt == 1:
                 try:
@@ -310,6 +371,37 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         except Exception as exc:
             await self._diagnostic_dump("send_sms_failed", reason=str(exc))
             raise RuntimeError(f"点击「获取验证码」失败: {exc}") from exc
+
+    async def click_resend_sms(self) -> None:
+        """3 分钟倒计时结束后再次发送验证码。
+
+        策略：
+        1. 先尝试「重新获取」selector
+        2. 找不到 → fallback 点「获取验证码」（小红书倒计时归零后按钮文本通常会变回）
+        3. 都失败 → 抛 RuntimeError + 截图诊断
+        """
+        page = self._require_page()
+        # 1) 优先「重新获取」
+        try:
+            clicked = await self._safe_click(
+                _SELECTORS["resend_code_button"], optional=True
+            )
+        except Exception:
+            clicked = False
+        if clicked:
+            logger.info("[sms_login] ✓ 已点击「重新获取」按钮")
+            return
+        # 2) fallback：倒计时归零后按钮通常变回「获取验证码」
+        logger.info(
+            "[sms_login] 未命中「重新获取」按钮，回退点「获取验证码」"
+            "（倒计时归零后按钮文本通常变回）"
+        )
+        try:
+            await page.click(_SELECTORS["send_code_button"], timeout=_NAV_TIMEOUT_MS)
+            logger.info("[sms_login] ✓ 已点击「获取验证码」按钮（重发回退）")
+        except Exception as exc:
+            await self._diagnostic_dump("resend_sms_failed", reason=str(exc))
+            raise RuntimeError(f"点击「重新获取/获取验证码」失败: {exc}") from exc
 
     async def fill_and_submit_sms(self, code: str) -> None:
         page = self._require_page()
