@@ -72,7 +72,24 @@ _HTTP_TIMEOUT_SEC = 15
 
 _NO_STOCK_RESPONSES = {"NO_NUMBERS", "MAX_PRICE_EXCEEDED", "NO_BALANCE"}
 _AUTH_ERROR_RESPONSES = {"BAD_KEY", "BANNED", "WRONG_USER_KEY"}
-_RETRYABLE_SMS_RESPONSES = {"STATUS_WAIT_CODE", "STATUS_WAIT_RETRY"}
+# hero-sms / sms-activate 兼容协议在「号已购但还没收到 SMS」期间会返回
+# 多种不同的"等待中"状态，原集合只有 2 个 → 任何陌生响应都会被当未知响应
+# 立即终止。这里尽量收齐所有「等待中」语义的响应，保证轮询不在第一次失败。
+_RETRYABLE_SMS_RESPONSES = {
+    "STATUS_WAIT_CODE",
+    "STATUS_WAIT_RETRY",
+    "STATUS_WAIT_RESEND",
+    "STATUS_PROCESS",
+    "STATUS_WAITING",
+    "ACCESS_RETRY_GET",
+    "ACCESS_ACTIVATION",   # 部分 sms-activate 复刻平台返回该串表示"激活中"
+    "WAIT_CODE",
+    "WAIT_SMS",
+}
+# 已知的"立即终止"响应（鉴权 / 取消）以外的任何陌生响应，
+# 在 ``_LENIENT_UNKNOWN_RESPONSE=True`` 时也按 retryable 继续轮询直到 deadline，
+# 只有真的超时才抛 SMS_TIMEOUT。这避免「点完获取验证码立刻失败」的体验问题。
+_LENIENT_UNKNOWN_RESPONSE = True
 
 
 class HeroSmsProvider(SmsProvider):
@@ -225,6 +242,12 @@ class HeroSmsProvider(SmsProvider):
         seen: Set[str] = {str(c).strip() for c in (seen_codes or []) if str(c).strip()}
 
         attempts = 0
+        unknown_count = 0
+        last_unknown_text = ""
+        logger.info(
+            f"[hero_sms] 开始轮询验证码 order_id={order_id} "
+            f"interval={interval}s timeout={timeout}s seen_codes={len(seen)}"
+        )
         while True:
             attempts += 1
             text = await self._call({"action": "getAllSms", "id": order_id})
@@ -239,8 +262,9 @@ class HeroSmsProvider(SmsProvider):
                             f"等待新验证码超时（{timeout}s）；hero-sms 仍返回旧码 {code}",
                             code="SMS_TIMEOUT",
                         )
-                    logger.debug(
-                        f"[hero_sms] order_id={order_id} 仍是旧码 {code}，{interval}s 后再查"
+                    logger.info(
+                        f"[hero_sms] attempt={attempts} order_id={order_id} "
+                        f"仍是旧码 {code}，{interval}s 后再查"
                     )
                     await asyncio.sleep(interval)
                     continue
@@ -252,10 +276,12 @@ class HeroSmsProvider(SmsProvider):
             if tag in _RETRYABLE_SMS_RESPONSES:
                 if self._now_seconds() >= deadline:
                     raise SmsTimeoutError(
-                        f"等待验证码超时（{timeout}s）", code="SMS_TIMEOUT"
+                        f"等待验证码超时（{timeout}s，{attempts} 次轮询）",
+                        code="SMS_TIMEOUT",
                     )
-                logger.debug(
-                    f"[hero_sms] 等待验证码（{text}），{interval}s 后再查 order_id={order_id}"
+                logger.info(
+                    f"[hero_sms] attempt={attempts} order_id={order_id} "
+                    f"等待中（{tag}），{interval}s 后再查"
                 )
                 await asyncio.sleep(interval)
                 continue
@@ -267,6 +293,22 @@ class HeroSmsProvider(SmsProvider):
 
             if tag in _AUTH_ERROR_RESPONSES:
                 raise SmsAuthError(f"hero-sms 鉴权失败：{text}", code="SMS_AUTH_ERROR")
+
+            # 未知响应：lenient 模式下按 retryable 继续轮询，避免「立即失败」
+            if _LENIENT_UNKNOWN_RESPONSE:
+                unknown_count += 1
+                last_unknown_text = text
+                if self._now_seconds() >= deadline:
+                    raise SmsTimeoutError(
+                        f"等待验证码超时（{timeout}s）；最后未知响应：{text!r}",
+                        code="SMS_TIMEOUT",
+                    )
+                logger.warning(
+                    f"[hero_sms] attempt={attempts} order_id={order_id} "
+                    f"未知响应={text!r}，按等待处理，{interval}s 后再查"
+                )
+                await asyncio.sleep(interval)
+                continue
 
             raise SmsResponseError(
                 f"hero-sms 返回未知响应：{text}", code="SMS_RESPONSE_ERROR"

@@ -280,6 +280,70 @@ async def test_wait_sms_code_status_ok_but_no_payload(fake_client):
 
 
 # ---------------------------------------------------------------------------
+# wait_sms_code: 扩展 retryable + lenient 未知响应
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "waiting_response",
+    [
+        "STATUS_WAIT_RESEND",
+        "STATUS_PROCESS",
+        "STATUS_WAITING",
+        "ACCESS_RETRY_GET",
+        "ACCESS_ACTIVATION",
+        "WAIT_CODE",
+        "WAIT_SMS",
+    ],
+)
+@pytest.mark.asyncio
+async def test_wait_sms_code_treats_extended_waiting_states_as_retryable(
+    fake_client, waiting_response
+):
+    """hero-sms 在号未收到 SMS 期间会返回多种「等待」状态，必须全部当 retryable。"""
+    fake_client.queue(
+        "getAllSms",
+        _FakeResponse(200, waiting_response),
+        _FakeResponse(200, "STATUS_OK:778899"),
+    )
+    p = _provider(fake_client, sms_poll_interval_sec=0)
+    code = await p.wait_sms_code("order_w")
+    assert code.code == "778899"
+    sms_calls = [c for c in fake_client.calls if c["action"] == "getAllSms"]
+    assert len(sms_calls) == 2  # 等待一次后拿到
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_lenient_unknown_response_keeps_polling(fake_client):
+    """陌生响应（hero-sms 偶尔返回的非标准串）必须按 retryable 处理，
+    避免「点完获取验证码立即失败」。"""
+    fake_client.queue(
+        "getAllSms",
+        _FakeResponse(200, "RANDOM_GIBBERISH"),
+        _FakeResponse(200, "MOOD_SWING"),
+        _FakeResponse(200, "STATUS_OK:445566"),
+    )
+    p = _provider(fake_client, sms_poll_interval_sec=0)
+    code = await p.wait_sms_code("order_l")
+    assert code.code == "445566"
+    sms_calls = [c for c in fake_client.calls if c["action"] == "getAllSms"]
+    assert len(sms_calls) == 3  # 两次未知响应也继续轮询直到拿到
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_unknown_response_until_timeout_raises_sms_timeout(
+    fake_client,
+):
+    """如果未知响应一直持续到 deadline，应抛 SMS_TIMEOUT 而非 SMS_RESPONSE_ERROR。"""
+    for _ in range(10):
+        fake_client.queue("getAllSms", _FakeResponse(200, "MYSTERY_BLOB"))
+    p = _provider(fake_client, sms_poll_timeout_sec=0)
+    with pytest.raises(SmsTimeoutError) as exc_info:
+        await p.wait_sms_code("order_t")
+    assert "MYSTERY_BLOB" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # release_phone（默认 no-op）
 # ---------------------------------------------------------------------------
 
