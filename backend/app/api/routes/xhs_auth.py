@@ -235,9 +235,15 @@ async def bind_from_sms_login_session(
     session_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """会话 ``success`` 后把抓到的 cookies_str 绑定到当前 RedMuse 用户。
+    """把会话 ``success`` 时抓到的 cookies 绑定到当前 RedMuse 用户。
 
-    一次性接口：成功后 cookies 在 service 内被消费置空，避免被二次使用。
+    **自动绑定优先**：service 在 driver 拿到 cookies 后已经自动调过一次
+    binder（status: extracting_cookies → binding → success）。这条路由
+    现在主要承担两个角色：
+
+    1. 兼容旧前端：直接返回 ``session.bind_result``，前端不必感知"自动绑定"
+    2. **救援通道**：如果 service hook 因偶发异常没绑成功（极罕见），
+       这里仍可用 ``session.cookies_str`` 走一次手动绑定。
     """
     svc = _require_sms_login_service()
     session = await svc.get_session(session_id)
@@ -256,6 +262,11 @@ async def bind_from_sms_login_session(
             },
         )
 
+    # 路径 1：service 已经自动绑定过 → 直接返回 cached 结果
+    if session.bind_result:
+        return ok(session.bind_result)
+
+    # 路径 2：service 没装 hook 或 hook 失败 fallthrough（极罕见）
     cookies_str = await svc.consume_cookies(session_id)
     if not cookies_str:
         raise HTTPException(

@@ -116,6 +116,8 @@ class SmsLoginStatus(str, Enum):
     SWITCHING_PHONE = "switching_phone"
     SUBMITTING_SMS = "submitting_sms"
     EXTRACTING_COOKIES = "extracting_cookies"
+    BINDING = "binding"
+    """已拿到 cookies，正在自动绑定到当前 RedMuse 用户（调 selfinfo + 落盘）。"""
     SUCCESS = "success"
     ERROR = "error"
     CANCELLED = "cancelled"
@@ -148,6 +150,10 @@ class SmsLoginSession:
     """当前是该 session 第几个手机号（1-based；0 表示尚未购号）。"""
     send_attempt: int = 0
     """当前手机号第几次按发送按钮（1-based；0 表示尚未发送）。"""
+    bind_result: Optional[Dict[str, Any]] = None
+    """SUCCESS 时：自动绑定成功后 binder 返回的 public dict
+    （含 xhs_user_id / xhs_nickname / credential 等）。
+    None 表示 service 没装 hook 或 bind 失败（此时 status=ERROR）。"""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -169,6 +175,8 @@ class SmsLoginSession:
             "phone_attempt": self.phone_attempt,
             "send_attempt": self.send_attempt,
             "is_terminal": self.status.is_terminal,
+            "bind_result": self.bind_result,
+            "auto_bound": self.bind_result is not None,
             "cookies_ready": bool(self.cookies_str),
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
@@ -185,6 +193,19 @@ def _mask_phone(phone: str) -> str:
 DriverFactory = Callable[[SmsLoginSession], Awaitable[SmsLoginDriver]]
 """依据 session 创建一个新的 driver；通常返回 PlaywrightSmsLoginDriver()。"""
 
+LoginSuccessHook = Callable[
+    [SmsLoginSession, str], Awaitable[Optional[Dict[str, Any]]]
+]
+"""``driver.wait_for_login_success`` 拿到 cookies 后立刻调的回调。
+
+约定：
+- 入参：当前 session + cookies_str
+- 出参：成功时返回非空 dict（写入 ``session.bind_result``，前端直接展示）；
+  返回 ``None`` 或抛异常 → service 把 session 标 ``ERROR + BIND_FAILED``。
+- 用途：自动把 cookies 绑到 RedMuse 用户身份，省掉用户点 "绑定到当前账号" 的一步；
+  同时提供「真登录态判别」—— guest cookies 进 selfinfo 会失败，hook 直接拒绝。
+"""
+
 
 class SmsLoginService:
     """有限状态机驱动的自动 SMS 登录会话管理器。"""
@@ -199,9 +220,11 @@ class SmsLoginService:
         resend_interval_sec: Optional[int] = None,
         max_sends_per_phone: Optional[int] = None,
         max_phones_per_session: Optional[int] = None,
+        on_login_success: Optional[LoginSuccessHook] = None,
     ) -> None:
         self._provider = sms_provider
         self._driver_factory = driver_factory
+        self._on_login_success = on_login_success
         # 重试参数：测试可显式覆盖，生产从 env 读默认
         self._resend_interval_sec = (
             resend_interval_sec
@@ -332,12 +355,50 @@ class SmsLoginService:
             snap: CookieSnapshot = await driver.wait_for_login_success()
             session.cookies_str = snap.cookies_str
 
+            # 7. 自动绑定到 RedMuse 用户（如果挂了 hook）
+            #    这样省掉用户手动点"绑定到当前账号"，并且 selfinfo 失败会
+            #    立刻把 session 标 ERROR，避免假 SUCCESS 误导前端。
+            if self._on_login_success is not None:
+                await self._set_status(session, SmsLoginStatus.BINDING)
+                try:
+                    bind_result = await self._on_login_success(
+                        session, snap.cookies_str
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        f"[sms_login] {session.session_id} 自动绑定 hook 异常: {exc}"
+                    )
+                    await self._mark_terminal(
+                        session,
+                        SmsLoginStatus.ERROR,
+                        "BIND_FAILED",
+                        f"自动绑定异常: {exc}",
+                    )
+                    return
+
+                if not bind_result:
+                    await self._mark_terminal(
+                        session,
+                        SmsLoginStatus.ERROR,
+                        "BIND_FAILED",
+                        "自动绑定失败：selfinfo 返回 guest 身份或解析失败",
+                    )
+                    return
+
+                session.bind_result = bind_result
+                # binder 已经把 cookies 落盘到 datas/users/<username>/，
+                # 防止旧 /bind 接口或他处再次消费同一 cookies。
+                session.cookies_str = None
+
             await self._mark_terminal(
                 session, SmsLoginStatus.SUCCESS, None, "登录成功"
             )
             # 登录闭环成功 → cookies 已落地，号没意义，删 reservation
             self._reservation_store.delete(session.redmuse_user_id)
-            logger.info(f"[sms_login] {session.session_id} 登录成功")
+            logger.info(
+                f"[sms_login] {session.session_id} 登录成功"
+                f"{'（已自动绑定）' if session.bind_result else ''}"
+            )
 
         except asyncio.CancelledError:
             # cancel_session 已经更新过状态，这里仅日志
@@ -651,6 +712,7 @@ def get_sms_login_service() -> Optional[SmsLoginService]:
     with _default_service_lock:
         if _default_service is not None:
             return _default_service
+        from .credential_binder import get_credential_binder
         from .hero_sms_provider import HeroSmsProvider
         from .playwright_sms_login_driver import PlaywrightSmsLoginDriver
 
@@ -660,6 +722,39 @@ def get_sms_login_service() -> Optional[SmsLoginService]:
 
         async def _factory(_session: SmsLoginSession) -> SmsLoginDriver:
             return PlaywrightSmsLoginDriver()
+
+        async def _auto_bind_hook(
+            session: SmsLoginSession, cookies_str: str
+        ) -> Optional[Dict[str, Any]]:
+            """登录成功后立刻把 cookies 绑到 session.redmuse_user_id。
+
+            返回 binder 的 ``to_dict()`` —— 含 xhs_user_id / xhs_nickname 等
+            前端可以直接展示的字段；任何失败返回 None 让 service 标 ERROR。
+            """
+            binder = get_credential_binder()
+            try:
+                result = await binder.bind_with_cookies(
+                    session.redmuse_user_id, cookies_str
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    f"[sms_login] auto-bind 调用 binder 异常: {exc}"
+                )
+                return None
+            if not result.success:
+                logger.warning(
+                    f"[sms_login] auto-bind 失败 "
+                    f"redmuse_user_id={session.redmuse_user_id} "
+                    f"code={result.error_code} msg={result.error_message}"
+                )
+                return None
+            logger.info(
+                f"[sms_login] ✓ auto-bind 成功 "
+                f"redmuse_user_id={session.redmuse_user_id} "
+                f"xhs_user_id={result.xhs_user_id} "
+                f"xhs_nickname={result.xhs_nickname}"
+            )
+            return result.to_dict()
 
         # 允许 env 覆盖虚拟号复用窗口（默认 20 分钟，PhoneReservationStore 内置）
         reuse_window = os.getenv("SMS_PHONE_REUSE_WINDOW_SEC", "").strip()
@@ -675,7 +770,10 @@ def get_sms_login_service() -> Optional[SmsLoginService]:
                 )
 
         _default_service = SmsLoginService(
-            provider, _factory, reservation_store=store
+            provider,
+            _factory,
+            reservation_store=store,
+            on_login_success=_auto_bind_hook,
         )
         return _default_service
 
