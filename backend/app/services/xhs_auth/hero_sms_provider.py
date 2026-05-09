@@ -20,13 +20,28 @@ API 约定（基于用户提供的接口规格 + sms-activate 兼容协议）::
     NO_BALANCE                           余额不足
     BAD_KEY / BANNED                     鉴权问题
 
-- ``getAllSms``::
+- ``getAllSms`` —— **两种响应格式都要支持**：
 
-    STATUS_OK:<code>                     成功
-    STATUS_OK:["c1", "c2"]               成功（多条短信）
-    STATUS_WAIT_CODE                     验证码尚未到达
-    STATUS_CANCEL                        订单被取消
-    其它                                 未知错误
+  1) 现代 JSON（hero-sms 当前主推；用户实测 2026-05 仍在用）::
+
+         {
+           "data": [
+             {"id":"116374769","phoneFrom":"BWSMS","code":"152748",
+              "text":"【rednote】你的验证码是：152748，3分钟内有效...",
+              "date":"2026-05-09T06:59:06+03:00","service":"qf","type":"sms"}
+           ],
+           "meta": {"total": 1}
+         }
+
+     ``data`` 数组为空表示尚未收到验证码。
+
+  2) 传统 sms-activate 兼容文本协议（旧系统 / fallback）::
+
+         STATUS_OK:<code>                     成功
+         STATUS_OK:["c1", "c2"]               成功（多条短信）
+         STATUS_WAIT_CODE                     验证码尚未到达
+         STATUS_CANCEL                        订单被取消
+         其它                                 未知错误
 
 文档明确"无需 setStatus 释放手机号，hero-sms 自动 cleanup"，所以
 :meth:`release_phone` 默认 no-op。
@@ -251,6 +266,41 @@ class HeroSmsProvider(SmsProvider):
         while True:
             attempts += 1
             text = await self._call({"action": "getAllSms", "id": order_id})
+
+            # ---- 优先：现代 JSON 协议（hero-sms 实测主推格式） ----
+            json_entries = _try_parse_json_sms_list(text)
+            if json_entries is not None:
+                # 找第一个不在 seen_codes 里的码
+                for entry in json_entries:
+                    code = _extract_code_from_json_entry(entry)
+                    if not code:
+                        continue
+                    if code in seen:
+                        continue
+                    logger.info(
+                        f"[hero_sms] 拉到验证码 (json) order_id={order_id} "
+                        f"attempts={attempts} code=...{code[-2:]}"
+                    )
+                    return SmsCodeResult(
+                        order_id=order_id, code=code, raw={"text": text}
+                    )
+                # 走到这里说明：JSON 列表为空 / 全是旧码 / 没有可解析的 code
+                if self._now_seconds() >= deadline:
+                    raise SmsTimeoutError(
+                        f"等待验证码超时（{timeout}s，{attempts} 次轮询，"
+                        f"最后 sms_count={len(json_entries)}）",
+                        code="SMS_TIMEOUT",
+                    )
+                logger.info(
+                    f"[hero_sms] attempt={attempts} order_id={order_id} "
+                    f"JSON 响应 sms_count={len(json_entries)}"
+                    f"{'（全是旧码或无码字段）' if json_entries else '（空数组）'}"
+                    f"，{interval}s 后再查"
+                )
+                await asyncio.sleep(interval)
+                continue
+
+            # ---- Fallback：sms-activate 兼容文本协议 ----
             tag, payload = _parse_text_response(text)
 
             if tag == "STATUS_OK":
@@ -326,6 +376,28 @@ class HeroSmsProvider(SmsProvider):
             raise SmsAuthError("SMS_PROVIDER_API_KEY 未配置", code="SMS_AUTH_ERROR")
 
         text = await self._call({"action": "getAllSms", "id": order_id})
+
+        # ---- 优先：现代 JSON 协议 ----
+        json_entries = _try_parse_json_sms_list(text)
+        if json_entries is not None:
+            for entry in json_entries:
+                code = _extract_code_from_json_entry(entry)
+                if code:
+                    logger.info(
+                        f"[hero_sms] peek 发现 order_id={order_id} "
+                        f"已有验证码 {code} (json)"
+                    )
+                    return SmsCodeResult(
+                        order_id=order_id, code=code, raw={"text": text}
+                    )
+            # JSON 但 sms 列表为空 / 无可解析 code → 该号尚未被消费
+            logger.debug(
+                f"[hero_sms] peek order_id={order_id} 尚无验证码 "
+                f"(json sms_count={len(json_entries)})"
+            )
+            return None
+
+        # ---- Fallback：sms-activate 兼容文本协议 ----
         tag, payload = _parse_text_response(text)
 
         if tag == "STATUS_OK":
@@ -414,6 +486,61 @@ def _parse_text_response(text: str) -> Tuple[str, str]:
     if not sep:
         return text.strip(), ""
     return head.strip(), tail.strip()
+
+
+def _try_parse_json_sms_list(text: str) -> Optional[list]:
+    """尝试把 hero-sms ``getAllSms`` 的 JSON 响应解析为短信条目列表。
+
+    成功响应（用户实测 2026-05-09）::
+
+        {"data":[{"id":"116374769","phoneFrom":"BWSMS","code":"152748",
+                  "text":"【rednote】你的验证码是：152748...","service":"qf",
+                  "type":"sms","date":"2026-05-09T06:59:06+03:00"}],
+         "meta":{"total":1}}
+
+    返回值：
+    - ``list``（可能为空）：响应是合法 JSON 且结构正确
+    - ``None``：响应不是 JSON / 不是 dict / 缺 ``data`` 字段 → 调用方走文本协议
+    """
+    s = (text or "").strip()
+    if not s.startswith("{"):
+        return None
+    try:
+        obj = json.loads(s)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    data = obj.get("data")
+    if not isinstance(data, list):
+        return None
+    return data
+
+
+def _extract_code_from_json_entry(entry: Any) -> Optional[str]:
+    """从 hero-sms JSON sms 条目里抽取数字验证码。
+
+    优先级：
+    1. ``code`` 字段（hero-sms 已经分好的纯数字字符串）
+    2. ``text`` 字段兜底（用 :func:`_normalize_code` 抽连续 4-8 位数字）
+
+    任何异常返回 ``None`` 让调用方继续看下一条 / 继续等。
+    """
+    if not isinstance(entry, dict):
+        return None
+    code_field = entry.get("code")
+    if code_field:
+        try:
+            return _normalize_code(str(code_field))
+        except SmsResponseError:
+            pass
+    text_field = entry.get("text")
+    if text_field:
+        try:
+            return _normalize_code(str(text_field))
+        except SmsResponseError:
+            pass
+    return None
 
 
 def _split_access_number_payload(payload: str, *, raw: str) -> Tuple[str, str]:

@@ -478,3 +478,124 @@ async def test_full_flow_acquire_then_wait(fake_client):
             assert "service" not in call
             assert "country" not in call
             assert "maxPrice" not in call
+
+
+# ---------------------------------------------------------------------------
+# JSON 协议（hero-sms 现代格式）
+# 真实回归用例：用户 2026-05-09 提交的日志显示 hero-sms 已切换到 JSON
+# 响应；旧解析器把整个 JSON 当作 "未知响应" 一直空等到超时。
+# ---------------------------------------------------------------------------
+
+
+# 来自用户实测日志（脱敏字段保留）
+_USER_REAL_JSON_RESPONSE = (
+    '{"data":[{"id":"116374769","phoneFrom":"BWSMS","code":"152748",'
+    '"text":"\\u3010rednote\\u3011\\u4f60\\u7684\\u9a8c\\u8bc1\\u7801'
+    '\\u662f\\uff1a152748\\uff0c3\\u5206\\u949f\\u5185\\u6709\\u6548'
+    '\\u3002\\u8bf7\\u52ff\\u544a\\u77e5\\u4ed6\\u4eba\\u6cc4\\u5bc6'
+    '\\u3002","date":"2026-05-09T06:59:06+03:00","service":"qf",'
+    '"type":"sms"}],"meta":{"total":1}}'
+)
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_parses_real_user_json_response(fake_client):
+    """回归测试：用户日志里的真实 JSON 响应必须被解析出 152748。"""
+    fake_client.queue("getAllSms", _FakeResponse(200, _USER_REAL_JSON_RESPONSE))
+    p = _provider(fake_client)
+    res = await p.wait_sms_code("order_real")
+    assert res.code == "152748"
+    assert res.order_id == "order_real"
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_json_empty_data_then_filled(fake_client):
+    """JSON ``data`` 数组为空 → 视为等待中，下一次轮询拿到验证码。"""
+    fake_client.queue(
+        "getAllSms",
+        _FakeResponse(200, '{"data":[],"meta":{"total":0}}'),
+        _FakeResponse(
+            200,
+            '{"data":[{"id":"1","code":"246810","text":"code 246810",'
+            '"service":"qf","type":"sms"}],"meta":{"total":1}}',
+        ),
+    )
+    p = _provider(fake_client, sms_poll_interval_sec=0)
+    res = await p.wait_sms_code("order_q")
+    assert res.code == "246810"
+    sms_calls = [c for c in fake_client.calls if c["action"] == "getAllSms"]
+    assert len(sms_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_json_filters_seen_codes(fake_client):
+    """复用号场景：JSON 响应里仍是旧码 → 继续等到新码（同一 entry 序列）。"""
+    fake_client.queue(
+        "getAllSms",
+        # 第 1 次：仅旧码
+        _FakeResponse(
+            200,
+            '{"data":[{"id":"1","code":"111222","text":"old code 111222",'
+            '"type":"sms"}],"meta":{"total":1}}',
+        ),
+        # 第 2 次：旧码 + 新码（hero-sms 把多条短信都返回）
+        _FakeResponse(
+            200,
+            '{"data":['
+            '{"id":"1","code":"111222","text":"old code 111222","type":"sms"},'
+            '{"id":"2","code":"333444","text":"new code 333444","type":"sms"}'
+            '],"meta":{"total":2}}',
+        ),
+    )
+    p = _provider(fake_client, sms_poll_interval_sec=0)
+    res = await p.wait_sms_code("order_reuse_json", seen_codes=["111222"])
+    assert res.code == "333444"
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_json_empty_until_timeout(fake_client):
+    """JSON 一直返回空 ``data`` 直到 deadline → SMS_TIMEOUT。"""
+    for _ in range(20):
+        fake_client.queue(
+            "getAllSms", _FakeResponse(200, '{"data":[],"meta":{"total":0}}')
+        )
+    p = _provider(fake_client, sms_poll_timeout_sec=0)
+    with pytest.raises(SmsTimeoutError) as exc_info:
+        await p.wait_sms_code("order_empty")
+    assert "sms_count=0" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_wait_sms_code_json_falls_back_to_text_extract(fake_client):
+    """JSON 条目缺 ``code`` 字段时，从 ``text`` 抽数字（最长 4-8 位）。"""
+    fake_client.queue(
+        "getAllSms",
+        _FakeResponse(
+            200,
+            '{"data":[{"id":"1","text":"\\u9a8c\\u8bc1\\u7801 729183 5 min",'
+            '"type":"sms"}],"meta":{"total":1}}',
+        ),
+    )
+    p = _provider(fake_client)
+    res = await p.wait_sms_code("order_text")
+    assert res.code == "729183"
+
+
+@pytest.mark.asyncio
+async def test_peek_returns_code_when_json_has_data(fake_client):
+    """peek 同样支持 JSON：data 非空 → 返回 SmsCodeResult。"""
+    fake_client.queue("getAllSms", _FakeResponse(200, _USER_REAL_JSON_RESPONSE))
+    p = _provider(fake_client)
+    result = await p.peek_sms_code("order_real")
+    assert result is not None
+    assert result.code == "152748"
+
+
+@pytest.mark.asyncio
+async def test_peek_returns_none_when_json_data_empty(fake_client):
+    """peek + JSON 空数组 → None（号未消费，可复用）。"""
+    fake_client.queue(
+        "getAllSms", _FakeResponse(200, '{"data":[],"meta":{"total":0}}')
+    )
+    p = _provider(fake_client)
+    assert await p.peek_sms_code("order_empty") is None
