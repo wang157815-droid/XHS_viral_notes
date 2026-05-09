@@ -83,6 +83,15 @@ _DEBUG_DUMP = (os.getenv("XHS_SMS_DEBUG_DUMP") or "").strip().lower() in (
 )
 
 _LOGIN_URL = os.getenv("XHS_LOGIN_START_URL") or "https://www.xiaohongshu.com/explore"
+# **每次会话用全新 incognito context**：不再持久化 profile。
+# 之前用 launch_persistent_context + 共享 user_data_dir 会让上次失败遗留的
+# cookies / localStorage 污染下一次会话，导致小红书弹不一样的 modal、
+# selector 失效。XHS_SMS_PERSIST_PROFILE=true 可以打开旧行为（仅排障用）。
+_PERSIST_PROFILE = (os.getenv("XHS_SMS_PERSIST_PROFILE") or "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 _PROFILE_DIR = (
     Path(os.getenv("XHS_SMS_BROWSER_PROFILE_DIR") or "datas/browsers/sms_login")
     .expanduser()
@@ -102,6 +111,7 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
 
     def __init__(self) -> None:
         self._playwright: Any = None
+        self._browser: Any = None
         self._context: Any = None
         self._page: Any = None
         self._closed = False
@@ -118,20 +128,56 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
                 "Playwright 未安装。运行 `pip install playwright` 并执行 `playwright install chromium`。"
             ) from exc
 
-        _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
         self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(_PROFILE_DIR),
-            headless=_HEADLESS,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+
+        if _PERSIST_PROFILE:
+            # 排障用：旧行为，复用 profile（不推荐生产）
+            _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            logger.warning(
+                f"[sms_login] XHS_SMS_PERSIST_PROFILE=true，复用 profile {_PROFILE_DIR}；"
+                "可能因上次状态污染导致 selector 失效。仅排障用。"
+            )
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(_PROFILE_DIR),
+                headless=_HEADLESS,
+                args=[
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            self._page = (
+                self._context.pages[0]
+                if self._context.pages
+                else await self._context.new_page()
+            )
+        else:
+            # **默认新行为**：每次会话独立 incognito context，避免上次 cookies/
+            # localStorage 让小红书弹不一样的 modal 导致 selector 失效。
+            self._browser = await self._playwright.chromium.launch(
+                headless=_HEADLESS,
+                args=[
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            # 模拟桌面 UA，避免被识别为 headless / 老版本
+            self._context = await self._browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1366, "height": 800},
+                locale="zh-CN",
+            )
+            self._page = await self._context.new_page()
+            logger.info(
+                "[sms_login] 已启动全新 incognito context（每次会话独立）"
+            )
+
+        await self._page.goto(
+            _LOGIN_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS
         )
-        self._page = (
-            self._context.pages[0]
-            if self._context.pages
-            else await self._context.new_page()
-        )
-        await self._page.goto(_LOGIN_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
         # 切到「手机号登录」标签
         await self._safe_click(_SELECTORS["phone_tab"], optional=True)
 
@@ -305,17 +351,24 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         if self._closed:
             return
         self._closed = True
+        # 关闭顺序：context → browser → playwright
         try:
             if self._context:
                 await self._context.close()
         except Exception as exc:
             logger.debug(f"PlaywrightSmsLoginDriver close context 异常: {exc}")
         try:
+            if self._browser:
+                await self._browser.close()
+        except Exception as exc:
+            logger.debug(f"PlaywrightSmsLoginDriver close browser 异常: {exc}")
+        try:
             if self._playwright:
                 await self._playwright.stop()
         except Exception as exc:
             logger.debug(f"PlaywrightSmsLoginDriver stop pw 异常: {exc}")
         self._context = None
+        self._browser = None
         self._page = None
         self._playwright = None
 
