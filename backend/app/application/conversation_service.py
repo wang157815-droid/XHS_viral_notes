@@ -65,17 +65,11 @@ class ConversationService:
         keywords: Optional[List[str]] = None,
         competitor_keywords: Optional[List[str]] = None,
         advanced_config: Optional[Dict[str, Any]] = None,
-        domain_ids: Optional[List[str]] = None,
         active_task_id: Optional[str] = None,
         client_message_id: Optional[str] = None,
         current_user: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         conversation = self.store.ensure_owner(conversation_id, owner_user_id)
-        if domain_ids is not None:
-            conversation = self.store.update_conversation(
-                conversation_id,
-                metadata_patch={"domain_ids": domain_ids},
-            )
         if active_task_id:
             conversation = self.store.update_conversation(
                 conversation_id,
@@ -97,7 +91,6 @@ class ConversationService:
             conversation_summary=conversation.summary,
             recent_messages=recent_messages,
             active_task_id=active_task,
-            domain_ids=domain_ids or conversation.metadata.get("domain_ids") or [],
             hint_keywords=keywords,
             competitor_keywords=competitor_keywords,
         )
@@ -110,7 +103,7 @@ class ConversationService:
             intent=intent,
             recent_messages=recent_messages,
             active_task_id=active_task,
-            current_user=current_user or {"user_id": owner_user_id, "role": "user"},
+            current_user=current_user or {"user_id": owner_user_id, "role": "analyst"},
             advanced_config=advanced_config or {},
         )
         self.store.append_message(conversation_id, assistant_message)
@@ -133,17 +126,11 @@ class ConversationService:
         keywords: Optional[List[str]] = None,
         competitor_keywords: Optional[List[str]] = None,
         advanced_config: Optional[Dict[str, Any]] = None,
-        domain_ids: Optional[List[str]] = None,
         active_task_id: Optional[str] = None,
         client_message_id: Optional[str] = None,
         current_user: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         conversation = self.store.ensure_owner(conversation_id, owner_user_id)
-        if domain_ids is not None:
-            conversation = self.store.update_conversation(
-                conversation_id,
-                metadata_patch={"domain_ids": domain_ids},
-            )
         if active_task_id:
             conversation = self.store.update_conversation(
                 conversation_id,
@@ -167,7 +154,6 @@ class ConversationService:
             conversation_summary=conversation.summary,
             recent_messages=recent_messages,
             active_task_id=active_task,
-            domain_ids=domain_ids or conversation.metadata.get("domain_ids") or [],
             hint_keywords=keywords,
             competitor_keywords=competitor_keywords,
         )
@@ -183,7 +169,6 @@ class ConversationService:
             canvas_modules=canvas_modules,
             keywords=keywords,
             competitor_keywords=competitor_keywords,
-            domain_ids=domain_ids or conversation.metadata.get("domain_ids") or [],
             advanced_config=advanced_config or {},
         )
         call = self._resolve_pending_tool_call(conversation.metadata, content, decision.first_call)
@@ -191,13 +176,13 @@ class ConversationService:
             call = ConversationToolCall(name="answer_general", arguments={"question": content}, confidence=0.6)
         yield {"type": "tool_selected", "tool": call.to_dict()}
 
-        current_user = current_user or {"user_id": owner_user_id, "role": "user"}
+        current_user = current_user or {"user_id": owner_user_id, "role": "analyst"}
         if call.name == "answer_general":
             async for event in self._stream_general_answer(conversation_id, intent, recent_messages, active_task):
                 yield event
             return
         if call.name == "answer_with_knowledge":
-            async for event in self._stream_knowledge_answer(conversation_id, intent, content, call):
+            async for event in self._stream_knowledge_answer(conversation_id, intent, content, call, current_user):
                 yield event
             return
 
@@ -263,7 +248,6 @@ class ConversationService:
                 canvas_modules=canvas_modules,
                 keywords=intent.extracted_keywords,
                 competitor_keywords=intent.competitor_keywords,
-                domain_ids=intent.domain_ids,
                 advanced_config=advanced_config,
             )
             call = self._resolve_pending_tool_call(conversation.metadata, content, decision.first_call)
@@ -325,6 +309,7 @@ class ConversationService:
                 question=content,
                 intent=intent,
                 conversation_summary=self.store.get(conversation_id).summary if self.store.get(conversation_id) else "",
+                current_user=current_user,
             )
             message = self._assistant(conversation_id, intent, answer, debug=debug)
             message.citations = citations
@@ -426,13 +411,13 @@ class ConversationService:
         intent: IntentClassification,
         content: str,
         call: ConversationToolCall,
+        current_user: Dict[str, Any],
     ) -> AsyncIterator[Dict[str, Any]]:
         yield {"type": "status", "status": "retrieving_knowledge", "message": "正在检索知识库..."}
         conversation = self.store.get(conversation_id)
         stream_intent = IntentClassification(
             intent="knowledge_qa",
             confidence=max(intent.confidence, call.confidence),
-            domain_ids=self.tool_executor._clean_list(call.arguments.get("domain_ids")) or intent.domain_ids,
             should_retrieve_knowledge=True,
         )
         try:
@@ -440,6 +425,7 @@ class ConversationService:
                 question=str(call.arguments.get("question") or content),
                 intent=stream_intent,
                 conversation_summary=conversation.summary if conversation else "",
+                current_user=current_user,
             )
         except Exception as exc:
             logger.warning("Knowledge QA stream retrieval unavailable: {}", exc)

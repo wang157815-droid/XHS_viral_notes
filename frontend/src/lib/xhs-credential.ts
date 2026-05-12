@@ -40,6 +40,7 @@ export interface XhsCredentialStatusDto {
   message: string;
   is_bound: boolean;
   last_validated_at: string | null;
+  credential?: XhsCredentialPublic;
 }
 
 export async function fetchMyXhsCredential() {
@@ -170,6 +171,97 @@ export function describeSmsLoginStatus(status: SmsLoginStatus): {
       return { label: "会话超时", progress: 100, tone: "err" };
     default:
       return { label: String(status), progress: 0, tone: "info" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4b: 设置页 inline 扫码登录（复用 /auth/xhs-login/* 系列接口）
+// ---------------------------------------------------------------------------
+
+export type XhsQrLoginStatus =
+  | "initializing"
+  | "waiting_scan"
+  | "scanned"
+  | "need_sms_code"
+  | "confirmed"
+  | "success"
+  | "expired"
+  | "error"
+  | "cancelled";
+
+export interface XhsQrLoginSessionDto {
+  session_id: string;
+  status: XhsQrLoginStatus;
+  qrcode_base64?: string | null;
+  screenshot_version?: number;
+  error_message?: string | null;
+}
+
+export const XHS_QR_FINAL_STATUSES: ReadonlyArray<XhsQrLoginStatus> = [
+  "success",
+  "expired",
+  "error",
+  "cancelled",
+];
+
+export async function createXhsQrLoginSession(scene = "settings_rebind") {
+  return apiPost<{ session_id: string; status: XhsQrLoginStatus }>(
+    "/auth/xhs-login/session",
+    { scene },
+    { withAuth: true },
+  );
+}
+
+export async function fetchXhsQrLoginSession(sessionId: string) {
+  return apiGet<XhsQrLoginSessionDto>(
+    `/auth/xhs-login/session/${encodeURIComponent(sessionId)}`,
+    { withAuth: true },
+  );
+}
+
+export async function cancelXhsQrLoginSession(sessionId: string) {
+  return apiDelete<{ session_id: string; cancelled: boolean }>(
+    `/auth/xhs-login/session/${encodeURIComponent(sessionId)}`,
+    { withAuth: true },
+  );
+}
+
+export async function submitXhsQrLoginSms(sessionId: string, smsCode: string) {
+  return apiPost<{ sms_submitted: boolean }>(
+    `/auth/xhs-login/session/${encodeURIComponent(sessionId)}/sms`,
+    { sms_code: smsCode },
+    { withAuth: true },
+  );
+}
+
+export function describeXhsQrLoginStatus(
+  status: XhsQrLoginStatus,
+  hasQr: boolean,
+): { label: string; tone: "info" | "ok" | "err" | "warn" } {
+  if (hasQr && status === "initializing") {
+    return { label: "等待扫码中…", tone: "info" };
+  }
+  switch (status) {
+    case "initializing":
+      return { label: "初始化扫码环境中…", tone: "info" };
+    case "waiting_scan":
+      return { label: "等待扫码中…", tone: "info" };
+    case "scanned":
+      return { label: "已扫码，等待手机确认…", tone: "info" };
+    case "need_sms_code":
+      return { label: "需要短信验证码，请在下方输入", tone: "warn" };
+    case "confirmed":
+      return { label: "已确认，正在抓取 Cookie…", tone: "info" };
+    case "success":
+      return { label: "登录成功，正在保存到当前账号…", tone: "ok" };
+    case "expired":
+      return { label: "二维码已过期，请刷新", tone: "warn" };
+    case "error":
+      return { label: "登录失败，请重试", tone: "err" };
+    case "cancelled":
+      return { label: "已取消", tone: "warn" };
+    default:
+      return { label: String(status), tone: "info" };
   }
 }
 

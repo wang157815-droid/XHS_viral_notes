@@ -92,7 +92,7 @@ class VideoAIAnalyzer:
         # 缓存
         self.cache = {}
 
-        # 知识检索器（RAG + JSON配置）
+        # 知识检索器（RAG）
         self.knowledge_retriever = None
         self._init_knowledge_retriever()
 
@@ -123,7 +123,7 @@ class VideoAIAnalyzer:
         query: str = ""
     ) -> Dict[str, Any]:
         """
-        检索视频分析相关知识（RAG + JSON配置）
+        检索视频分析相关知识（RAG）
 
         Args:
             title: 视频标题
@@ -151,7 +151,7 @@ class VideoAIAnalyzer:
                 query=search_query
             )
 
-            logger.info(f"视频知识检索完成: JSON={knowledge.get('has_json', False)}, RAG={knowledge.get('has_rag', False)}")
+            logger.info(f"视频知识检索完成: RAG={knowledge.get('has_rag', False)}")
             return knowledge
 
         except Exception as e:
@@ -185,16 +185,11 @@ class VideoAIAnalyzer:
         knowledge = self.retrieve_video_knowledge(title, description, query)
 
         # 如果没有检索到知识，返回原始提示词
-        if not knowledge.get('has_json') and not knowledge.get('has_rag'):
+        if not knowledge.get('has_rag'):
             return base_prompt
 
         # 构建知识上下文
         knowledge_context = []
-
-        # 添加结构化知识（JSON配置）
-        if knowledge.get('structured_knowledge'):
-            knowledge_context.append("【领域专业知识】")
-            knowledge_context.append(knowledge['structured_knowledge'])
 
         # 添加文档知识（RAG检索）
         if knowledge.get('document_knowledge'):

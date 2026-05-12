@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from ...application.conversation_service import ConversationService
 from ...core.config import settings
 from ...core.responses import ok
-from ...core.security import get_current_user
+from ...core.security import RoleLevel, get_current_user, role_allows
 from ...domain.error_codes import ErrorCode, build_error
 from ...services.conversation_store import get_conversation_store
 
@@ -34,7 +34,6 @@ class SendMessageRequest(BaseModel):
     keywords: List[str] = Field(default_factory=list)
     competitor_keywords: List[str] = Field(default_factory=list)
     advanced_config: Dict[str, Any] = Field(default_factory=dict)
-    domain_ids: Optional[List[str]] = None
     active_task_id: Optional[str] = None
     client_message_id: Optional[str] = None
 
@@ -45,6 +44,15 @@ class UpdateConversationStateRequest(BaseModel):
 
 def _user_id(current_user: Dict[str, Any]) -> str:
     return str(current_user["user_id"])
+
+
+def _is_admin(current_user: Dict[str, Any]) -> bool:
+    return role_allows(current_user.get("role"), RoleLevel.admin)
+
+
+def _require_conversation_write_role(current_user: Dict[str, Any]) -> None:
+    if not role_allows(current_user.get("role"), RoleLevel.analyst):
+        raise HTTPException(status_code=403, detail="需要分析师或管理员权限")
 
 
 def _ensure_conversation_enabled() -> None:
@@ -63,7 +71,12 @@ def _ensure_conversation_enabled() -> None:
 def _require_owned_conversation(conversation_id: str, current_user: Dict[str, Any]):
     store = get_conversation_store()
     try:
-        return store.ensure_owner(conversation_id, _user_id(current_user))
+        conversation = store.get(conversation_id)
+        if not conversation:
+            raise KeyError(f"Conversation not found: {conversation_id}")
+        if conversation.owner_user_id == _user_id(current_user) or _is_admin(current_user):
+            return conversation
+        raise PermissionError("Conversation owner mismatch")
     except KeyError:
         raise HTTPException(
             status_code=404,
@@ -90,6 +103,7 @@ async def create_conversation(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
     conversation = get_conversation_store().create(
         owner_user_id=_user_id(current_user),
         title=payload.title,
@@ -107,7 +121,7 @@ async def list_conversations(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
-    include_all_effective = include_all and current_user.get("role") == "admin"
+    include_all_effective = include_all and role_allows(current_user.get("role"), RoleLevel.admin)
     items = get_conversation_store().list_for_owner(
         _user_id(current_user),
         limit=limit,
@@ -168,6 +182,7 @@ async def archive_conversation(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
     _require_owned_conversation(conversation_id, current_user)
     conversation = get_conversation_store().update_conversation(
         conversation_id,
@@ -186,6 +201,7 @@ async def restore_conversation(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
     _require_owned_conversation(conversation_id, current_user)
     conversation = get_conversation_store().update_conversation(
         conversation_id,
@@ -200,6 +216,7 @@ async def delete_conversation(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
     _require_owned_conversation(conversation_id, current_user)
     conversation = get_conversation_store().update_conversation(
         conversation_id,
@@ -215,16 +232,16 @@ async def send_message(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
-    _require_owned_conversation(conversation_id, current_user)
+    _require_conversation_write_role(current_user)
+    conversation = _require_owned_conversation(conversation_id, current_user)
     service = ConversationService(store=get_conversation_store())
     result = await service.handle_user_message(
         conversation_id=conversation_id,
-        owner_user_id=_user_id(current_user),
+        owner_user_id=conversation.owner_user_id,
         content=payload.content,
         keywords=payload.keywords,
         competitor_keywords=payload.competitor_keywords,
         advanced_config=payload.advanced_config,
-        domain_ids=payload.domain_ids,
         active_task_id=payload.active_task_id,
         client_message_id=payload.client_message_id,
         current_user=current_user,
@@ -246,18 +263,18 @@ async def send_message_stream(
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
-    _require_owned_conversation(conversation_id, current_user)
+    _require_conversation_write_role(current_user)
+    conversation = _require_owned_conversation(conversation_id, current_user)
     service = ConversationService(store=get_conversation_store())
 
     async def event_generator():
         async for event in service.handle_user_message_stream(
             conversation_id=conversation_id,
-            owner_user_id=_user_id(current_user),
+            owner_user_id=conversation.owner_user_id,
             content=payload.content,
             keywords=payload.keywords,
             competitor_keywords=payload.competitor_keywords,
             advanced_config=payload.advanced_config,
-            domain_ids=payload.domain_ids,
             active_task_id=payload.active_task_id,
             client_message_id=payload.client_message_id,
             current_user=current_user,

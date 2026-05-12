@@ -82,18 +82,18 @@ class XhsCredentialHealthChecker:
                 "last_checked_at": None,
             }
 
-        status = str(payload.get("status") or "unknown")
+        status = self._normalize_status(str(payload.get("status") or "unknown"))
         message = str(payload.get("message") or "")
         last_checked = (
             str(payload["last_checked_at"]) if payload.get("last_checked_at") else None
         )
+        last_validated_at = last_checked or _now_iso()
 
-        # 写回 store 让其它读取方有一致视图
         self.store.update_status(
             redmuse_user_id,
             status=status,
             status_message=message,
-            last_validated_at=last_checked or _now_iso(),
+            last_validated_at=last_validated_at,
         )
 
         return XhsCredentialHealth(
@@ -101,9 +101,20 @@ class XhsCredentialHealthChecker:
             status=status,
             message=message,
             cookies_path=credential.cookies_path,
-            last_validated_at=last_checked,
+            last_validated_at=last_validated_at,
             is_bound=True,
         )
+
+    @staticmethod
+    def _normalize_status(status: str) -> str:
+        value = (status or "").strip().lower()
+        if value == "valid":
+            return "active"
+        if value in {"invalid", "missing"}:
+            return "expired"
+        if value in {"active", "expired", "expiring_soon", "unknown", "unbound"}:
+            return value
+        return "unknown"
 
     @staticmethod
     def _extract_username_from_path(cookies_path: str) -> str:

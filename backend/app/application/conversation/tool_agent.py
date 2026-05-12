@@ -36,7 +36,6 @@ class ConversationToolAgent:
         canvas_modules: List[Dict[str, Any]],
         keywords: Optional[List[str]] = None,
         competitor_keywords: Optional[List[str]] = None,
-        domain_ids: Optional[List[str]] = None,
         advanced_config: Optional[Dict[str, Any]] = None,
     ) -> ConversationToolDecision:
         pending = conversation.metadata.get("pending_tool_decision") or {}
@@ -51,7 +50,6 @@ class ConversationToolAgent:
             pending=pending if isinstance(pending, dict) else {},
             keywords=keywords or [],
             competitor_keywords=competitor_keywords or [],
-            domain_ids=domain_ids or [],
             advanced_config=advanced_config or {},
         )
         try:
@@ -75,7 +73,6 @@ class ConversationToolAgent:
             intent=intent,
             active_task_id=active_task_id,
             canvas_modules=canvas_modules,
-            domain_ids=domain_ids or [],
         )
 
     def _parse_tool_calls(self, result: Dict[str, Any]) -> List[ConversationToolCall]:
@@ -109,7 +106,6 @@ class ConversationToolAgent:
         pending: Dict[str, Any],
         keywords: List[str],
         competitor_keywords: List[str],
-        domain_ids: List[str],
         advanced_config: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         context = {
@@ -121,7 +117,6 @@ class ConversationToolAgent:
             "rule_intent": intent.to_dict(),
             "hint_keywords": keywords,
             "competitor_keywords": competitor_keywords,
-            "domain_ids": domain_ids,
             "advanced_config": advanced_config,
             "canvas_modules": canvas_modules,
             "recent_messages": recent_messages[-6:],
@@ -151,7 +146,6 @@ class ConversationToolAgent:
         intent: IntentClassification,
         active_task_id: Optional[str],
         canvas_modules: List[Dict[str, Any]],
-        domain_ids: List[str],
     ) -> ConversationToolDecision:
         if intent.intent == "xhs_analysis":
             return ConversationToolDecision(
@@ -161,7 +155,6 @@ class ConversationToolAgent:
                         arguments={
                             "keywords": intent.extracted_keywords or IntentRouter.extract_keywords(content),
                             "competitor_keywords": intent.competitor_keywords,
-                            "domain_ids": domain_ids or intent.domain_ids,
                             "confirm_new_task": True,
                         },
                         confidence=intent.confidence,
@@ -205,7 +198,7 @@ class ConversationToolAgent:
                 calls=[
                     ConversationToolCall(
                         name="answer_with_knowledge",
-                        arguments={"question": content, "domain_ids": domain_ids or intent.domain_ids, "top_k": 5},
+                        arguments={"question": content, "top_k": 5},
                         confidence=intent.confidence,
                         reason="rule fallback knowledge_qa",
                     )

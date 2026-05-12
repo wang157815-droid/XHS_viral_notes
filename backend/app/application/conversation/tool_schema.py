@@ -113,7 +113,6 @@ CONVERSATION_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": "通常不要填写；时间范围来自 advanced_config.time_range。",
                     },
-                    "domain_ids": {"type": "array", "items": {"type": "string"}},
                     "confirm_new_task": {"type": "boolean"},
                 },
                 "required": ["keywords"],
@@ -147,7 +146,6 @@ CONVERSATION_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "question": {"type": "string"},
-                    "domain_ids": {"type": "array", "items": {"type": "string"}},
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["question"],

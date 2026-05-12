@@ -63,7 +63,7 @@ class VideoTimelineAnalyzer:
             # 获取基础提示词
             base_prompt = get_timeline_analysis_prompt(video_url, title)
 
-            # 使用知识库增强提示词（RAG + JSON配置）
+            # 使用知识库增强提示词（RAG）
             if hasattr(self.ai_analyzer, 'enhance_prompt_with_knowledge'):
                 prompt = self.ai_analyzer.enhance_prompt_with_knowledge(
                     base_prompt=base_prompt,

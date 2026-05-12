@@ -1,33 +1,24 @@
 """
 统一知识检索服务
-融合 JSON配置 + RAG文档检索
+
+领域知识（JSON 配置）已于 2026-05 下线（B 方案）：本检索器退化为纯 RAG 模式。
+仍保留 retrieve_knowledge / get_knowledge_summary / build_ai_prompt_with_knowledge 接口契约以兼容上游调用方，
+但 domains / structured_knowledge 字段恒为空、json_domains 永远为 0。
 """
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
-from viral_agent.config.knowledge_loader import get_knowledge_config
 from viral_agent.services.knowledge.rag_service import RAGService
 
 
 class UnifiedKnowledgeRetriever:
-    """统一知识检索器"""
+    """纯 RAG 知识检索器。"""
 
     def __init__(self, enable_rag: bool = True):
-        """
-        初始化检索器
+        """初始化检索器：enable_rag=False 仅用于测试。"""
+        # 领域知识已下线，json_config 始终为 None
+        self.json_config = None
 
-        Args:
-            enable_rag: 是否启用RAG（可选禁用用于测试）
-        """
-        # 加载JSON配置
-        try:
-            self.json_config = get_knowledge_config()
-            logger.info("JSON知识库加载成功")
-        except Exception as e:
-            logger.error(f"JSON知识库加载失败: {e}")
-            self.json_config = None
-
-        # 初始化RAG服务
         self.enable_rag = enable_rag
         if enable_rag:
             try:
@@ -74,39 +65,18 @@ class UnifiedKnowledgeRetriever:
             'rag_results': []
         }
 
-        # 1. 领域检测（基于JSON配置的关键词）
-        if self.json_config:
-            try:
-                domains = self.json_config.detect_domain(title, description)
-                result['domains'] = domains
-                logger.debug(f"检测到领域: {domains}")
-            except Exception as e:
-                logger.error(f"领域检测失败: {e}")
-                result['domains'] = []
-        else:
-            result['domains'] = []
+        # 领域知识已下线，structured_knowledge / domains / has_json 保持默认空值
 
-        # 2. 获取结构化知识（JSON配置）
-        if self.json_config and result['domains']:
-            try:
-                structured_knowledge = self.json_config.get_domain_knowledge_text(result['domains'])
-                result['structured_knowledge'] = structured_knowledge
-                result['has_json'] = bool(structured_knowledge)
-                logger.debug(f"获取JSON知识: {len(structured_knowledge)} 字符")
-            except Exception as e:
-                logger.error(f"获取JSON知识失败: {e}")
-                result['structured_knowledge'] = ''
-
-        # 3. RAG检索文档知识
+        # RAG 检索文档知识
         if self.rag_service:
             try:
                 # 构建搜索查询
                 search_query = query or f"{title} {description}"
 
-                # 向量检索
+                # 向量检索（不再按领域过滤）
                 search_results = self.rag_service.search(
                     query=search_query,
-                    domains=result['domains'] if result['domains'] else None,
+                    domains=None,
                     top_k=top_k
                 )
 
@@ -168,31 +138,13 @@ class UnifiedKnowledgeRetriever:
             return []
 
     def get_knowledge_summary(self) -> Dict[str, Any]:
-        """
-        获取知识库摘要信息
-
-        Returns:
-            {
-                'json_domains': 5,
-                'rag_documents': 10,
-                'total_knowledge': '15个知识源'
-            }
-        """
+        """获取知识库摘要信息（仅 RAG）。"""
         summary = {
             'json_domains': 0,
             'rag_documents': 0,
             'total_knowledge': '0个知识源'
         }
 
-        # JSON知识库统计
-        if self.json_config:
-            try:
-                domains = self.json_config.get_all_domains()
-                summary['json_domains'] = len(domains)
-            except Exception as e:
-                logger.error(f"获取JSON统计失败: {e}")
-
-        # RAG知识库统计
         if self.rag_service:
             try:
                 docs = self.rag_service.list_all_documents()
@@ -200,10 +152,7 @@ class UnifiedKnowledgeRetriever:
             except Exception as e:
                 logger.error(f"获取RAG统计失败: {e}")
 
-        # 总计
-        total = summary['json_domains'] + summary['rag_documents']
-        summary['total_knowledge'] = f"{total}个知识源"
-
+        summary['total_knowledge'] = f"{summary['rag_documents']}个知识源"
         return summary
 
     def build_ai_prompt_with_knowledge(

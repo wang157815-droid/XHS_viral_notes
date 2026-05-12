@@ -167,13 +167,13 @@ VIRAL_MODEL_JSON_SCHEMA = {
 
 KNOWLEDGE_SECTION_TEMPLATE = """
 ---
-### 【领域专业知识参考】
+### 【补充知识参考】
 
-{domain_name}领域分析要点：
+{domain_name}主题分析要点：
 
 {domain_knowledge}
 
-请结合以上领域知识进行分析，确保建议符合该领域的最佳实践。
+请结合以上补充知识进行分析。
 ---
 """
 
@@ -190,8 +190,8 @@ def build_viral_model_prompt(
 
     Args:
         summary_data: 包含所有分析数据的摘要字典
-        knowledge: 领域知识文本（可选）
-        domain_name: 领域名称（可选）
+        knowledge: 补充知识文本（可选）
+        domain_name: 主题名称（可选）
 
     Returns:
         格式化后的提示词

@@ -105,7 +105,7 @@ PRODUCT_KNOWLEDGE_TEMPLATE = """
 ---
 ### 【产品植入专业知识】
 
-{domain_name}领域产品分析要点：
+{domain_name}主题产品分析要点：
 
 【产品引出方式参考】
 {intro_ways}
@@ -165,8 +165,8 @@ def build_product_analysis_prompt(
     Args:
         samples: 笔记样本列表，每个包含title和desc
         timing_stats: 产品引出时机统计数据
-        knowledge: 领域知识字典（可选）
-        domain_name: 领域名称
+        knowledge: 补充知识字典（可选）
+        domain_name: 主题名称
 
     Returns:
         格式化后的提示词

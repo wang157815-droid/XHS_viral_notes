@@ -26,6 +26,20 @@ LOGIN_TIMEOUT_SECONDS = 300
 # 默认打开国内站；海外 RedNote 用户可设环境变量 XHS_LOGIN_START_URL=https://www.rednote.com/explore
 DEFAULT_XHS_LOGIN_URL = "https://www.xiaohongshu.com/explore"
 
+# 截图裁剪：从 QR 元素向上找到尺寸落在登录弹窗区间的祖先作为截图区域。
+# 太小（< MIN）= QR 节点本身，缺乏文案；太大（> MAX）= modal backdrop 或整页容器。
+_LOGIN_PANEL_QR_SELECTORS = (
+    'canvas[class*="qrcode"]',
+    'img[class*="qrcode"]',
+    '[class*="qr-code"]',
+    '[class*="QRCode"]',
+)
+_LOGIN_PANEL_MIN_WIDTH = 320
+_LOGIN_PANEL_MAX_WIDTH = 720
+_LOGIN_PANEL_MIN_HEIGHT = 320
+_LOGIN_PANEL_MAX_HEIGHT = 800
+_LOGIN_PANEL_PADDING_PX = 16
+
 
 def _max_concurrent_sessions() -> int:
     try:
@@ -442,7 +456,17 @@ class QRCodeLoginService:
 
     async def _publish_screenshot(self, page, session: QRCodeSession) -> bool:
         try:
-            screenshot = await page.screenshot(type='jpeg', quality=80, full_page=False)
+            clip = await self._resolve_login_panel_clip(page)
+            if clip is not None:
+                # 已命中登录弹窗：jpeg 质量提到 88，二维码细节更清晰；裁剪后总字节数远小于全页。
+                screenshot = await page.screenshot(
+                    type='jpeg', quality=88, full_page=False, clip=clip,
+                )
+            else:
+                # 未找到弹窗（页面初始化、滑块验证等场景）：保持原全页 fallback。
+                screenshot = await page.screenshot(
+                    type='jpeg', quality=80, full_page=False,
+                )
             session.qrcode_base64 = base64.b64encode(screenshot).decode('utf-8')
             setattr(
                 session,
@@ -453,6 +477,69 @@ class QRCodeLoginService:
         except Exception as e:
             logger.warning(f"会话 {session.session_id}: 截图生成失败 - {e}")
             return False
+
+    async def _resolve_login_panel_clip(self, page) -> Optional[Dict[str, float]]:
+        """
+        定位二维码所在的登录弹窗，返回 page.screenshot(clip=...) 用的矩形。
+
+        策略：找到 QR 元素后向上遍历祖先，第一个尺寸落在登录弹窗合理区间的就是。
+        命中失败返回 None，由调用方回退到全页截图，保证不破坏现有可用性。
+        """
+        viewport = page.viewport_size or {"width": 1920, "height": 1080}
+        for selector in _LOGIN_PANEL_QR_SELECTORS:
+            try:
+                locator = page.locator(selector).first
+                if await locator.count() == 0:
+                    continue
+                box = await locator.evaluate(
+                    """
+                    (el, opts) => {
+                      const { minW, maxW, minH, maxH } = opts;
+                      let cur = el;
+                      while (cur && cur !== document.body) {
+                        const rect = cur.getBoundingClientRect();
+                        if (
+                          rect.width >= minW && rect.width <= maxW &&
+                          rect.height >= minH && rect.height <= maxH
+                        ) {
+                          return {
+                            x: rect.x, y: rect.y,
+                            width: rect.width, height: rect.height,
+                          };
+                        }
+                        cur = cur.parentElement;
+                      }
+                      return null;
+                    }
+                    """,
+                    {
+                        "minW": _LOGIN_PANEL_MIN_WIDTH,
+                        "maxW": _LOGIN_PANEL_MAX_WIDTH,
+                        "minH": _LOGIN_PANEL_MIN_HEIGHT,
+                        "maxH": _LOGIN_PANEL_MAX_HEIGHT,
+                    },
+                )
+                if not box:
+                    continue
+                pad = _LOGIN_PANEL_PADDING_PX
+                clip_x = max(box["x"] - pad, 0.0)
+                clip_y = max(box["y"] - pad, 0.0)
+                # 边界保护，避免 clip 越界 viewport 引起 Playwright 报错。
+                max_w = max(viewport.get("width", 1920) - clip_x, 1.0)
+                max_h = max(viewport.get("height", 1080) - clip_y, 1.0)
+                clip_w = min(box["width"] + pad * 2, max_w)
+                clip_h = min(box["height"] + pad * 2, max_h)
+                if clip_w <= 1 or clip_h <= 1:
+                    continue
+                return {
+                    "x": clip_x,
+                    "y": clip_y,
+                    "width": clip_w,
+                    "height": clip_h,
+                }
+            except Exception:
+                continue
+        return None
 
     async def _reset_user_data_dir(self, user_data_dir: str, session_id: str):
         def _remove_dir():

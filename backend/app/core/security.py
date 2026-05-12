@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+from enum import IntEnum
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, status
@@ -9,6 +10,29 @@ from loguru import logger
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
 security = HTTPBearer(auto_error=False)
+
+
+class RoleLevel(IntEnum):
+    viewer = 1
+    analyst = 2
+    admin = 3
+
+
+def normalize_role(raw: Any) -> str:
+    role = str(raw or "viewer").strip().lower()
+    if role == "user":
+        return "analyst"
+    if role in ("viewer", "analyst", "admin"):
+        return role
+    return "viewer"
+
+
+def role_level(raw: Any) -> RoleLevel:
+    return RoleLevel[normalize_role(raw)]
+
+
+def role_allows(raw: Any, minimum: RoleLevel) -> bool:
+    return role_level(raw) >= minimum
 
 
 def _get_jwt_module():
@@ -54,7 +78,7 @@ def create_access_token(
     payload = {
         "sub": user["user_id"],
         "nickname": user.get("nickname", ""),
-        "role": user.get("role", "user"),
+        "role": normalize_role(user.get("role", "analyst")),
         "username": user.get("username", ""),
         "token_type": token_type,
         "iat": now,
@@ -88,7 +112,7 @@ def get_current_user(
         return {
             "user_id": user_id,
             "nickname": payload.get("nickname", ""),
-            "role": payload.get("role", "user"),
+            "role": normalize_role(payload.get("role", "analyst")),
             "username": payload.get("username", ""),
             "token_type": payload.get("token_type", "redmuse"),
         }
@@ -103,11 +127,20 @@ def get_current_user(
         raise
 
 
+def require_role(minimum: RoleLevel):
+    def dependency(
+        current_user: Dict[str, Any] = Depends(get_current_user),
+    ) -> Dict[str, Any]:
+        if not role_allows(current_user.get("role"), minimum):
+            raise HTTPException(status_code=403, detail="权限不足")
+        return current_user
+
+    return dependency
+
+
 def require_admin_user(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """FastAPI Dependency：仅允许管理员访问。非管理员直接 403。"""
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-    return current_user
+    return require_role(RoleLevel.admin)(current_user)
 

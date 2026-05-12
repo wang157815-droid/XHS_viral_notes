@@ -133,6 +133,20 @@ export async function apiPut<T, B = Record<string, unknown>>(
   return normalizeResponse<T>(response);
 }
 
+export async function apiPatch<T, B = Record<string, unknown>>(
+  path: string,
+  body: B,
+  options: RequestOptions = {},
+): Promise<ApiResponse<T>> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "PATCH",
+    headers: buildHeaders(options),
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+  return normalizeResponse<T>(response);
+}
+
 export async function apiDelete<T>(path: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "DELETE",

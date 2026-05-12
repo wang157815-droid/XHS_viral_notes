@@ -278,13 +278,13 @@ class ConversationToolExecutor:
         intent = IntentClassification(
             intent="knowledge_qa",
             confidence=max(ctx.intent.confidence, call.confidence),
-            domain_ids=self._clean_list(call.arguments.get("domain_ids")) or ctx.intent.domain_ids,
             should_retrieve_knowledge=True,
         )
         answer, citations, debug = await ctx.knowledge_qa.answer(
             question=str(call.arguments.get("question") or ctx.content),
             intent=intent,
             conversation_summary=ctx.store.get(ctx.conversation_id).summary if ctx.store.get(ctx.conversation_id) else "",
+            current_user=ctx.current_user,
         )
         message = self._assistant(ctx, answer, debug={"tool_name": call.name, **debug})
         message.citations = citations

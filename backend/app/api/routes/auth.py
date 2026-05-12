@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ...core.responses import ok
-from ...core.security import create_access_token, get_current_user, require_admin_user
+from ...core.security import RoleLevel, create_access_token, get_current_user, normalize_role, require_admin_user, role_allows
 from ...services.auth_orchestrator import auth_orchestrator
 from ...services.redmuse_auth import (
     UserAlreadyExistsError,
@@ -10,6 +10,11 @@ from ...services.redmuse_auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _require_xhs_login_session_role(current_user: dict) -> None:
+    if not role_allows(current_user.get("role"), RoleLevel.analyst):
+        raise HTTPException(status_code=403, detail="需要分析师或管理员权限")
 
 
 # ============================================================
@@ -26,7 +31,7 @@ class CreateUserRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=6, max_length=128)
     nickname: str | None = Field(default=None, max_length=64)
-    role: str = Field(default="user")
+    role: str = Field(default="analyst")
     xhs_credential_path: str | None = Field(default=None, max_length=256)
 
 
@@ -35,7 +40,7 @@ class UpdatePasswordRequest(BaseModel):
 
 
 class UpdateRoleRequest(BaseModel):
-    role: str = Field(..., pattern="^(admin|user)$")
+    role: str = Field(..., pattern="^(admin|analyst|viewer|user)$")
 
 
 @router.post("/login")
@@ -76,7 +81,7 @@ async def me(current_user: dict = Depends(get_current_user)):
         {
             "user_id": current_user["user_id"],
             "nickname": current_user.get("nickname", ""),
-            "role": current_user.get("role", "user"),
+            "role": normalize_role(current_user.get("role", "analyst")),
             "username": current_user.get("username", ""),
             "token_type": current_user.get("token_type", "redmuse"),
         }
@@ -104,7 +109,7 @@ async def create_user(
     payload: CreateUserRequest,
     _admin: dict = Depends(require_admin_user),
 ):
-    if payload.role not in ("admin", "user"):
+    if normalize_role(payload.role) not in ("admin", "analyst", "viewer"):
         raise HTTPException(status_code=400, detail="非法角色")
     store = get_user_store()
     try:
@@ -112,7 +117,7 @@ async def create_user(
             username=payload.username,
             password=payload.password,
             nickname=payload.nickname,
-            role=payload.role,
+            role=normalize_role(payload.role),
             xhs_credential_path=payload.xhs_credential_path,
         )
     except UserAlreadyExistsError as exc:
@@ -156,11 +161,12 @@ async def update_user_role(
     payload: UpdateRoleRequest,
     admin: dict = Depends(require_admin_user),
 ):
-    if user_id == admin["user_id"] and payload.role != "admin":
+    normalized_role = normalize_role(payload.role)
+    if user_id == admin["user_id"] and normalized_role != "admin":
         raise HTTPException(status_code=400, detail="不能撤销当前登录管理员的 admin 角色")
     store = get_user_store()
     try:
-        user = store.set_role(user_id, payload.role)
+        user = store.set_role(user_id, normalized_role)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="用户不存在") from exc
     return ok(user.public_dict())
@@ -182,7 +188,11 @@ class SmsCodeRequest(BaseModel):
 
 
 @router.post("/xhs-login/session")
-async def create_xhs_login_session(payload: LoginSessionRequest):
+async def create_xhs_login_session(
+    payload: LoginSessionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_xhs_login_session_role(current_user)
     try:
         expected_user_id = (payload.expected_user_id or "").strip() or None
         if expected_user_id and expected_user_id.startswith("fallback_"):
@@ -200,7 +210,12 @@ async def create_xhs_login_session(payload: LoginSessionRequest):
 
 
 @router.get("/xhs-login/session/{session_id}")
-async def get_xhs_login_session(session_id: str, request: Request):
+async def get_xhs_login_session(
+    session_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_xhs_login_session_role(current_user)
     previous = (request.headers.get("x-redmuse-previous-user-id") or "").strip()
     session = await auth_orchestrator.get_qrcode_session(
         session_id, link_with_previous=previous or None
@@ -209,20 +224,17 @@ async def get_xhs_login_session(session_id: str, request: Request):
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
 
     response_data = {k: v for k, v in session.items() if k != "exists"}
-    user = session.get("user")
-    if user:
-        # XHS 扫码完成的 token 标记为 xhs_selfinfo，与 Phase 0 用户名/密码登录的
-        # token_type=redmuse 区分；Phase 2 后该路径会改造为「仅刷新 XHS 凭据」，
-        # 不再发放系统 JWT。
-        response_data["token"] = create_access_token(user, token_type="xhs_selfinfo")
-    else:
-        response_data["token"] = None
+    response_data["token"] = None
 
     return ok(response_data)
 
 
 @router.delete("/xhs-login/session/{session_id}")
-async def cancel_xhs_login_session(session_id: str):
+async def cancel_xhs_login_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_xhs_login_session_role(current_user)
     success = await auth_orchestrator.cancel_qrcode_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -230,7 +242,12 @@ async def cancel_xhs_login_session(session_id: str):
 
 
 @router.post("/xhs-login/session/{session_id}/sms")
-async def submit_xhs_login_sms(session_id: str, payload: SmsCodeRequest):
+async def submit_xhs_login_sms(
+    session_id: str,
+    payload: SmsCodeRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_xhs_login_session_role(current_user)
     sms_code = payload.sms_code.strip()
     if not sms_code.isdigit() or len(sms_code) < 4:
         raise HTTPException(status_code=400, detail="验证码格式不正确")

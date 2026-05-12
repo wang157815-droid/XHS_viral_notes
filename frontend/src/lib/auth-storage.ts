@@ -1,23 +1,18 @@
+import { normalizeRole, type Role } from "@/lib/rbac";
+
 const TOKEN_KEY = "redmuse_access_token";
 const USER_KEY = "redmuse_user_profile";
-/** 上一次扫码登录成功的小红书 user_id，用于国内/国际不同号合并历史任务（请求头带给后端做 link） */
-const LAST_XHS_USER_ID_KEY = "redmuse_last_xhs_user_id";
 
 export type AuthUser = {
   user_id: string;
   nickname: string;
-  role: "admin" | "user";
+  role: Role;
 };
 
 export function saveAuthSession(token: string, user: AuthUser): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(TOKEN_KEY, token);
-  window.localStorage.setItem(USER_KEY, JSON.stringify(user));
-  if (!user.user_id.startsWith("fallback_")) {
-    window.localStorage.setItem(LAST_XHS_USER_ID_KEY, user.user_id);
-  } else {
-    window.localStorage.removeItem(LAST_XHS_USER_ID_KEY);
-  }
+  window.localStorage.setItem(USER_KEY, JSON.stringify({ ...user, role: normalizeRole(user.role) }));
 }
 
 export function getAuthToken(): string | null {
@@ -30,7 +25,8 @@ export function getAuthUser(): AuthUser | null {
   const raw = window.localStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AuthUser;
+    const parsed = JSON.parse(raw) as AuthUser;
+    return { ...parsed, role: normalizeRole(parsed.role) };
   } catch {
     return null;
   }
@@ -40,6 +36,5 @@ export function clearAuthSession(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
-  // 保留 LAST_XHS_USER_ID_KEY，下次扫码可把新旧账号链到一起
 }
 

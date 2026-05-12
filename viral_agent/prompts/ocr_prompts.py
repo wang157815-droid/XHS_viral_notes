@@ -105,8 +105,8 @@ def build_ocr_analysis_prompt(
     Args:
         ocr_texts: OCR提取的文字列表
         stats: OCR统计数据
-        knowledge: 领域知识
-        domain_name: 领域名称
+        knowledge: 补充知识
+        domain_name: 主题名称
 
     Returns:
         格式化后的提示词
@@ -118,7 +118,7 @@ def build_ocr_analysis_prompt(
 ---
 ### 【图片文字设计知识】
 
-{domain_name or '通用'}领域图片文字要点：
+{domain_name or '通用'}主题图片文字要点：
 
 {knowledge}
 

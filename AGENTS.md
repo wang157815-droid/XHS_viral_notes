@@ -20,7 +20,7 @@
 - **内容创作**：包含小红书创作者平台 API 接口，支持内容上传发布。
 - **爆文分析**：智能分析爆款笔记特征，生成创作模型，支持国内大模型 API。
 - **视频分析**：封面/标题/时间轴/音画同步多维度分析，支持智能降级。
-- **RAG 知识库**：双轨制（结构化 JSON + 文档向量检索）。
+- **RAG 知识库**：文档上传 + 自动分块向量化（pgvector）。
 - **多 Agent 编排**：6 阶段流水线（InputParser → Crawler → Image/Video → ViralModel → Insight/RAG → CanvasRender）。
 
 ---
@@ -206,10 +206,10 @@ frontend/
 │   ├── (app)/                  # 路由组（共享布局）
 │   │   ├── workspace/page.tsx  # 主工作区（任务创建、SSE、Canvas）
 │   │   ├── history/page.tsx    # 任务历史
-│   │   ├── knowledge/page.tsx  # 知识库（Domain + RAG）
+│   │   ├── knowledge/page.tsx  # 知识库（RAG 文档上传 / 管理 / 分块检索）
 │   │   ├── settings/page.tsx   # 系统设置
 │   │   └── layout.tsx          # AppLayout（AuthGate + WorkspaceProvider + Sidebar）
-│   ├── login/page.tsx          # QR 码登录页
+│   ├── login/page.tsx          # 账号密码登录页（XHS 数据源授权见设置页）
 │   ├── layout.tsx              # RootLayout（SessionProvider + Geist 字体）
 │   ├── page.tsx                # 根重定向（/workspace 或 /login）
 │   └── globals.css             # Tailwind 入口 + 设计 Token
@@ -328,7 +328,7 @@ docker compose up spider-xhs nginx
 
 ### 2. Cookie 管理
 - Cookie 从 `.env` 读取，需要登录后的有效 Cookie（含 `a1` 等关键字段）
-- 新后端支持**扫码登录**（Playwright 自动化）和**JWT Token 认证**
+- 新后端 RedMuse 系统登录走**账号密码 + JWT Token**；XHS 数据源授权（**扫码** / SMS 自动登录 / 粘贴 Cookie）统一在「设置 → 数据源授权」面板内完成（Playwright 自动化）
 - 多用户系统下 Cookie 按用户隔离存储
 
 ### 3. 数据采集流程（遗留系统）
@@ -557,22 +557,21 @@ POST /api/viral/search
 
 ## RAG 知识库系统
 
-项目采用**双轨制知识库**设计，融合结构化配置和智能文档检索：
+知识库已于 2026-05 由「双轨制」（JSON 领域 + RAG 文档）收敛为**纯 RAG 文档**单轨（B 方案）：
+前端仅保留「RAG 文档」一个视图，后端仅暂开放 /knowledge/documents、/knowledge/documents/{id}/chunks 与 /knowledge/search 三组路由。
+领域 CRUD（/knowledge/domains）、knowledge_registry 领域方法、UnifiedKnowledgeRetriever 领域检测分支与对话流的 domain_ids 链路已移除；
+DB 表 `knowledge_domains` / `knowledge_documents.domains` / `knowledge_chunks.domains` 作为历史数据保留，待 Phase 5 一并清理。
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│              知识库系统（双轨制）                          │
-├──────────────────────┬──────────────────────────────────┤
-│  轨道1: 结构化知识     │  轨道2: 文档知识库 + RAG          │
-├──────────────────────┼──────────────────────────────────┤
-│ • JSON配置文件        │ • 文档上传（Word/PDF/MD/TXT）    │
-│ • 手动填写表单        │ • 自动解析向量化                  │
-│ • 固定规则和模板      │ • ChromaDB存储                   │
-│ • 前端CRUD管理        │ • 智能语义检索                    │
-├──────────────────────┴──────────────────────────────────┤
-│          统一检索接口（融合两种知识）                      │
-│  领域检测 → 获取JSON规则 + RAG检索文档 → 组合Prompt      │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                  RAG 文档知识库                          │
+├────────────────────────────────────────────────────────┤
+│ • 文档上传（Word / PDF / Markdown / TXT ≤ 10MB）            │
+│ • DocumentParser 解析 + 分块（500 字/块，overlap=50）       │
+│ • Embedding 自动向量化 → pgvector 入库                     │
+│ • /knowledge/search 语义检索（仅 admin）                   │
+│ • 在 knowledge_qa 对话分支中作为唯一检索源（无领域过滤）     │
+└────────────────────────────────────────────────────────┘
 ```
 
 ### Embedding 配置（`.env`）
@@ -591,13 +590,13 @@ EMBEDDING_MODEL="text-embedding-3-small"
   ↓
 解析内容（PDF/Word/MD/TXT）
   ↓
-文本分块（500字/块，overlap=50）
+文本分块（500 字/块，overlap=50）
   ↓
 向量化（Embedding API）
   ↓
-存入 ChromaDB
+写入 pgvector（knowledge_chunks 表）
   ↓
-建立索引（支持元数据过滤）
+/knowledge/search 供 admin 测试检索
 ```
 
 ---

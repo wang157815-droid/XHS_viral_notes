@@ -1,24 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 
 import { PageHeader } from "@/components/layout/page-header";
-import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api-client";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api-client";
+import { roleLabel, type Role } from "@/lib/rbac";
 import { useSession } from "@/lib/session-context";
 import {
   bindFromSmsLoginSession,
+  bindXhsFromQrSession,
   bindXhsWithCookies,
   cancelSmsLoginSession,
+  cancelXhsQrLoginSession,
   createSmsLoginSession,
+  createXhsQrLoginSession,
   describeSmsLoginStatus,
   describeXhsCredentialStatus,
+  describeXhsQrLoginStatus,
   fetchMyXhsCredential,
   fetchSmsLoginSession,
+  fetchXhsQrLoginSession,
   probeMyXhsCredentialStatus,
+  submitXhsQrLoginSms,
   unbindMyXhsCredential,
+  XHS_QR_FINAL_STATUSES,
   type SmsLoginSessionDto,
   type XhsCredentialPublic,
+  type XhsQrLoginSessionDto,
 } from "@/lib/xhs-credential";
 
 interface SystemSettings {
@@ -71,11 +80,18 @@ interface CrawlerStatus {
 interface ManagedUser {
   user_id: string;
   nickname: string;
-  xhs_id_masked: string;
+  xhs_id_masked?: string;
   username: string;
-  role: "admin" | "user";
+  role: Role;
   source?: string;
   last_login_at?: string;
+}
+
+interface CreateUserForm {
+  username: string;
+  password: string;
+  nickname: string;
+  role: Role;
 }
 
 interface MaintenanceStats {
@@ -113,9 +129,15 @@ interface MetricsSummary {
   }>;
 }
 
+type XhsCredentialAction = "probe" | "unbind" | "bind" | null;
+
 export default function SettingsPage() {
-  const { user, logout } = useSession();
-  const isAdmin = user?.role === "admin";
+  const { user, logout, can } = useSession();
+  const canManageSystem = can("settings.system.write");
+  const canManageUsers = can("settings.users.manage");
+  const canReadObservability = can("settings.observability.read");
+  const canRunMaintenance = can("settings.maintenance.write");
+  const canManageCredential = can("xhs_credential.manage_self");
 
   const [system, setSystem] = useState<SystemSettings | null>(null);
   const [focusKeywords, setFocusKeywords] = useState<string[]>([]);
@@ -124,6 +146,13 @@ export default function SettingsPage() {
   const [crawlerStatus, setCrawlerStatus] = useState<CrawlerStatus | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [createUserForm, setCreateUserForm] = useState<CreateUserForm>({
+    username: "",
+    password: "",
+    nickname: "",
+    role: "analyst",
+  });
+  const [creatingUser, setCreatingUser] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceStats | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
   const [cleaningTarget, setCleaningTarget] = useState<string | null>(null);
@@ -131,7 +160,7 @@ export default function SettingsPage() {
 
   // Phase 2-C: XHS 数据源凭据
   const [xhsCred, setXhsCred] = useState<XhsCredentialPublic | null>(null);
-  const [xhsCredBusy, setXhsCredBusy] = useState(false);
+  const [xhsCredAction, setXhsCredAction] = useState<XhsCredentialAction>(null);
 
   const loadXhsCredential = useCallback(async () => {
     const res = await fetchMyXhsCredential();
@@ -140,11 +169,15 @@ export default function SettingsPage() {
   }, []);
 
   const handleProbeXhsCredential = useCallback(async () => {
-    setXhsCredBusy(true);
+    setXhsCredAction("probe");
     try {
       const res = await probeMyXhsCredentialStatus(true);
       if (res.ok) {
-        await loadXhsCredential();
+        if (res.data.credential) {
+          setXhsCred(res.data.credential);
+        } else {
+          await loadXhsCredential();
+        }
         setToast({
           type: res.data.status === "active" ? "ok" : "err",
           message: `凭据检查完成：${res.data.message || res.data.status}`,
@@ -153,13 +186,13 @@ export default function SettingsPage() {
         setToast({ type: "err", message: res.error?.message ?? "凭据检查失败" });
       }
     } finally {
-      setXhsCredBusy(false);
+      setXhsCredAction(null);
     }
   }, [loadXhsCredential]);
 
   const handleUnbindXhsCredential = useCallback(async () => {
     if (!confirm("确定解绑当前小红书账号？解绑后任务无法采集，需要重新扫码。")) return;
-    setXhsCredBusy(true);
+    setXhsCredAction("unbind");
     try {
       const res = await unbindMyXhsCredential();
       if (res.ok) {
@@ -169,7 +202,7 @@ export default function SettingsPage() {
         setToast({ type: "err", message: res.error?.message ?? "解绑失败" });
       }
     } finally {
-      setXhsCredBusy(false);
+      setXhsCredAction(null);
     }
   }, [loadXhsCredential]);
 
@@ -179,7 +212,7 @@ export default function SettingsPage() {
         setToast({ type: "err", message: "Cookie 字符串为空" });
         return;
       }
-      setXhsCredBusy(true);
+      setXhsCredAction("bind");
       try {
         const res = await bindXhsWithCookies(cookiesStr.trim());
         if (res.ok) {
@@ -195,7 +228,7 @@ export default function SettingsPage() {
           });
         }
       } finally {
-        setXhsCredBusy(false);
+        setXhsCredAction(null);
       }
     },
     [loadXhsCredential],
@@ -222,8 +255,8 @@ export default function SettingsPage() {
   }, []);
 
   const loadUsers = useCallback(async () => {
-    const res = await apiGet<{ items: ManagedUser[] }>("/settings/users", { withAuth: true });
-    if (res.ok) setUsers(res.data.items ?? []);
+    const res = await apiGet<{ users: ManagedUser[] }>("/auth/users", { withAuth: true });
+    if (res.ok) setUsers(res.data.users ?? []);
   }, []);
 
   const loadMaintenance = useCallback(async () => {
@@ -241,10 +274,16 @@ export default function SettingsPage() {
     void loadFocusKeywords();
     void loadCrawlerStatus();
     void loadXhsCredential();
-    if (isAdmin) {
+    if (canManageSystem) {
       void loadGovernance();
+    }
+    if (canManageUsers) {
       void loadUsers();
+    }
+    if (canRunMaintenance) {
       void loadMaintenance();
+    }
+    if (canReadObservability) {
       void loadMetrics();
     }
   }, [
@@ -256,7 +295,10 @@ export default function SettingsPage() {
     loadUsers,
     loadMaintenance,
     loadMetrics,
-    isAdmin,
+    canManageSystem,
+    canManageUsers,
+    canRunMaintenance,
+    canReadObservability,
   ]);
 
   useEffect(() => {
@@ -347,9 +389,9 @@ export default function SettingsPage() {
   }, [loadCrawlerStatus]);
 
   const handleUpdateUserRole = useCallback(
-    async (userId: string, role: "admin" | "user") => {
-      const res = await apiPut<ManagedUser, { role: string }>(
-        `/settings/users/${encodeURIComponent(userId)}`,
+    async (userId: string, role: Role) => {
+      const res = await apiPatch<ManagedUser, { role: string }>(
+        `/auth/users/${encodeURIComponent(userId)}/role`,
         { role },
         { withAuth: true },
       );
@@ -363,10 +405,42 @@ export default function SettingsPage() {
     [loadUsers],
   );
 
+  const handleCreateUser = useCallback(async () => {
+    const username = createUserForm.username.trim();
+    const password = createUserForm.password.trim();
+    const nickname = createUserForm.nickname.trim();
+    if (!username || !password) {
+      setToast({ type: "err", message: "用户名和密码不能为空" });
+      return;
+    }
+    setCreatingUser(true);
+    try {
+      const res = await apiPost<ManagedUser, CreateUserForm>(
+        "/auth/users",
+        {
+          username,
+          password,
+          nickname,
+          role: createUserForm.role,
+        },
+        { withAuth: true },
+      );
+      if (!res.ok) {
+        setToast({ type: "err", message: `创建失败：${res.error.code} · ${res.error.message}` });
+        return;
+      }
+      setCreateUserForm({ username: "", password: "", nickname: "", role: "analyst" });
+      setToast({ type: "ok", message: "用户已创建" });
+      await loadUsers();
+    } finally {
+      setCreatingUser(false);
+    }
+  }, [createUserForm, loadUsers]);
+
   const handleDeleteUser = useCallback(
     async (userId: string) => {
       if (typeof window !== "undefined" && !window.confirm("确定删除该用户？")) return;
-      const res = await apiDelete(`/settings/users/${encodeURIComponent(userId)}`, { withAuth: true });
+      const res = await apiDelete(`/auth/users/${encodeURIComponent(userId)}`, { withAuth: true });
       if (!res.ok) {
         setToast({ type: "err", message: `删除失败：${res.error.code} · ${res.error.message}` });
         return;
@@ -419,7 +493,8 @@ export default function SettingsPage() {
 
         <XhsCredentialSection
           credential={xhsCred}
-          busy={xhsCredBusy}
+          action={xhsCredAction}
+          canManageCredential={canManageCredential}
           onRefresh={() => void loadXhsCredential()}
           onProbe={() => void handleProbeXhsCredential()}
           onUnbind={() => void handleUnbindXhsCredential()}
@@ -429,7 +504,7 @@ export default function SettingsPage() {
         <AIModelSection
           system={system}
           governance={governance}
-          isAdmin={!!isAdmin}
+          canManageSystem={canManageSystem}
           onUpdateSystem={handleSaveSystem}
         />
 
@@ -444,25 +519,30 @@ export default function SettingsPage() {
         <FocusKeywordsSection
           keywords={focusKeywords}
           input={kwInput}
+          canEdit={canManageSystem}
           onInputChange={setKwInput}
           onAdd={handleAddKeyword}
           onRemove={handleRemoveKeyword}
         />
 
-        {isAdmin ? (
+        {canReadObservability ? (
           <SystemObservabilitySection metrics={metrics} onRefresh={loadMetrics} />
         ) : null}
 
-        {isAdmin ? (
+        {canManageUsers ? (
           <UserManagementSection
             users={users}
             currentUserId={user?.user_id ?? ""}
+            createUserForm={createUserForm}
+            creatingUser={creatingUser}
+            onCreateFormChange={setCreateUserForm}
+            onCreateUser={handleCreateUser}
             onUpdateRole={handleUpdateUserRole}
             onDelete={handleDeleteUser}
           />
         ) : null}
 
-        {isAdmin ? (
+        {canRunMaintenance ? (
           <SystemMaintenanceSection
             stats={maintenance}
             cleaningTarget={cleaningTarget}
@@ -524,7 +604,7 @@ function Row({
 function AccountSection({
   user,
 }: {
-  user: { user_id: string; nickname: string; role: "admin" | "user" } | null;
+  user: { user_id: string; nickname: string; role: Role } | null;
 }) {
   // 仅展示 RedMuse 系统账号本身的信息。
   // 小红书数据源（cookies / xhs_user_id / 健康检查 / 重新授权）
@@ -550,7 +630,7 @@ function AccountSection({
                 : "bg-[#F5F3F0] text-[#5A5550]"
             }`}
           >
-            {user?.role === "admin" ? "管理员" : "普通用户"}
+            {roleLabel(user?.role)}
           </span>
         </Row>
       </Card>
@@ -560,14 +640,16 @@ function AccountSection({
 
 function XhsCredentialSection({
   credential,
-  busy,
+  action,
+  canManageCredential,
   onRefresh,
   onProbe,
   onUnbind,
   onPasteBind,
 }: {
   credential: XhsCredentialPublic | null;
-  busy: boolean;
+  action: XhsCredentialAction;
+  canManageCredential: boolean;
   onRefresh: () => void;
   onProbe: () => void;
   onUnbind: () => void;
@@ -579,6 +661,7 @@ function XhsCredentialSection({
   const status = credential?.status ?? "unbound";
   const meta = describeXhsCredentialStatus(status);
   const isBound = !!credential?.is_bound && status !== "unbound";
+  const busy = action !== null;
 
   const dotColor = (() => {
     switch (meta.tone) {
@@ -595,7 +678,7 @@ function XhsCredentialSection({
   const labelColor = meta.tone === "warn" ? "#B8860B" : dotColor;
 
   return (
-    <section className="mb-8">
+    <section id="xhs-credential" className="mb-8 scroll-mt-6">
       <SectionTitle
         title="数据源授权"
         desc="为当前 RedMuse 账号绑定一份小红书 Cookie；任务前置 XhsAuthAgent 会以此校验授权状态。"
@@ -629,58 +712,57 @@ function XhsCredentialSection({
               : "暂无"}
           </span>
         </Row>
-        <Row label="操作" hint="重新检查 / 解绑当前凭据">
+        <Row label="操作" hint="检查 / 解绑当前凭据">
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={onRefresh}
-              disabled={busy}
-              className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-60"
-            >
-              刷新状态
-            </button>
-            <button
-              type="button"
               onClick={onProbe}
-              disabled={busy}
+              disabled={busy || !canManageCredential}
               className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-60"
             >
-              立即检查
+              {action === "probe" ? "检查中…" : "立即检查"}
             </button>
             <button
               type="button"
               onClick={onUnbind}
-              disabled={busy || !isBound}
+              disabled={busy || !isBound || !canManageCredential}
               className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#E04040] transition hover:bg-[#FFE8E0] disabled:opacity-50"
             >
-              解绑
+              {action === "unbind" ? "解绑中…" : "解绑"}
             </button>
           </div>
         </Row>
-        <Row label="重新授权" hint="未绑定 / 过期时通过扫码登录页完成重新授权">
-          <a
-            href="/login"
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
-          >
-            前往扫码绑定 →
-          </a>
+        <Row
+          label="扫码登录绑定"
+          hint="使用真机扫描小红书二维码；登录成功后绑定到当前 RedMuse 账号"
+        >
+          {canManageCredential ? (
+            <XhsQrLoginPanel onBound={onRefresh} />
+          ) : (
+            <span className="text-[12px] text-[#A8A4A0]">只读成员不可重新授权</span>
+          )}
         </Row>
         <Row
           label="自动 SMS 重新授权"
           hint="调 hero-sms 虚拟号 + Playwright 自动登录；需在 .env 配置 SMS_PROVIDER_API_KEY"
         >
-          <SmsAutoLoginPanel onBound={onRefresh} />
+          {canManageCredential ? (
+            <SmsAutoLoginPanel onBound={onRefresh} />
+          ) : (
+            <span className="text-[12px] text-[#A8A4A0]">只读成员不可重新授权</span>
+          )}
         </Row>
         <Row label="高级：粘贴 Cookie 绑定" hint="从浏览器 DevTools 复制完整 cookie，仅管理员排障使用">
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
+            disabled={!canManageCredential}
             className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
           >
             {showAdvanced ? "收起" : "展开"}
           </button>
         </Row>
-        {showAdvanced ? (
+        {showAdvanced && canManageCredential ? (
           <div className="px-5 py-4 border-t border-[#F5F3F0] bg-[#FAFAF8]">
             <textarea
               value={cookieDraft}
@@ -707,7 +789,7 @@ function XhsCredentialSection({
                 disabled={busy || !cookieDraft.trim()}
                 className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E03B4A] disabled:opacity-50"
               >
-                绑定到当前账号
+                {action === "bind" ? "绑定中…" : "绑定到当前账号"}
               </button>
             </div>
             <p className="mt-2 text-[12px] text-[#8A8580]">
@@ -912,15 +994,284 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
   );
 }
 
+function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
+  const [session, setSession] = useState<XhsQrLoginSessionDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [bindMessage, setBindMessage] = useState<string | null>(null);
+  const [smsCode, setSmsCode] = useState("");
+
+  const isTerminal = session ? XHS_QR_FINAL_STATUSES.includes(session.status) : false;
+  // 防重复触发自动绑定：session 进入 success 后轮询会多次返回 success，此 ref 保证只调一次 bindXhsFromQrSession。
+  const autoBindTriggeredRef = useRef(false);
+
+  // 卸载时取消活跃会话（用 ref 避免依赖 session 引发清理重建）
+  const sessionRef = useRef<XhsQrLoginSessionDto | null>(null);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+  useEffect(() => {
+    return () => {
+      const cur = sessionRef.current;
+      if (cur && !XHS_QR_FINAL_STATUSES.includes(cur.status)) {
+        void cancelXhsQrLoginSession(cur.session_id);
+      }
+    };
+  }, []);
+
+  // session 被重置为 null 或重启一轮扫码时，释放自动绑定锁。
+  useEffect(() => {
+    if (!session) {
+      autoBindTriggeredRef.current = false;
+    }
+  }, [session]);
+
+  // 非终态时每 1.2s 拉一次最新状态
+  useEffect(() => {
+    if (!session?.session_id || isTerminal) return;
+    const sid = session.session_id;
+    const timer = window.setInterval(async () => {
+      const res = await fetchXhsQrLoginSession(sid);
+      if (res.ok) {
+        setSession(res.data);
+      } else {
+        setError(res.error?.message ?? "查询会话失败");
+      }
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [session?.session_id, isTerminal]);
+
+  const handleStart = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setBindMessage(null);
+    try {
+      const res = await createXhsQrLoginSession();
+      if (!res.ok) {
+        setError(res.error?.message ?? "启动会话失败");
+        return;
+      }
+      setSession({
+        session_id: res.data.session_id,
+        status: res.data.status,
+        qrcode_base64: null,
+        screenshot_version: 0,
+        error_message: null,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const handleCancel = useCallback(async () => {
+    if (!session) return;
+    setBusy(true);
+    try {
+      await cancelXhsQrLoginSession(session.session_id);
+      const refreshed = await fetchXhsQrLoginSession(session.session_id);
+      if (refreshed.ok) setSession(refreshed.data);
+    } finally {
+      setBusy(false);
+    }
+  }, [session]);
+
+  const handleRefresh = useCallback(async () => {
+    if (session && !XHS_QR_FINAL_STATUSES.includes(session.status)) {
+      void cancelXhsQrLoginSession(session.session_id);
+    }
+    setSession(null);
+    setSmsCode("");
+    setError(null);
+    setBindMessage(null);
+    await handleStart();
+  }, [session, handleStart]);
+
+  const handleSubmitSms = useCallback(async () => {
+    if (!session || !smsCode.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await submitXhsQrLoginSms(session.session_id, smsCode.trim());
+      if (!res.ok) {
+        setError(res.error?.message ?? "提交验证码失败");
+        return;
+      }
+      setSmsCode("");
+    } finally {
+      setBusy(false);
+    }
+  }, [session, smsCode, busy]);
+
+  const handleBind = useCallback(async () => {
+    if (!session) return;
+    setBusy(true);
+    setError(null);
+    setBindMessage(null);
+    try {
+      const res = await bindXhsFromQrSession(session.session_id);
+      if (!res.ok) {
+        setError(res.error?.message ?? "绑定失败");
+        return;
+      }
+      setBindMessage(
+        `已绑定：${res.data.xhs_nickname ?? res.data.xhs_user_id ?? "当前账号"}`,
+      );
+      onBound();
+    } finally {
+      setBusy(false);
+    }
+  }, [session, onBound]);
+
+  // 会话进入 success 后自动调一次 handleBind，避免让用户手动点击「绑定到当前账号」。
+  // autoBindTriggeredRef 保证轮询多次命中 success 也只发一次请求。
+  useEffect(() => {
+    if (!session || session.status !== "success" || autoBindTriggeredRef.current) return;
+    autoBindTriggeredRef.current = true;
+    void handleBind();
+  }, [session, handleBind]);
+
+  if (!session) {
+    return (
+      <button
+        type="button"
+        onClick={() => void handleStart()}
+        disabled={busy}
+        className="rounded-md border border-[#FF4757] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#FF4757] transition hover:bg-[#FFE8E0] disabled:opacity-60"
+      >
+        {busy ? "启动中…" : "开始扫码登录"}
+      </button>
+    );
+  }
+
+  const meta = describeXhsQrLoginStatus(session.status, !!session.qrcode_base64);
+  const isBound = Boolean(bindMessage);
+  const statusLabel = isBound ? "已保存到当前账号" : meta.label;
+  const toneColor =
+    meta.tone === "ok"
+      ? "#3D8C40"
+      : meta.tone === "err"
+        ? "#E04040"
+        : meta.tone === "warn"
+          ? "#B8860B"
+          : "#5A5550";
+  const showSmsInput = session.status === "need_sms_code";
+
+  return (
+    <div className="flex w-full flex-col gap-2 text-[12px]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2" style={{ color: toneColor }}>
+          <span className="h-2 w-2 rounded-full" style={{ background: toneColor }} />
+          <span>{statusLabel}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isTerminal ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSession(null);
+                setSmsCode("");
+                setError(null);
+                setBindMessage(null);
+              }}
+              className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0]"
+            >
+              重置
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => void handleRefresh()}
+                disabled={busy}
+                className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0] disabled:opacity-60"
+              >
+                刷新
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCancel()}
+                disabled={busy}
+                className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0] disabled:opacity-60"
+              >
+                取消
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* 绑定成功后隐藏截图：此时后端返回的是登录后的 explore 页面，不再是二维码，不该留在面板上。 */}
+      {!isBound && session.qrcode_base64 ? (
+        <div className="flex justify-center overflow-hidden rounded-md border border-[#F0EEEB] bg-white p-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            key={`${session.session_id}-${session.screenshot_version ?? 0}`}
+            src={`data:image/jpeg;base64,${session.qrcode_base64}`}
+            alt="小红书登录二维码"
+            className="block max-h-[460px] w-auto max-w-full object-contain"
+          />
+        </div>
+      ) : null}
+      {!isBound && !session.qrcode_base64 ? (
+        <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-[#E8E5E0] bg-[#FAFAF8] text-[11px] text-[#A8A4A0]">
+          {meta.tone === "err" ? "二维码生成失败" : "二维码加载中…"}
+        </div>
+      ) : null}
+
+      {showSmsInput ? (
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={smsCode}
+            onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, ""))}
+            maxLength={6}
+            placeholder="输入短信验证码"
+            className="h-8 flex-1 rounded-md border border-[#E8E5E0] bg-white px-2 text-[12px] outline-none focus:border-[#FF4757]"
+            disabled={busy}
+          />
+          <button
+            type="button"
+            onClick={() => void handleSubmitSms()}
+            disabled={busy || smsCode.trim().length < 4}
+            className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3 py-1 text-[12px] text-white hover:bg-[#E03B4A] disabled:opacity-60"
+          >
+            {busy ? "提交中…" : "提交"}
+          </button>
+        </div>
+      ) : null}
+
+      {!isBound ? (
+        <div className="text-[11px] text-[#8A8580]">会话：{session.session_id}</div>
+      ) : null}
+
+      {session.error_message ? (
+        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+          {session.error_message}
+        </div>
+      ) : null}
+      {bindMessage ? (
+        <div className="rounded-md border border-[#D4ECD6] bg-[#F3F9F4] px-2 py-1 text-[#3D8C40]">
+          {bindMessage}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AIModelSection({
   system,
   governance,
-  isAdmin,
+  canManageSystem,
   onUpdateSystem,
 }: {
   system: SystemSettings | null;
   governance: ModelGovernance | null;
-  isAdmin: boolean;
+  canManageSystem: boolean;
   onUpdateSystem: (patch: Partial<SystemSettings>) => void;
 }) {
   return (
@@ -939,6 +1290,7 @@ function AIModelSection({
         <Row label="视频分析" hint="是否启用视频笔记的深度分析（耗时较长）">
           <Toggle
             on={!!system?.video_analysis_enabled}
+            disabled={!canManageSystem}
             onToggle={() =>
               onUpdateSystem({
                 video_analysis_enabled: !system?.video_analysis_enabled,
@@ -948,7 +1300,7 @@ function AIModelSection({
         </Row>
       </Card>
 
-      {isAdmin && governance ? (
+      {canManageSystem && governance ? (
         <div className="mt-6">
           <SectionTitle title="Agent 模型路由（管理员）" desc="每个 Agent 使用哪个 ModelProfile" />
           <Card>
@@ -1109,18 +1461,67 @@ function CrawlerScheduleSection({
 function UserManagementSection({
   users,
   currentUserId,
+  createUserForm,
+  creatingUser,
+  onCreateFormChange,
+  onCreateUser,
   onUpdateRole,
   onDelete,
 }: {
   users: ManagedUser[];
   currentUserId: string;
-  onUpdateRole: (userId: string, role: "admin" | "user") => void;
+  createUserForm: CreateUserForm;
+  creatingUser: boolean;
+  onCreateFormChange: (form: CreateUserForm) => void;
+  onCreateUser: () => void;
+  onUpdateRole: (userId: string, role: Role) => void;
   onDelete: (userId: string) => void;
 }) {
   return (
     <section className="mb-8">
       <SectionTitle title="用户管理" desc="管理系统中的所有用户（仅管理员可见）" />
       <Card>
+        <div className="mb-5 rounded-xl border border-[#F0EEEB] bg-[#FAFAF8] p-4">
+          <div className="mb-3 text-[13px] font-semibold text-[#2A2420]">添加系统用户</div>
+          <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_140px_auto]">
+            <input
+              value={createUserForm.username}
+              onChange={(event) => onCreateFormChange({ ...createUserForm, username: event.target.value })}
+              placeholder="用户名"
+              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+            />
+            <input
+              value={createUserForm.password}
+              onChange={(event) => onCreateFormChange({ ...createUserForm, password: event.target.value })}
+              type="password"
+              placeholder="初始密码"
+              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+            />
+            <input
+              value={createUserForm.nickname}
+              onChange={(event) => onCreateFormChange({ ...createUserForm, nickname: event.target.value })}
+              placeholder="昵称（可选）"
+              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+            />
+            <select
+              value={createUserForm.role}
+              onChange={(event) => onCreateFormChange({ ...createUserForm, role: event.target.value as Role })}
+              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+            >
+              <option value="admin">管理员</option>
+              <option value="analyst">分析师</option>
+              <option value="viewer">只读成员</option>
+            </select>
+            <button
+              type="button"
+              disabled={creatingUser}
+              onClick={onCreateUser}
+              className="h-9 rounded-lg bg-[#FF4757] px-4 text-[13px] font-semibold text-white hover:bg-[#E8404F] disabled:cursor-not-allowed disabled:bg-[#FFB6BD]"
+            >
+              {creatingUser ? "创建中..." : "添加用户"}
+            </button>
+          </div>
+        </div>
         {!users.length ? (
           <div className="py-10 text-center text-[13px] text-[#A8A4A0]">暂无其他用户记录</div>
         ) : (
@@ -1168,7 +1569,7 @@ function UserManagementSection({
                             : "bg-[#F5F3F0] text-[#5A5550]"
                         }`}
                       >
-                        {u.role === "admin" ? "管理员" : "普通用户"}
+                        {roleLabel(u.role)}
                       </span>
                     </td>
                     <td className="border-b border-[#F5F3F0] px-4 py-[14px] text-[12px] text-[#5A5550]">
@@ -1179,13 +1580,15 @@ function UserManagementSection({
                         <span className="text-[12px] text-[#A8A4A0]">--</span>
                       ) : (
                         <div className="flex gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => onUpdateRole(u.user_id, u.role === "admin" ? "user" : "admin")}
-                            className="rounded-md border border-[#E8E5E0] bg-transparent px-3 py-1 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+                          <select
+                            value={u.role}
+                            onChange={(event) => onUpdateRole(u.user_id, event.target.value as Role)}
+                            className="rounded-md border border-[#E8E5E0] bg-white px-2.5 py-1 text-[12px] text-[#5A5550] outline-none transition hover:bg-[#F5F3F0]"
                           >
-                            {u.role === "admin" ? "降为普通用户" : "设为管理员"}
-                          </button>
+                            <option value="admin">管理员</option>
+                            <option value="analyst">分析师</option>
+                            <option value="viewer">只读成员</option>
+                          </select>
                           <button
                             type="button"
                             onClick={() => onDelete(u.user_id)}
@@ -1341,12 +1744,14 @@ function formatPercent(value: number): string {
 function FocusKeywordsSection({
   keywords,
   input,
+  canEdit,
   onInputChange,
   onAdd,
   onRemove,
 }: {
   keywords: string[];
   input: string;
+  canEdit: boolean;
   onInputChange: (v: string) => void;
   onAdd: () => void;
   onRemove: (kw: string) => void;
@@ -1369,6 +1774,7 @@ function FocusKeywordsSection({
                 <button
                   type="button"
                   onClick={() => onRemove(kw)}
+                  disabled={!canEdit}
                   className="text-[#A8A4A0] hover:text-[#E04040]"
                   aria-label={`删除 ${kw}`}
                 >
@@ -1385,17 +1791,19 @@ function FocusKeywordsSection({
             value={input}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && canEdit) {
                 e.preventDefault();
                 onAdd();
               }
             }}
+            disabled={!canEdit}
             placeholder="输入关键词，回车添加"
             className="h-9 flex-1 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
           />
           <button
             type="button"
             onClick={onAdd}
+            disabled={!canEdit}
             className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E8404F]"
           >
             添加
@@ -1406,13 +1814,14 @@ function FocusKeywordsSection({
   );
 }
 
-function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+function Toggle({ on, onToggle, disabled = false }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       onClick={onToggle}
+      disabled={disabled}
       aria-pressed={on}
-      className="relative h-6 w-11 cursor-pointer rounded-full transition"
+      className="relative h-6 w-11 cursor-pointer rounded-full transition disabled:cursor-not-allowed disabled:opacity-60"
       style={{ background: on ? "#FF4757" : "#E8E5E0" }}
     >
       <span

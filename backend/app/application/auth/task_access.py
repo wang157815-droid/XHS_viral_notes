@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 from fastapi import Depends, HTTPException, Path as FastAPIPath
 from loguru import logger
 
-from ...core.security import get_current_user
+from ...core.security import RoleLevel, get_current_user, normalize_role, role_allows
 from ...domain.error_codes import ErrorCode, build_error
 from ...infrastructure.repository import TaskRecord, task_repository
 from ...services.identity_store import get_identity_store
@@ -67,7 +67,7 @@ _identity_store = get_identity_store()
 
 
 def _is_admin(user: Dict[str, Any]) -> bool:
-    return (user or {}).get("role") == "admin"
+    return role_allows((user or {}).get("role"), RoleLevel.admin)
 
 
 def resolve_task_record(
@@ -95,7 +95,7 @@ def resolve_task_record(
         )
 
     actor_id = str((current_user or {}).get("user_id") or "")
-    actor_role = str((current_user or {}).get("role") or "user")
+    actor_role = normalize_role((current_user or {}).get("role") or "analyst")
     visible = _identity_store.expand_visible_user_ids(actor_id) if actor_id else set()
     is_owner = bool(actor_id) and record.owner_user_id in visible
     is_admin = _is_admin(current_user)

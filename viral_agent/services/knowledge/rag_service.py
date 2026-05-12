@@ -130,7 +130,9 @@ class RAGService:
         query: str,
         domains: Optional[List[str]] = None,
         top_k: int = 5,
-        min_score: float = 0.0
+        min_score: float = 0.0,
+        owner_user_id: Optional[str] = None,
+        include_all: bool = True,
     ) -> List[DocumentSearchResult]:
         """
         语义搜索知识库
@@ -150,23 +152,31 @@ class RAGService:
                 "embedding": _format_vector(query_embedding),
                 "top_k": top_k,
                 "embedding_model": self.embedding_model,
+                "owner_user_id": owner_user_id or "",
             }
             domain_clause = ""
             if domains:
-                domain_clause = "AND domains ?| :domains"
+                domain_clause = "AND c.domains ?| :domains"
                 params["domains"] = domains
+            owner_clause = ""
+            join_clause = ""
+            if not include_all:
+                join_clause = "JOIN knowledge_documents d ON d.doc_id = c.doc_id"
+                owner_clause = "AND d.owner_user_id = :owner_user_id"
 
             with get_business_db_session() as session:
                 rows = session.execute(
                     _sql_text(
                         f"""
-                        SELECT doc_id, chunk_index, text, metadata,
-                               1 - (embedding <=> CAST(:embedding AS vector)) AS score
-                        FROM knowledge_chunks
-                        WHERE embedding IS NOT NULL
-                          AND embedding_model = :embedding_model
+                        SELECT c.doc_id, c.chunk_index, c.text, c.metadata,
+                               1 - (c.embedding <=> CAST(:embedding AS vector)) AS score
+                        FROM knowledge_chunks c
+                        {join_clause}
+                        WHERE c.embedding IS NOT NULL
+                          AND c.embedding_model = :embedding_model
                           {domain_clause}
-                        ORDER BY embedding <=> CAST(:embedding AS vector)
+                          {owner_clause}
+                        ORDER BY c.embedding <=> CAST(:embedding AS vector)
                         LIMIT :top_k
                         """
                     ),

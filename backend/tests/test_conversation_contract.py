@@ -15,7 +15,7 @@ def conversation_client(tmp_path, monkeypatch):
     monkeypatch.setattr(conversations_route, "get_conversation_store", lambda: store)
 
     def _fake_user():
-        return {"user_id": "u1", "nickname": "u1", "role": "user", "username": "u1"}
+        return {"user_id": "u1", "nickname": "u1", "role": "analyst", "username": "u1"}
 
     app.dependency_overrides[get_current_user] = _fake_user
     try:
@@ -60,17 +60,25 @@ def test_conversation_owner_isolation(conversation_client, monkeypatch):
     from backend.app.main import app
 
     def _fake_other_user():
-        return {"user_id": "u2", "nickname": "u2", "role": "user", "username": "u2"}
+        return {"user_id": "u2", "nickname": "u2", "role": "analyst", "username": "u2"}
 
     app.dependency_overrides[get_current_user] = _fake_other_user
     try:
         forbidden = client.get(f"/api/v1/conversations/{conversation_id}")
         assert forbidden.status_code == 403
+        app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": "admin",
+            "nickname": "admin",
+            "role": "admin",
+            "username": "admin",
+        }
+        allowed = client.get(f"/api/v1/conversations/{conversation_id}")
+        assert allowed.status_code == 200
     finally:
         app.dependency_overrides[get_current_user] = lambda: {
             "user_id": "u1",
             "nickname": "u1",
-            "role": "user",
+            "role": "analyst",
             "username": "u1",
         }
 

@@ -31,6 +31,7 @@ Phase 0 用 JSON 文件，Phase 5 替换为 PostgreSQL 表。
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import threading
 from dataclasses import asdict, dataclass, field
@@ -38,6 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...core.security import normalize_role
 from .password_hash import hash_password, verify_password
 
 
@@ -63,7 +65,7 @@ class RedMuseUser:
     username: str
     nickname: str
     password_hash: str
-    role: str = "user"
+    role: str = "analyst"
     status: str = "active"
     xhs_credential_path: Optional[str] = None
     created_at: str = field(default_factory=_now_iso)
@@ -86,7 +88,7 @@ class RedMuseUser:
             username=str(data["username"]),
             nickname=str(data.get("nickname") or data["username"]),
             password_hash=str(data["password_hash"]),
-            role=str(data.get("role") or "user"),
+            role=normalize_role(data.get("role") or "analyst"),
             status=str(data.get("status") or "active"),
             xhs_credential_path=(
                 str(data["xhs_credential_path"])
@@ -169,21 +171,26 @@ class RedMuseUserStore:
             return len(self._load().get("users", []))
 
     # ----- 创建 / 更新 -----
+    @staticmethod
+    def is_valid_role(role: str) -> bool:
+        return role in ("admin", "user", "analyst", "viewer")
+
     def create_user(
         self,
         *,
         username: str,
         password: str,
         nickname: Optional[str] = None,
-        role: str = "user",
+        role: str = "analyst",
         status: str = "active",
         xhs_credential_path: Optional[str] = None,
     ) -> RedMuseUser:
         normalized = self._normalize_username(username)
         if not normalized:
             raise ValueError("用户名不能为空")
-        if role not in ("admin", "user"):
+        if not self.is_valid_role(role):
             raise ValueError(f"非法角色: {role}")
+        normalized_role = normalize_role(role)
 
         with self._lock:
             data = self._load()
@@ -197,7 +204,7 @@ class RedMuseUserStore:
                 username=normalized,
                 nickname=(nickname or username).strip(),
                 password_hash=hash_password(password),
-                role=role,
+                role=normalized_role,
                 status=status,
                 xhs_credential_path=xhs_credential_path,
             )
@@ -221,9 +228,9 @@ class RedMuseUserStore:
         raise UserNotFoundError(user_id)
 
     def set_role(self, user_id: str, role: str) -> RedMuseUser:
-        if role not in ("admin", "user"):
+        if not self.is_valid_role(role):
             raise ValueError(f"非法角色: {role}")
-        return self._patch(user_id, {"role": role})
+        return self._patch(user_id, {"role": normalize_role(role)})
 
     def set_status(self, user_id: str, status: str) -> RedMuseUser:
         if status not in ("active", "disabled"):
@@ -287,11 +294,17 @@ _default_store: Optional[RedMuseUserStore] = None
 _default_store_lock = threading.Lock()
 
 
-def get_user_store() -> RedMuseUserStore:
+def get_user_store():
     """单例访问器，测试可通过 monkeypatch 替换 ``_default_store``。"""
     global _default_store
     if _default_store is None:
         with _default_store_lock:
             if _default_store is None:
-                _default_store = RedMuseUserStore()
+                backend = (os.getenv("REDMUSE_USER_STORE_BACKEND") or "json").strip().lower()
+                if backend == "pg":
+                    from ...infrastructure.repository.pg_user_store import PgRedMuseUserStore
+
+                    _default_store = PgRedMuseUserStore()
+                else:
+                    _default_store = RedMuseUserStore()
     return _default_store

@@ -7,12 +7,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from ...core.security import RoleLevel, role_allows
 from ...domain.conversation import IntentClassification, KnowledgeCitation
 from ...llm.model_gateway import ModelInvocationError, model_gateway
 
 
 class KnowledgeQAService:
-    def __init__(self, rag_factory: Optional[Callable[[], Any]] = None) -> None:
+    def __init__(
+        self,
+        rag_factory: Optional[Callable[[], Any]] = None,
+    ) -> None:
         self._rag_factory = rag_factory
 
     async def answer(
@@ -21,10 +25,11 @@ class KnowledgeQAService:
         question: str,
         intent: IntentClassification,
         conversation_summary: str = "",
+        current_user: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, List[KnowledgeCitation], Dict[str, Any]]:
         queries = self._rewrite_queries(question, conversation_summary)
         try:
-            raw_results = await self._search(queries, intent.domain_ids)
+            raw_results = await self._search(queries, current_user=current_user)
         except Exception as exc:
             logger.warning("Knowledge QA retrieval unavailable: {}", exc)
             return (
@@ -80,9 +85,10 @@ class KnowledgeQAService:
         question: str,
         intent: IntentClassification,
         conversation_summary: str = "",
+        current_user: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, str]], List[KnowledgeCitation], Dict[str, Any]]:
         queries = self._rewrite_queries(question, conversation_summary)
-        raw_results = await self._search(queries, intent.domain_ids)
+        raw_results = await self._search(queries, current_user=current_user)
         citations = self._to_citations(raw_results)
         if not citations:
             return (
@@ -108,11 +114,26 @@ class KnowledgeQAService:
             {"rewrite_queries": queries, "retrieval_summary": {"vector": len(citations)}},
         )
 
-    async def _search(self, queries: List[str], domains: List[str]) -> List[Any]:
+    async def _search(
+        self,
+        queries: List[str],
+        *,
+        current_user: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]:
         rag = self._create_rag()
         combined: List[Any] = []
+        include_all = not current_user or role_allows(current_user.get("role"), RoleLevel.admin)
+        owner_user_id = str((current_user or {}).get("user_id") or "")
         for query in queries:
-            results = await asyncio.to_thread(rag.search, query, domains or None, 5, 0.0)
+            results = await asyncio.to_thread(
+                rag.search,
+                query,
+                None,
+                5,
+                0.0,
+                owner_user_id,
+                include_all,
+            )
             combined.extend(results or [])
         return combined
 

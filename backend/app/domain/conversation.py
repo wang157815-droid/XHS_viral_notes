@@ -37,7 +37,7 @@ class KnowledgeCitation:
     title: str
     snippet: str
     score: float
-    source: Literal["vector", "domain_keyword", "task_context"] = "vector"
+    source: Literal["vector", "task_context"] = "vector"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -51,13 +51,14 @@ class KnowledgeCitation:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "KnowledgeCitation":
+        source: Literal["vector", "task_context"] = "task_context" if data.get("source") == "task_context" else "vector"
         return cls(
             doc_id=str(data.get("doc_id") or ""),
             chunk_index=int(data.get("chunk_index") or 0),
             title=str(data.get("title") or ""),
             snippet=str(data.get("snippet") or ""),
             score=float(data.get("score") or 0),
-            source=data.get("source") or "vector",
+            source=source,
         )
 
 
@@ -99,7 +100,6 @@ class IntentClassification:
     target_module_ids: List[str] = field(default_factory=list)
     extracted_keywords: List[str] = field(default_factory=list)
     competitor_keywords: List[str] = field(default_factory=list)
-    domain_ids: List[str] = field(default_factory=list)
     should_retrieve_knowledge: bool = False
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
@@ -112,7 +112,6 @@ class IntentClassification:
             "target_module_ids": self.target_module_ids,
             "extracted_keywords": self.extracted_keywords,
             "competitor_keywords": self.competitor_keywords,
-            "domain_ids": self.domain_ids,
             "should_retrieve_knowledge": self.should_retrieve_knowledge,
             "clarification_needed": self.clarification_needed,
             "clarification_question": self.clarification_question,
@@ -128,7 +127,6 @@ class IntentClassification:
             target_module_ids=[str(item) for item in data.get("target_module_ids") or []],
             extracted_keywords=[str(item) for item in data.get("extracted_keywords") or []],
             competitor_keywords=[str(item) for item in data.get("competitor_keywords") or []],
-            domain_ids=[str(item) for item in data.get("domain_ids") or []],
             should_retrieve_knowledge=bool(data.get("should_retrieve_knowledge")),
             clarification_needed=bool(data.get("clarification_needed")),
             clarification_question=data.get("clarification_question"),

@@ -1,3 +1,5 @@
+import type { Role } from "@/lib/rbac";
+
 export type CookieHealthStatus = "valid" | "expiring_soon" | "expired" | "unknown";
 
 export type TaskStatus =
@@ -41,7 +43,7 @@ export interface TaskEvent<P = Record<string, unknown>> {
 export interface UserSession {
   user_id: string;
   nickname: string;
-  role: "admin" | "user";
+  role: Role;
   token: string;
 }
 
@@ -62,7 +64,6 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   metadata: {
-    domain_ids?: string[];
     recent_keywords?: string[];
     user_preferences?: Record<string, unknown>;
     [key: string]: unknown;
@@ -90,7 +91,7 @@ export interface KnowledgeCitation {
   title: string;
   snippet: string;
   score: number;
-  source: "vector" | "domain_keyword" | "task_context";
+  source: "vector" | "task_context";
 }
 
 export interface TaskHandoff {
@@ -108,7 +109,6 @@ export interface IntentClassification {
   target_module_ids: string[];
   extracted_keywords: string[];
   competitor_keywords?: string[];
-  domain_ids: string[];
   should_retrieve_knowledge: boolean;
   clarification_needed: boolean;
   clarification_question: string | null;

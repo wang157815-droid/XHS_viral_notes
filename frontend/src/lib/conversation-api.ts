@@ -77,7 +77,6 @@ export async function sendConversationMessage(input: {
   keywords?: string[];
   competitorKeywords?: string[];
   advancedConfig?: Record<string, unknown>;
-  domainIds?: string[];
   activeTaskId?: string | null;
   clientMessageId?: string;
 }) {
@@ -89,7 +88,6 @@ export async function sendConversationMessage(input: {
       keywords: input.keywords ?? [],
       competitor_keywords: input.competitorKeywords ?? [],
       advanced_config: input.advancedConfig ?? {},
-      domain_ids: input.domainIds,
       active_task_id: input.activeTaskId ?? null,
       client_message_id: clientMessageId,
     },
@@ -104,7 +102,6 @@ export async function sendConversationMessageStream(
     keywords?: string[];
     competitorKeywords?: string[];
     advancedConfig?: Record<string, unknown>;
-    domainIds?: string[];
     activeTaskId?: string | null;
     clientMessageId?: string;
   },
@@ -129,7 +126,6 @@ export async function sendConversationMessageStream(
         keywords: input.keywords ?? [],
         competitor_keywords: input.competitorKeywords ?? [],
         advanced_config: input.advancedConfig ?? {},
-        domain_ids: input.domainIds,
         active_task_id: input.activeTaskId ?? null,
         client_message_id: clientMessageId,
       }),

@@ -228,7 +228,6 @@ class ConversationStore:
     def _summary_search_text(summary: Dict[str, Any]) -> str:
         metadata = summary.get("metadata") if isinstance(summary.get("metadata"), dict) else {}
         recent_keywords = metadata.get("recent_keywords") if isinstance(metadata, dict) else []
-        domain_ids = metadata.get("domain_ids") if isinstance(metadata, dict) else []
         parts = [
             summary.get("conversation_id"),
             summary.get("title"),
@@ -237,7 +236,6 @@ class ConversationStore:
             summary.get("last_intent"),
             summary.get("active_task_id"),
             *(recent_keywords or []),
-            *(domain_ids or []),
         ]
         return " ".join(str(part) for part in parts if part)
 

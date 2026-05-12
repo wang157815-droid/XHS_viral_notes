@@ -138,13 +138,13 @@ def test_admin_can_create_and_list_users(client: TestClient, admin_user_id: str)
             "username": "writer1",
             "password": "writerpw1",
             "nickname": "运营A",
-            "role": "user",
+            "role": "analyst",
         },
     )
     assert create.status_code == 200, create.json()
     new_user = create.json()["data"]
     assert new_user["username"] == "writer1"
-    assert new_user["role"] == "user"
+    assert new_user["role"] == "analyst"
     assert "password_hash" not in new_user
 
     listing = client.get(f"{API}/auth/users", headers=_bearer(token))

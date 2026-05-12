@@ -110,8 +110,8 @@ def build_content_analysis_prompt(
     Args:
         contents: 内容列表，每个包含title和desc
         stats: 内容统计数据
-        knowledge: 领域知识
-        domain_name: 领域名称
+        knowledge: 补充知识
+        domain_name: 主题名称
 
     Returns:
         格式化后的提示词
@@ -123,7 +123,7 @@ def build_content_analysis_prompt(
 ---
 ### 【内容写作专业知识】
 
-{domain_name or '通用'}领域内容要点：
+{domain_name or '通用'}主题内容要点：
 
 {knowledge}
 

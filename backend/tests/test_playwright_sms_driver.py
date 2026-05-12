@@ -5,11 +5,66 @@
 
 from __future__ import annotations
 
+import importlib
+import os
+
 import pytest
 
+import backend.app.services.xhs_auth.playwright_sms_login_driver as driver_mod
 from backend.app.services.xhs_auth.playwright_sms_login_driver import (
     PlaywrightSmsLoginDriver,
 )
+
+
+class FakeLocatorItem:
+    def __init__(self, *, visible=True, text="", click_error=None):
+        self.visible = visible
+        self.text = text
+        self.click_error = click_error
+        self.clicked = False
+
+    async def is_visible(self, timeout=500):
+        return self.visible
+
+    async def click(self, timeout=3000):
+        if self.click_error:
+            raise self.click_error
+        if not self.visible:
+            raise RuntimeError("element is hidden")
+        self.clicked = True
+
+    async def inner_text(self, timeout=500):
+        return self.text
+
+
+class FakeLocator:
+    def __init__(self, items):
+        self.items = items
+
+    async def count(self):
+        return len(self.items)
+
+    def nth(self, idx):
+        return self.items[idx]
+
+    @property
+    def first(self):
+        return self.items[0]
+
+
+class FakePage:
+    def __init__(self, mapping):
+        self.mapping = mapping
+        self.locator_calls = []
+        self.click_fallback_called = False
+
+    def locator(self, selector):
+        self.locator_calls.append(selector)
+        return FakeLocator(self.mapping.get(selector, []))
+
+    async def click(self, selector, timeout=3000):
+        self.click_fallback_called = True
+        raise RuntimeError(f"fallback click failed: {selector}")
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +139,52 @@ def test_strip_dial_prefix_unknown_country_falls_back_heuristic():
 
 @pytest.mark.parametrize(
     "iso,label",
-    [("HK", "+852"), ("CN", "+86"), ("US", "+1"), ("GB", "+44")],
+    [
+        ("HK", "+852"),
+        ("CN", "+86"),
+        ("US", "+1"),
+        ("GB", "+44"),
+        ("TW", "+886"),
+        ("MO", "+853"),
+        ("SG", "+65"),
+        ("MY", "+60"),
+    ],
 )
 def test_country_iso_to_label(iso, label):
     assert PlaywrightSmsLoginDriver._country_iso_to_label(iso) == label
+
+
+def test_country_selectors_include_rednote_fallbacks():
+    assert "Search" in driver_mod._SELECTORS["country_search_input"]
+    assert ":text(\"+852\")" in driver_mod._SELECTORS["country_option_template"]
+    assert "Log in with phone" in driver_mod._SELECTORS["phone_tab"]
+
+
+def test_selector_candidates_splits_composite_selector():
+    assert PlaywrightSmsLoginDriver._selector_candidates("a, b , , c") == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_safe_click_tries_later_visible_candidate():
+    driver = PlaywrightSmsLoginDriver()
+    first = FakeLocatorItem(visible=False)
+    second = FakeLocatorItem(visible=True)
+    driver._page = FakePage({"bad": [first], "good": [second]})
+
+    assert await driver._safe_click("bad, good", optional=True) is True
+    assert second.clicked is True
+    assert driver._page.click_fallback_called is False
+
+
+@pytest.mark.asyncio
+async def test_country_selected_check_uses_selector_text(monkeypatch):
+    driver = PlaywrightSmsLoginDriver()
+    monkeypatch.setitem(driver_mod._SELECTORS, "country_selector", "button.country-trigger")
+    driver._page = FakePage(
+        {"button.country-trigger": [FakeLocatorItem(visible=True, text="+852")]}
+    )
+
+    assert await driver._is_country_code_already_selected("+852") is True
 
 
 @pytest.mark.parametrize(
@@ -104,3 +201,20 @@ def test_country_iso_to_label(iso, label):
 )
 def test_country_iso_to_dial(iso, dial):
     assert PlaywrightSmsLoginDriver._country_iso_to_dial(iso) == dial
+
+
+def test_login_url_defaults_to_rednote_when_env_points_to_rednote(monkeypatch):
+    original = os.environ.get("XHS_LOGIN_START_URL")
+    monkeypatch.setenv("XHS_LOGIN_START_URL", "https://www.rednote.com/explore")
+
+    import backend.app.services.xhs_auth.playwright_sms_login_driver as driver_mod
+
+    try:
+        reloaded = importlib.reload(driver_mod)
+        assert reloaded._LOGIN_URL == "https://www.rednote.com/explore"
+    finally:
+        if original is None:
+            monkeypatch.delenv("XHS_LOGIN_START_URL", raising=False)
+        else:
+            monkeypatch.setenv("XHS_LOGIN_START_URL", original)
+        importlib.reload(driver_mod)

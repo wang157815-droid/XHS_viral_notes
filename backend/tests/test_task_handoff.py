@@ -174,7 +174,7 @@ async def test_refine_canvas_triggers_local_module_regeneration(monkeypatch, tmp
     monkeypatch.setattr(service_mod.conversation_tool_agent, "decide", fake_decide)
 
     store = ConversationStore(store_dir=str(tmp_path / "conversations"))
-    conversation = store.create(owner_user_id="u1", metadata={"domain_ids": []})
+    conversation = store.create(owner_user_id="u1")
     result = await ConversationService(store=store).handle_user_message(
         conversation_id=conversation.conversation_id,
         owner_user_id="u1",

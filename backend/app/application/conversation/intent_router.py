@@ -57,14 +57,12 @@ class IntentRouter:
         conversation_summary: str = "",
         recent_messages: Optional[List[Dict[str, Any]]] = None,
         active_task_id: Optional[str] = None,
-        domain_ids: Optional[List[str]] = None,
         hint_keywords: Optional[List[str]] = None,
         competitor_keywords: Optional[List[str]] = None,
     ) -> IntentClassification:
         text = content.strip()
         lowered = text.lower()
         recent_messages = recent_messages or []
-        domain_ids = domain_ids or []
         hint_keywords = self._clean_terms(hint_keywords or [])
         competitor_keywords = self._clean_terms(competitor_keywords or [])
 
@@ -82,7 +80,6 @@ class IntentRouter:
                 intent="export",
                 confidence=0.82,
                 reason="命中导出类关键词",
-                domain_ids=domain_ids,
                 clarification_needed=not bool(active_task_id),
                 clarification_question=None if active_task_id else "当前还没有可导出的分析任务，请先生成爆文模型。",
             )
@@ -103,7 +100,6 @@ class IntentRouter:
                 confidence=0.78,
                 reason="已有活跃任务且命中 Canvas 调整类关键词",
                 target_module_ids=target_module_ids,
-                domain_ids=domain_ids,
             )
 
         if self._contains_any(text, _XHS_KEYWORDS):
@@ -113,7 +109,6 @@ class IntentRouter:
                     confidence=0.68,
                     reason="已有活跃任务，疑似围绕当前 Canvas 的追问，避免误触发新采集任务",
                     target_module_ids=target_module_ids,
-                    domain_ids=domain_ids,
                 )
             extracted_competitors = competitor_keywords or self.extract_competitor_keywords(text)
             extracted_keywords = hint_keywords or self.extract_keywords(text, extracted_competitors)
@@ -123,16 +118,14 @@ class IntentRouter:
                 reason="命中小红书/爆文任务类关键词",
                 extracted_keywords=extracted_keywords,
                 competitor_keywords=extracted_competitors,
-                domain_ids=domain_ids,
             )
 
-        if self._contains_any(text, _KNOWLEDGE_KEYWORDS) or domain_ids:
+        if self._contains_any(text, _KNOWLEDGE_KEYWORDS):
             return IntentClassification(
                 intent="knowledge_qa",
                 confidence=0.8,
-                reason="命中知识库/文档/规则类关键词或显式领域过滤",
+                reason="命中知识库/文档/规则类关键词",
                 extracted_keywords=hint_keywords or self.extract_keywords(text),
-                domain_ids=domain_ids,
                 should_retrieve_knowledge=True,
             )
 
@@ -147,7 +140,6 @@ class IntentRouter:
             intent="general_qa",
             confidence=0.72,
             reason="未命中任务或知识库关键词，按普通问答处理",
-            domain_ids=domain_ids,
         )
 
     @staticmethod

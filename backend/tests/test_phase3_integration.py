@@ -43,42 +43,13 @@ def client_with_tmp(tmp_path: Path, monkeypatch):
         app.dependency_overrides.pop(get_current_user, None)
 
 
-def test_domain_crud_persists(client_with_tmp: TestClient):
-    # 列表初始为空
-    r = client_with_tmp.get("/api/v1/knowledge/domains")
-    assert r.status_code == 200
-    assert r.json()["data"]["items"] == []
-
-    # 创建
-    r = client_with_tmp.post(
+def test_domains_routes_gone(client_with_tmp: TestClient):
+    """领域知识 CRUD 已下线（B 方案）：对应路由应返回 404。"""
+    assert client_with_tmp.get("/api/v1/knowledge/domains").status_code == 404
+    assert client_with_tmp.post(
         "/api/v1/knowledge/domains",
-        json={"name": "测试领域", "keywords": ["a", "b"], "priority": "high", "enabled": True},
-    )
-    assert r.status_code == 200
-    record = r.json()["data"]
-    assert record["name"] == "测试领域"
-    assert record["rule_count"] == 2
-    domain_id = record["domain_id"]
-
-    # 列表含 1 项
-    r = client_with_tmp.get("/api/v1/knowledge/domains")
-    assert len(r.json()["data"]["items"]) == 1
-
-    # 更新
-    r = client_with_tmp.put(
-        f"/api/v1/knowledge/domains/{domain_id}",
-        json={"name": "更新名", "keywords": ["c"], "priority": "low", "enabled": False},
-    )
-    assert r.status_code == 200
-    updated = r.json()["data"]
-    assert updated["name"] == "更新名"
-    assert updated["enabled"] is False
-
-    # 删除
-    r = client_with_tmp.delete(f"/api/v1/knowledge/domains/{domain_id}")
-    assert r.status_code == 200
-    r = client_with_tmp.get("/api/v1/knowledge/domains")
-    assert r.json()["data"]["items"] == []
+        json={"name": "x", "keywords": [], "priority": "medium", "enabled": True},
+    ).status_code == 404
 
 
 def test_document_upload_and_delete(client_with_tmp: TestClient):
@@ -89,7 +60,6 @@ def test_document_upload_and_delete(client_with_tmp: TestClient):
     r = client_with_tmp.post(
         "/api/v1/knowledge/documents/upload",
         files={"file": ("demo.txt", file, "text/plain")},
-        data={"domain_ids": ""},
     )
     assert r.status_code == 200, r.text
     doc = r.json()["data"]
@@ -118,7 +88,6 @@ def test_document_upload_rejects_oversize(client_with_tmp: TestClient):
     r = client_with_tmp.post(
         "/api/v1/knowledge/documents/upload",
         files={"file": ("big.txt", big, "text/plain")},
-        data={"domain_ids": ""},
     )
     assert r.status_code == 413
 
@@ -128,7 +97,6 @@ def test_document_upload_rejects_unsupported_ext(client_with_tmp: TestClient):
     r = client_with_tmp.post(
         "/api/v1/knowledge/documents/upload",
         files={"file": ("x.exe", f, "application/octet-stream")},
-        data={"domain_ids": ""},
     )
     assert r.status_code == 400
 
@@ -154,7 +122,7 @@ def non_admin_client(tmp_path: Path, monkeypatch):
     from backend.app.main import app
 
     def _fake_user_plain():
-        return {"user_id": "user_plain", "nickname": "普通", "role": "user", "username": "plain"}
+        return {"user_id": "user_plain", "nickname": "普通", "role": "analyst", "username": "plain"}
 
     app.dependency_overrides[get_current_user] = _fake_user_plain
 
@@ -164,28 +132,66 @@ def non_admin_client(tmp_path: Path, monkeypatch):
         app.dependency_overrides.pop(get_current_user, None)
 
 
-def test_chunks_endpoint_requires_admin(non_admin_client: TestClient):
-    """普通用户访问 /chunks 应 403，且上传/删除等基础操作仍可用。"""
-    # 先用普通用户身份上传（基础操作不要求 admin）
+def test_analyst_can_view_own_chunks_but_cannot_delete(non_admin_client: TestClient):
     content = "hello world"
     file = io.BytesIO(content.encode("utf-8"))
     r = non_admin_client.post(
         "/api/v1/knowledge/documents/upload",
         files={"file": ("demo.txt", file, "text/plain")},
-        data={"domain_ids": ""},
     )
     assert r.status_code == 200
     doc_id = r.json()["data"]["doc_id"]
 
-    # 普通用户访问 /chunks → 403
     r = non_admin_client.get(f"/api/v1/knowledge/documents/{doc_id}/chunks")
+    assert r.status_code == 200
+
+    r = non_admin_client.delete(f"/api/v1/knowledge/documents/{doc_id}")
     assert r.status_code == 403
 
-    # 普通用户访问 /search → 403
+
+def test_viewer_cannot_upload_document(non_admin_client: TestClient):
+    from backend.app.core.security import get_current_user
+    from backend.app.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "viewer_plain",
+        "nickname": "只读",
+        "role": "viewer",
+        "username": "viewer",
+    }
+
+    f = io.BytesIO(b"viewer data")
     r = non_admin_client.post(
-        "/api/v1/knowledge/search",
-        json={"query": "hello", "top_k": 3},
+        "/api/v1/knowledge/documents/upload",
+        files={"file": ("viewer.txt", f, "text/plain")},
     )
+    assert r.status_code == 403
+
+
+def test_knowledge_document_owner_isolation(non_admin_client: TestClient):
+    from backend.app.core.security import get_current_user
+    from backend.app.main import app
+
+    content = "owner only"
+    file = io.BytesIO(content.encode("utf-8"))
+    r = non_admin_client.post(
+        "/api/v1/knowledge/documents/upload",
+        files={"file": ("owned.txt", file, "text/plain")},
+    )
+    assert r.status_code == 200
+    doc_id = r.json()["data"]["doc_id"]
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "other_user",
+        "nickname": "其他",
+        "role": "analyst",
+        "username": "other",
+    }
+
+    r = non_admin_client.get("/api/v1/knowledge/documents")
+    assert all(item["doc_id"] != doc_id for item in r.json()["data"]["items"])
+
+    r = non_admin_client.get(f"/api/v1/knowledge/documents/{doc_id}/chunks")
     assert r.status_code == 403
 
 
@@ -197,7 +203,6 @@ def test_fetch_chunks_fallback_from_disk(client_with_tmp: TestClient):
     r = client_with_tmp.post(
         "/api/v1/knowledge/documents/upload",
         files={"file": ("fallback.txt", file, "text/plain")},
-        data={"domain_ids": ""},
     )
     assert r.status_code == 200
     doc = r.json()["data"]

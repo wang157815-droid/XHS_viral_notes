@@ -147,7 +147,9 @@ class XHS_Apis():
         res_json = None
         try:
             api = f"/api/sns/web/v1/user/selfinfo"
-            headers, cookies, data = generate_request_params(cookies_str, api)
+            headers, cookies, data = generate_request_params(
+                cookies_str, api, "", method="GET"
+            )
             response = requests.get(self.base_url + api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
@@ -166,7 +168,9 @@ class XHS_Apis():
         res_json = None
         try:
             api = f"/api/sns/web/v2/user/me"
-            headers, cookies, data = generate_request_params(cookies_str, api)
+            headers, cookies, data = generate_request_params(
+                cookies_str, api, "", method="GET"
+            )
             response = requests.get(self.base_url + api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]

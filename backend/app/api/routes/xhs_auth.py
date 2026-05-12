@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...core.responses import ok
-from ...core.security import get_current_user, require_admin_user
+from ...core.security import RoleLevel, get_current_user, require_admin_user, role_allows
 from ...services.xhs_auth import (
     get_credential_binder,
     get_credential_health_checker,
@@ -38,6 +38,11 @@ from ...services.xhs_auth.sms_login_service import (
 
 
 router = APIRouter(prefix="/xhs-auth", tags=["xhs-auth"])
+
+
+def _require_credential_manage_role(current_user: Dict[str, Any]) -> None:
+    if not role_allows(current_user.get("role"), RoleLevel.analyst):
+        raise HTTPException(status_code=403, detail="需要分析师或管理员权限")
 
 
 class BindCookiesRequest(BaseModel):
@@ -77,9 +82,12 @@ async def check_my_credential_status(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """主动触发一次凭据健康检查；``force=true`` 时绕过缓存。"""
+    if force:
+        _require_credential_manage_role(current_user)
     health = get_credential_health_checker().check(
         current_user["user_id"], force=force
     )
+    credential = _credential_payload(current_user["user_id"])
     return ok(
         {
             "redmuse_user_id": health.redmuse_user_id,
@@ -87,6 +95,7 @@ async def check_my_credential_status(
             "message": health.message,
             "is_bound": health.is_bound,
             "last_validated_at": health.last_validated_at,
+            "credential": credential,
         }
     )
 
@@ -100,6 +109,7 @@ async def unbind_my_credential(
     仅删除 store 中的索引记录，不动 ``datas/users/<dir>/cookies.json`` 物理文件
     （Phase 2 重新授权时会被 selfinfo 流程覆盖写）。
     """
+    _require_credential_manage_role(current_user)
     deleted = get_credential_store().delete(current_user["user_id"])
     if not deleted:
         raise HTTPException(status_code=404, detail="未绑定 XHS 凭据，无需解绑")
@@ -128,6 +138,7 @@ async def bind_with_cookies(
     主要用途：管理员从浏览器 DevTools 复制的 Cookie 粘贴绑定 / 自动化运维。
     selfinfo 会被实际调用一次以校验 Cookie 有效性。
     """
+    _require_credential_manage_role(current_user)
     binder = get_credential_binder()
     result = await binder.bind_with_cookies(
         current_user["user_id"], payload.cookies_str
@@ -151,6 +162,7 @@ async def bind_from_qr_session(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """把 ``/auth/xhs-login/session`` 已完成的扫码结果绑定到当前用户。"""
+    _require_credential_manage_role(current_user)
     binder = get_credential_binder()
     result = await binder.bind_from_qr_session(
         current_user["user_id"], payload.session_id
@@ -193,6 +205,7 @@ async def create_sms_login_session(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """启动一个"虚拟手机号自动登录"会话；立即返回 session，前端轮询 GET。"""
+    _require_credential_manage_role(current_user)
     svc = _require_sms_login_service()
     session = await svc.create_session(current_user["user_id"])
     return ok(session.public_dict())
@@ -220,6 +233,7 @@ async def cancel_sms_login_session(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """取消会话；关闭浏览器 + 释放号码。"""
+    _require_credential_manage_role(current_user)
     svc = _require_sms_login_service()
     session = await svc.get_session(session_id)
     if session is None:
@@ -245,6 +259,7 @@ async def bind_from_sms_login_session(
     2. **救援通道**：如果 service hook 因偶发异常没绑成功（极罕见），
        这里仍可用 ``session.cookies_str`` 走一次手动绑定。
     """
+    _require_credential_manage_role(current_user)
     svc = _require_sms_login_service()
     session = await svc.get_session(session_id)
     if session is None:

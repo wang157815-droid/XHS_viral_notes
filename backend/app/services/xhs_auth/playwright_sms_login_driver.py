@@ -37,21 +37,26 @@ _SELECTORS: Dict[str, str] = {
     # 切换到「手机号登录」Tab。多数情况下右侧表单已默认显示，不需要切；
     # 仅在 A/B 流量出现独立 tab 时点一下。所有 _safe_click 都会 optional 处理。
     "phone_tab": os.getenv("XHS_SMS_TAB_SELECTOR")
-    or ":text-is(\"手机号登录\")",
+    or ":text-is(\"手机号登录\"), :text-is(\"Phone\"), :text-is(\"Phone number\"), :text-is(\"Log in with phone\")",
     # 国家区号触发器：截图里是「+1▼」按钮，但 DOM 上几乎不会是裸 <button>，
     # 更可能是 <div>/<span>/带 role=combobox 容器包着 "+1" 文本节点。
     # 用 :text-is 精确匹配文字节点（能命中任何标签），点击会冒泡触发父容器。
     "country_selector": os.getenv("XHS_SMS_COUNTRY_SELECTOR")
     or (
         ":text-is(\"+1\"), :text-is(\"+86\"), :text-is(\"+852\"), "
-        ":text-is(\"+44\"), [role='combobox'], "
+        ":text-is(\"+44\"), button:has-text(\"+1\"), button:has-text(\"+86\"), "
+        "button:has-text(\"+852\"), button:has-text(\"+44\"), [role='combobox'], "
+        "[aria-haspopup='listbox'], [role='button']:has-text(\"+\"), "
         "[class*='country' i], [class*='dial' i], [class*='area-code' i], "
         ".reds-select__trigger, .reds-select-trigger"
     ),
     # 国家区号下拉项；模板中 +852 会按 country_code 实际值替换。
     # :text-is 精确匹配，避免误中"+1 (US)"这种长文本。
     "country_option_template": os.getenv("XHS_SMS_COUNTRY_OPTION")
-    or ":text-is(\"+852\")",
+    or (
+        ":text-is(\"+852\"), :text(\"+852\"), [role='option']:has-text(\"+852\"), "
+        "li:has-text(\"+852\"), button:has-text(\"+852\")"
+    ),
     # 国家码下拉打开后内置的搜索框（截图: placeholder="搜索国家/地区"）。
     # 长列表+虚拟滚动场景下，直接 :text-is 选项无法命中（DOM 里没渲染出来），
     # 必须先用这个搜索框过滤到只剩目标行再点。
@@ -60,13 +65,19 @@ _SELECTORS: Dict[str, str] = {
         "input[placeholder*='搜索']"
         ", input[placeholder*='国家']"
         ", input[placeholder*='地区']"
+        ", input[placeholder*='Search' i]"
+        ", input[placeholder*='country' i]"
+        ", input[placeholder*='region' i]"
     ),
     # 手机号输入框（placeholder=「请输入手机号」）
     "phone_input": os.getenv("XHS_SMS_PHONE_INPUT")
-    or "input[placeholder*='手机号'], input[type='tel'], input[name='phone']",
+    or "input[placeholder*='手机号'], input[placeholder*='phone' i], input[type='tel'], input[name='phone']",
     # 「获取验证码 / 发送验证码」按钮
     "send_code_button": os.getenv("XHS_SMS_SEND_BUTTON")
-    or ":text-is(\"获取验证码\"), :text-is(\"发送验证码\"), button:has-text(\"获取验证码\")",
+    or (
+        ":text-is(\"获取验证码\"), :text-is(\"发送验证码\"), button:has-text(\"获取验证码\"), "
+        "button:has-text(\"Get code\"), button:has-text(\"Send code\"), button:has-text(\"Verification code\")"
+    ),
     # 「重新获取 / 重新发送 / 再次获取」按钮：3 分钟倒计时归零后点击会再次发短信。
     # 大多数小红书 UI 倒计时结束会让按钮文本变回「获取验证码」，所以 fallback 用
     # send_code_button 再点一次也能起到同样效果（service 层会做 fallback）。
@@ -77,13 +88,13 @@ _SELECTORS: Dict[str, str] = {
     ),
     # 验证码输入框（placeholder=「输入验证码」）
     "sms_input": os.getenv("XHS_SMS_CODE_INPUT")
-    or "input[placeholder*='验证码'], input[name='code'], input[name='verifyCode']",
+    or "input[placeholder*='验证码'], input[placeholder*='code' i], input[name='code'], input[name='verifyCode']",
     # 登录提交大红按钮；显式排除「手机号登录」tab 文案，避免误匹配
     "submit_button": os.getenv("XHS_SMS_SUBMIT_BUTTON")
     or (
         "button:has-text(\"登录\"):not(:has-text(\"手机号\"))"
         ":not(:has-text(\"协议\")):not(:has-text(\"政策\")), "
-        "button[type='submit']"
+        "button:has-text(\"Log in\"), button:has-text(\"Sign in\"), button[type='submit']"
     ),
 }
 
@@ -308,8 +319,8 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
             # 没渲染该行）；必须先在搜索框输入区号让列表过滤到只剩目标行。
             search_used = False
             try:
-                search_locator = page.locator(search_selector).first
-                if await search_locator.count() > 0:
+                search_locator = await self._first_visible_locator(search_selector)
+                if search_locator is not None:
                     await search_locator.fill(cc_label, timeout=2000)
                     logger.info(
                         f"[sms_login] 已在国家码搜索框输入 {cc_label}，等待列表过滤"
@@ -356,9 +367,12 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         """
         page = self._require_page()
         try:
+            locator = await self._first_visible_locator(_SELECTORS["country_selector"])
+            if locator is not None:
+                text = await locator.inner_text(timeout=500)
+                return cc_label in text
             locator = page.locator(f':text-is("{cc_label}"):visible')
-            count = await locator.count()
-            return count > 0
+            return await locator.count() > 0
         except Exception as exc:
             logger.debug(
                 f"[sms_login] 幂等检查异常 ({exc})，按需切换 {cc_label}"
@@ -481,29 +495,28 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         end = asyncio.get_event_loop().time() + max(5, timeout_seconds)
         last_diag = ""
         while asyncio.get_event_loop().time() < end:
-            try:
-                cookies = await self._context.cookies()
-            except Exception as exc:
-                last_diag = f"cookies()_exc: {exc}"
+            snapshot = await self._collect_cookies(log_diag=False, allow_fallback=False)
+            if snapshot is None:
+                last_diag = "collect_cookies_failed"
                 await asyncio.sleep(1)
                 continue
 
-            web_session_value = ""
-            for c in cookies or []:
-                if (c.get("name") or "") == _LOGIN_COOKIE_NAME:
-                    web_session_value = (c.get("value") or "").strip()
-                    break
+            web_session_value = self._cookie_value(
+                snapshot.cookies_str, _LOGIN_COOKIE_NAME
+            )
 
             if web_session_value and len(web_session_value) >= 16:
-                # 真登录态：拿到带值的 web_session
-                snapshot = await self._collect_cookies()
-                if snapshot is not None:
+                if await self._login_form_visible():
+                    last_diag = (
+                        f"web_session_present_but_login_form_visible"
+                        f"(len={len(web_session_value)})"
+                    )
+                else:
                     logger.info(
                         f"[sms_login] ✓ 登录成功（web_session len={len(web_session_value)}, "
                         f"cookies_count={snapshot.raw_count}）"
                     )
                     return snapshot
-                last_diag = "web_session_present_but_collect_failed"
             else:
                 last_diag = (
                     f"web_session_missing_or_short(len={len(web_session_value)})"
@@ -561,27 +574,113 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
             raise RuntimeError("Playwright 页面尚未初始化，请先调用 open_login_page")
         return self._page
 
+    @staticmethod
+    def _selector_candidates(selector: str) -> list[str]:
+        return [part.strip() for part in (selector or "").split(",") if part.strip()]
+
+    async def _first_visible_locator(self, selector: str) -> Any:
+        page = self._require_page()
+        for candidate in self._selector_candidates(selector):
+            try:
+                locator = page.locator(candidate)
+                count = await locator.count()
+            except Exception:
+                continue
+            for idx in range(min(count, 8)):
+                item = locator.nth(idx)
+                try:
+                    if await item.is_visible(timeout=500):
+                        return item
+                except Exception:
+                    continue
+        return None
+
     async def _safe_click(self, selector: str, *, optional: bool) -> bool:
         page = self._require_page()
+        last_exc: Exception | None = None
+        for candidate in self._selector_candidates(selector):
+            try:
+                locator = page.locator(candidate)
+                count = await locator.count()
+                for idx in range(min(count, 8)):
+                    item = locator.nth(idx)
+                    try:
+                        if await item.is_visible(timeout=500):
+                            await item.click(timeout=3000)
+                            return True
+                    except Exception as exc:
+                        last_exc = exc
+                if count > 0:
+                    await locator.first.click(timeout=3000)
+                    return True
+            except Exception as exc:
+                last_exc = exc
+                continue
         try:
             await page.click(selector, timeout=3000)
             return True
         except Exception as exc:
+            last_exc = exc
             if optional:
-                logger.debug(f"selector 可选点击失败 selector={selector} err={exc}")
+                logger.debug(f"selector 可选点击失败 selector={selector} err={last_exc}")
                 return False
             raise
 
-    async def _collect_cookies(self) -> Optional[CookieSnapshot]:
+    async def _collect_cookies(
+        self, *, log_diag: bool = True, allow_fallback: bool = True
+    ) -> Optional[CookieSnapshot]:
+        """收集 cookies 拼成 ``cookies_str``。
+
+        关键：用 ``context.cookies(urls=[...])`` 而**不是**裸 ``cookies()``。
+        裸调用会返回 context storage 里所有域的 cookies（包括 explore /
+        登录 modal / xhr 调用累积的、不同子域的、已过期未清理的），
+        拼出的 cookies_str 是个"垃圾袋"，可能出现：
+
+        - 同名 cookie 跨子域共存（``.xiaohongshu.com`` vs
+          ``.www.xiaohongshu.com``），拼接顺序让 selfinfo 接口拿到访客那份
+        - 过期 cookie 仍出现在串里
+        - 无关域的 cookie 混入（hero-sms / cdn 等）
+
+        ``urls=[https://www.xiaohongshu.com/]`` 让 Playwright 按
+        domain+path+expiry 过滤，等价于"浏览器真实发送给该 URL 的
+        Cookie header"，跟手动 DevTools 复制出来的内容对齐。
+        """
         if self._context is None:
             return None
+        target_url = self._cookie_target_url()
         try:
-            cookies = await self._context.cookies()
+            cookies = await self._context.cookies(urls=[target_url])
         except Exception as exc:
-            logger.warning(f"读取 cookies 失败: {exc}")
+            logger.warning(f"读取 cookies 失败 url={target_url}: {exc}")
             return None
         if not cookies:
-            return None
+            if not allow_fallback:
+                return None
+            # 兜底：极少数情况下 url 过滤拿不到 cookie（比如 page 跳到了别的
+            # host），降级到全量；带 warning 让排查时能看到。
+            logger.warning(
+                f"[sms_login] context.cookies(urls=[{target_url}]) 返回空，"
+                "降级到全量 cookies()"
+            )
+            try:
+                cookies = await self._context.cookies()
+            except Exception as exc:
+                logger.warning(f"全量 cookies 也读取失败: {exc}")
+                return None
+            if not cookies:
+                return None
+        # 诊断 log（不打 value，避免泄露 web_session）：按 name+domain
+        # 列出每个 cookie 的元数据，帮助和手动登录的 DevTools cookies 对比。
+        diag = [
+            f"{(c.get('name') or '?')}@{(c.get('domain') or '-')}"
+            f"(len={len(c.get('value') or '')})"
+            for c in cookies
+        ]
+        if log_diag:
+            logger.info(
+                f"[sms_login] collected {len(cookies)} cookies for "
+                f"{target_url}: {diag}"
+            )
         # 拼接成 "k1=v1; k2=v2" 形式
         pairs = []
         for c in cookies:
@@ -593,12 +692,50 @@ class PlaywrightSmsLoginDriver(SmsLoginDriver):
         return CookieSnapshot(cookies_str="; ".join(pairs), raw_count=len(cookies))
 
     @staticmethod
+    def _cookie_value(cookies_str: str, name: str) -> str:
+        for part in (cookies_str or "").split(";"):
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            if key.strip() == name:
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _cookie_target_url() -> str:
+        try:
+            from xhs_utils.xhs_util import xhs_api_base_url
+
+            base = xhs_api_base_url().strip().rstrip("/")
+            if base:
+                return f"{base}/"
+        except Exception:
+            pass
+        return _LOGIN_URL
+
+    async def _login_form_visible(self) -> bool:
+        if self._page is None:
+            return False
+        for selector in (_SELECTORS["sms_input"], _SELECTORS["phone_input"]):
+            try:
+                locator = self._page.locator(selector).first
+                if await locator.count() > 0 and await locator.is_visible(timeout=500):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    @staticmethod
     def _country_iso_to_label(iso: str) -> str:
         mapping = {
             "HK": "+852",
             "CN": "+86",
             "US": "+1",
             "GB": "+44",
+            "TW": "+886",
+            "MO": "+853",
+            "SG": "+65",
+            "MY": "+60",
         }
         return mapping.get(iso.upper(), iso)
 

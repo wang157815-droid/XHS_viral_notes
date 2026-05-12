@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...core.responses import ok
-from ...core.security import get_current_user
+from ...core.security import RoleLevel, get_current_user, normalize_role, role_allows
 from ...llm import agent_model_policy, model_profile_registry, provider_registry
 from ...services.cookie_health_service import cookie_health_service
 from ...services.focus_keywords_store import get_focus_keywords_store
@@ -15,12 +15,13 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 def _require_admin(current_user: dict) -> None:
-    if current_user.get("role") != "admin":
+    if not role_allows(current_user.get("role"), RoleLevel.admin):
         raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
 @router.get("/system")
-async def get_system_settings():
+async def get_system_settings(current_user: dict = Depends(get_current_user)):
+    _ = current_user
     data = await get_system_settings_store().get()
     return ok(data)
 
@@ -75,7 +76,8 @@ async def get_cookie_health(
 
 
 @router.get("/focus-keywords")
-async def get_focus_keywords():
+async def get_focus_keywords(current_user: dict = Depends(get_current_user)):
+    _ = current_user
     items = await get_focus_keywords_store().get()
     return ok({"items": items})
 
@@ -290,7 +292,7 @@ async def list_users(current_user: dict = Depends(get_current_user)):
                     "nickname": i.get("nickname"),
                     "xhs_id_masked": _mask_xhs_id(str(i.get("user_id", ""))),
                     "username": i.get("username"),
-                    "role": i.get("role", "user"),
+                    "role": normalize_role(i.get("role", "analyst")),
                     "source": i.get("source"),
                     "last_login_at": i.get("profile_synced_at"),
                 }
@@ -311,10 +313,11 @@ async def update_user(
     current_user: dict = Depends(get_current_user),
 ):
     _require_admin(current_user)
-    if payload.role not in ("admin", "user"):
+    normalized_role = normalize_role(payload.role)
+    if normalized_role not in ("admin", "analyst", "viewer"):
         raise HTTPException(status_code=400, detail="非法角色")
     store = get_identity_store()
-    updated = store.set_role(user_id, payload.role)
+    updated = store.set_role(user_id, normalized_role)
     if not updated:
         raise HTTPException(status_code=404, detail="用户不存在")
     return ok(updated)

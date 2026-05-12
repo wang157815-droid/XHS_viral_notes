@@ -186,32 +186,30 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
           ))}
         </div>
         <div className="flex items-center gap-1.5">
-          {module.actions.map((action) => {
-            const isDelete = action.id === "delete";
-            return (
-              <button
-                key={action.id}
-                type="button"
-                disabled={busy}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onActionClick?.(module, action);
-                }}
-                className={`rounded-[5px] border px-2.5 py-[3px] text-[10px] transition ${
-                  isDelete
-                    ? "border-[#E8E5E0] bg-transparent text-[#A8A4A0] hover:border-[#FFD6CC] hover:bg-[#FFF5F3] hover:text-[#E04040]"
-                    : "border-[#E8E5E0] bg-transparent text-[#8A8580] hover:bg-[#F5F3F0] hover:text-[#5A5550]"
-                } disabled:cursor-not-allowed disabled:opacity-60`}
-              >
-                {action.label}
-              </button>
-            );
-          })}
-          <span
-            className={`ml-1 text-[16px] text-[#C5C0BA] transition ${
-              open ? "rotate-90" : ""
-            }`}
-          >
+          {onActionClick
+            ? module.actions.map((action) => {
+                const isDelete = action.id === "delete";
+                return (
+                  <button
+                    key={action.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onActionClick(module, action);
+                    }}
+                    className={`rounded-[5px] border px-2.5 py-[3px] text-[10px] transition ${
+                      isDelete
+                        ? "border-[#E8E5E0] bg-transparent text-[#A8A4A0] hover:border-[#FFD6CC] hover:bg-[#FFF5F3] hover:text-[#E04040]"
+                        : "border-[#E8E5E0] bg-transparent text-[#8A8580] hover:bg-[#F5F3F0] hover:text-[#5A5550]"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {action.label}
+                  </button>
+                );
+              })
+            : null}
+          <span className={`ml-1 text-[16px] text-[#C5C0BA] transition ${open ? "rotate-90" : ""}`}>
             ▸
           </span>
         </div>

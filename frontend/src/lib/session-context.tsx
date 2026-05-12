@@ -20,6 +20,7 @@ import {
   type AuthUser,
 } from "@/lib/auth-storage";
 import type { CookieHealth } from "@/lib/contracts";
+import { canRole, normalizeRole, type PermissionAction } from "@/lib/rbac";
 
 export interface SessionState {
   ready: boolean;
@@ -27,6 +28,7 @@ export interface SessionState {
   cookieHealth: CookieHealth | null;
   refreshCookie: (force?: boolean) => Promise<void>;
   refreshMe: () => Promise<void>;
+  can: (action: PermissionAction) => boolean;
   logout: () => Promise<void>;
   /** 登录成功后立即把 token/user 注入 Provider,避免跨页跳转 Provider state 不刷新。 */
   loginWithSession: (token: string, user: AuthUser) => void;
@@ -40,11 +42,6 @@ const COOKIE_REFRESH_INTERVAL_MS = 30_000;
 
 function isFallbackUser(userId?: string | null): boolean {
   return Boolean(userId?.startsWith("fallback_"));
-}
-
-function clearFallbackSession() {
-  clearAuthSession();
-  window.localStorage.removeItem("redmuse_last_xhs_user_id");
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
@@ -71,7 +68,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const next: AuthUser = {
           user_id: res.data.user_id,
           nickname: res.data.nickname,
-          role: res.data.role,
+          role: normalizeRole(res.data.role),
         };
         if (prev && prev.user_id === next.user_id) return { ...prev, ...next };
         return next;
@@ -79,13 +76,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       saveAuthSession(token, {
         user_id: res.data.user_id,
         nickname: res.data.nickname,
-        role: res.data.role,
+        role: normalizeRole(res.data.role),
       });
-      if (!isFallbackUser(res.data.user_id)) {
-        window.localStorage.setItem("redmuse_last_xhs_user_id", res.data.user_id);
-      }
     }
   }, []);
+
+  const can = useCallback((action: PermissionAction) => canRole(user?.role, action), [user?.role]);
 
   const logout = useCallback(async () => {
     try {
@@ -99,13 +95,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const loginWithSession = useCallback((token: string, u: AuthUser) => {
-    saveAuthSession(token, u);
-    if (!isFallbackUser(u.user_id)) {
-      window.localStorage.setItem("redmuse_last_xhs_user_id", u.user_id);
-    } else {
-      window.localStorage.removeItem("redmuse_last_xhs_user_id");
-    }
-    setUser(u);
+    const normalized = { ...u, role: normalizeRole(u.role) };
+    saveAuthSession(token, normalized);
+    setUser(normalized);
     setReady(true);
     // 后台静默刷新 cookie 健康,失败不影响登录体验
     void (async () => {
@@ -127,10 +119,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const u: AuthUser = {
         user_id: payloadUser.user_id,
         nickname: payloadUser.nickname || payloadUser.user_id,
-        role: payloadUser.role,
+        role: normalizeRole(payloadUser.role),
       };
-      // Phase 0: RedMuse 用户的 user_id 与 XHS user_id 不同名，
-      // 不要写入 redmuse_last_xhs_user_id（那是给扫码续登的小红书身份）。
       saveAuthSession(token, u);
       setUser(u);
       setReady(true);
@@ -161,7 +151,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // 后台继续校验 /auth/me,失败时再 clearSession + 跳 /login。
       const cached = getAuthUser();
       if (cached && isFallbackUser(cached.user_id)) {
-        clearFallbackSession();
+        clearAuthSession();
         if (!cancelled) {
           setUser(null);
           setReady(true);
@@ -178,9 +168,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       if (!meRes.ok || isFallbackUser(meRes.ok ? meRes.data.user_id : null)) {
         clearAuthSession();
-        if (meRes.ok) {
-          window.localStorage.removeItem("redmuse_last_xhs_user_id");
-        }
         setUser(null);
         setReady(true);
         return;
@@ -189,12 +176,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const u: AuthUser = {
         user_id: meRes.data.user_id,
         nickname: meRes.data.nickname,
-        role: meRes.data.role,
+        role: normalizeRole(meRes.data.role),
       };
       saveAuthSession(token, u);
-      if (!isFallbackUser(u.user_id)) {
-        window.localStorage.setItem("redmuse_last_xhs_user_id", u.user_id);
-      }
       setUser(u);
 
       const cookieRes = await apiGet<CookieHealth>("/settings/cookie-health", {
@@ -233,6 +217,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         cookieHealth,
         refreshCookie,
         refreshMe,
+        can,
         logout,
         loginWithSession,
         loginWithCredentials,

@@ -26,6 +26,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...domain.task_context import TaskContextWriter
+from ...infrastructure.repository import task_repository
 from ...llm.model_gateway import ModelInvocationError
 from ._json_parsing import extract_json_object
 from .base import AgentContext, AgentResult, BaseAgent
@@ -75,7 +76,8 @@ class RAGAgent(BaseAgent):
         if not rewritten_queries:
             rewritten_queries = [query_text] if query_text else keywords[:3]
 
-        business_rules, hits = await self._search_pgvector(task_id, rewritten_queries)
+        owner_user_id = self._owner_user_id(task_id)
+        business_rules, hits = await self._search_pgvector(task_id, rewritten_queries, owner_user_id)
 
         if not business_rules:
             business_rules = _fallback_business_rules()
@@ -157,6 +159,7 @@ class RAGAgent(BaseAgent):
         self,
         task_id: str,
         queries: List[str],
+        owner_user_id: str,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """多 query 检索 + 按 (doc_id, chunk_index) 去重聚合。"""
         service = _get_rag_service()
@@ -166,7 +169,15 @@ class RAGAgent(BaseAgent):
 
         async def _one(q: str) -> List[Any]:
             try:
-                return await asyncio.to_thread(service.search, q, None, 5, 0.0)
+                return await asyncio.to_thread(
+                    service.search,
+                    q,
+                    None,
+                    5,
+                    0.0,
+                    owner_user_id,
+                    False,
+                )
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 if "dimension" in msg or "vector" in msg:
@@ -234,6 +245,11 @@ class RAGAgent(BaseAgent):
             )
 
         return business_rules, hits
+
+    @staticmethod
+    def _owner_user_id(task_id: str) -> str:
+        record = task_repository.get(task_id)
+        return record.owner_user_id if record else ""
 
 
 def _fallback_business_rules() -> List[Dict[str, Any]]:

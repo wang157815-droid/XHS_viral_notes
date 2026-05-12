@@ -1,12 +1,12 @@
 """
 视频内容时间轴分析提示词
 用于提取小红书视频笔记的7个关键数据点
-支持动态领域知识库加载
+支持通用知识提示词加载
 """
 
-from .knowledge_base import build_dynamic_prompt, detect_domain
+from .knowledge_base import build_dynamic_prompt
 
-# 基础提示词模板（通用部分，不包含领域特定知识）
+# 基础提示词模板
 VIDEO_TIMELINE_BASE_PROMPT = """您是一位资深社交媒体内容分析师，专精于美妆护肤领域的短视频分析。
 
 【重要验证步骤】在分析前，请先确认：
@@ -72,7 +72,7 @@ VIDEO_TIMELINE_BASE_PROMPT = """您是一位资深社交媒体内容分析师，
 组合示例：干货教程-手法干货、单品推荐-单品推荐、剧情-剧情单推、干货教程-多种用法
 
 5. 内容切入点(E)
-视频如何开始引入主题。具体切入点会根据视频领域动态加载（如眼部护理、面部护理、彩妆等）。
+视频如何开始引入主题。
 
 通用切入点包括：
 - 问题切入：指出具体皮肤/妆容问题
@@ -81,7 +81,7 @@ VIDEO_TIMELINE_BASE_PROMPT = """您是一位资深社交媒体内容分析师，
 - 年龄切入：特定年龄段的护理需求
 - 经验切入：个人护肤/化妆经验分享
 
-【注】：会根据视频标题自动加载相关领域的专业切入点知识。
+【注】：请结合视频实际内容选择最贴近的切入点。
 
 6. 产品引出方式(F)
 博主如何引入产品，常见方式包括：
@@ -107,7 +107,7 @@ VIDEO_TIMELINE_BASE_PROMPT = """您是一位资深社交媒体内容分析师，
 - 品牌合作/公司寄品
 - 近期使用心得
 
-【注】：会根据视频标题自动加载相关领域的专业引出方式。
+【注】：请结合视频实际内容选择最贴近的引出方式。
 
 7. 产品植入方式(G)
 产品如何融入视频内容，常见方式包括：
@@ -129,13 +129,13 @@ VIDEO_TIMELINE_BASE_PROMPT = """您是一位资深社交媒体内容分析师，
 - 多种用法展示
 - 完整护理流程中植入
 
-【注】：会根据视频标题自动加载相关领域的专业植入方式。
+【注】：请结合视频实际内容选择最贴近的植入方式。
 
 #输出格式要求：
 请严格按照以下格式输出分析结果，用英文逗号分隔7个数据点：
 Result_A,B,C,D,E,F,G
 
-通用示例（具体领域示例会动态加载）：
+通用示例：
 例1：Result_30s,60s,45s,单品推荐-单品推荐,熬夜垮脸,自用分享,手持口播
 例2：Result_15s,22s,18s,干货教程-手法干货,肌肤问题,护理经验,干货手法中植入
 例3：Result_48s,/,52s,剧情-剧情单推,紧致提升,护理需求,流程中植入产品
@@ -154,7 +154,7 @@ Result_A,B,C,D,E,F,G
 
 def get_timeline_analysis_prompt(video_url: str = None, title: str = None, description: str = None) -> str:
     """
-    获取时间轴分析提示词（动态加载领域知识库）
+    获取时间轴分析提示词
 
     Args:
         video_url: 视频URL
@@ -162,9 +162,8 @@ def get_timeline_analysis_prompt(video_url: str = None, title: str = None, descr
         description: 视频描述（可选）
 
     Returns:
-        完整的提示词（基础提示词 + 动态领域知识）
+        完整的提示词
     """
-    # 构建包含动态知识库的提示词
     full_prompt = build_dynamic_prompt(
         title=title or "",
         description=description or "",

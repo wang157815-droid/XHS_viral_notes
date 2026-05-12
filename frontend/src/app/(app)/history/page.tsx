@@ -56,8 +56,9 @@ const TIME_FILTERS: Array<{ value: string; label: string; days: number | null }>
 ];
 
 export default function HistoryPage() {
-  const { user } = useSession();
-  const isAdmin = user?.role === "admin";
+  const { can } = useSession();
+  const canReadAll = can("task.read_all");
+  const canWriteTask = can("task.write_own");
   const [tasks, setTasks] = useState<HistoryTaskItem[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -149,7 +150,6 @@ export default function HistoryPage() {
                 item.conversation.active_task_id,
                 item.conversation.conversation_id,
                 ...(item.conversation.metadata.recent_keywords || []),
-                ...(item.conversation.metadata.domain_ids || []),
               ].join(" ");
         return hay.toLowerCase().includes(kw);
       })
@@ -238,7 +238,7 @@ export default function HistoryPage() {
       <PageHeader
         title="历史中心"
         actions={
-          isAdmin ? (
+          canReadAll ? (
             <label className="flex items-center gap-2 text-[12px] text-[#5A5550]">
               <input
                 type="checkbox"
@@ -330,14 +330,15 @@ export default function HistoryPage() {
                 <TaskCard
                   key={item.key}
                   task={item.task}
-                  isAdmin={!!isAdmin}
+                  isAdmin={canReadAll}
+                  canWriteTask={canWriteTask}
                   onCancel={handleCancel}
                   onPause={handlePause}
                   onExport={handleExport}
                   onRetry={handleRetry}
                 />
               ) : (
-                <ConversationCard key={item.key} conversation={item.conversation} isAdmin={!!isAdmin} />
+                <ConversationCard key={item.key} conversation={item.conversation} isAdmin={canReadAll} />
               ),
             )}
           </div>
@@ -350,6 +351,7 @@ export default function HistoryPage() {
 function TaskCard({
   task,
   isAdmin,
+  canWriteTask,
   onCancel,
   onPause,
   onExport,
@@ -357,6 +359,7 @@ function TaskCard({
 }: {
   task: HistoryTaskItem;
   isAdmin: boolean;
+  canWriteTask: boolean;
   onCancel: (taskId: string) => void;
   onPause: (taskId: string) => void;
   onExport: (taskId: string, format?: "excel" | "json") => void;
@@ -429,7 +432,7 @@ function TaskCard({
             导出
           </button>
         ) : null}
-        {isRunning ? (
+        {isRunning && canWriteTask ? (
           <>
             <button
               type="button"
@@ -447,7 +450,7 @@ function TaskCard({
             </button>
           </>
         ) : null}
-        {isPaused ? (
+        {isPaused && canWriteTask ? (
           <button
             type="button"
             onClick={() => onCancel(task.task_id)}
@@ -456,7 +459,7 @@ function TaskCard({
             取消
           </button>
         ) : null}
-        {isFailed ? (
+        {isFailed && canWriteTask ? (
           <button
             type="button"
             onClick={() => onRetry(task.task_id)}

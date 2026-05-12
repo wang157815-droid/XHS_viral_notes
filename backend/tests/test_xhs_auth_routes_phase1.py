@@ -149,3 +149,39 @@ def test_credential_status_for_unbound(client: TestClient, admin_token):
     body = r.json()["data"]
     assert body["is_bound"] is False
     assert body["status"] == "unbound"
+
+
+def test_credential_status_force_updates_store_and_returns_credential(
+    client: TestClient, admin_token, monkeypatch
+):
+    from backend.app.services.xhs_auth import get_credential_store
+
+    store = get_credential_store()
+    store.upsert(
+        redmuse_user_id=admin_token["user_id"],
+        cookies_path="datas/users/admin/cookies.json",
+        xhs_user_id="6411xhs",
+        xhs_nickname="管理员小红书号",
+        status="unknown",
+    )
+
+    monkeypatch.setattr(
+        "backend.app.services.cookie_health_service.cookie_health_service.get_cookie_health",
+        lambda **kwargs: {
+            "status": "valid",
+            "message": "Cookie 有效",
+            "last_checked_at": "2026-05-09T08:30:00+00:00",
+        },
+    )
+
+    r = client.get(
+        f"{API}/xhs-auth/credential/status?force=true",
+        headers=_bearer(admin_token["token"]),
+    )
+    assert r.status_code == 200, r.json()
+    body = r.json()["data"]
+    assert body["status"] == "active"
+    assert body["message"] == "Cookie 有效"
+    assert body["credential"]["status"] == "active"
+    assert body["credential"]["xhs_user_id"] == "6411xhs"
+    assert "cookies_path" not in body["credential"]

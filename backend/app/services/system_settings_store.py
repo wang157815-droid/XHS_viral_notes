@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -34,9 +35,9 @@ except ImportError:  # pragma: no cover
 
 
 DEFAULT_SYSTEM_SETTINGS: Dict[str, Any] = {
-    "text_model": "deepseek-chat",
-    "vision_model": "qwen3-vl-plus",
-    "embedding_model": "text-embedding-v4",
+    "text_model": (os.getenv("MODEL_NAME", "deepseek-chat").strip() or "deepseek-chat"),
+    "vision_model": (os.getenv("MULTIMODAL_MODEL_NAME", "qwen3-vl-plus").strip() or "qwen3-vl-plus"),
+    "embedding_model": (os.getenv("EMBEDDING_MODEL", "text-embedding-v4").strip() or "text-embedding-v4"),
     "video_analysis_enabled": True,
     "crawler_schedule": {
         "enabled": True,

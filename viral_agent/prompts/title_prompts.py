@@ -102,7 +102,7 @@ TITLE_KNOWLEDGE_TEMPLATE = """
 ---
 ### 【标题写作专业知识】
 
-{domain_name}领域标题要点：
+{domain_name}主题标题要点：
 
 【高效标题公式】
 {formulas}
@@ -132,8 +132,8 @@ def build_title_analysis_prompt(
     Args:
         titles: 标题列表
         stats: 标题统计数据
-        knowledge: 领域知识（可选）
-        domain_name: 领域名称
+        knowledge: 补充知识（可选）
+        domain_name: 主题名称
 
     Returns:
         格式化后的提示词

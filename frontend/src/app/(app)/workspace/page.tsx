@@ -82,7 +82,9 @@ export default function WorkspacePage() {
     patchCanvasModule,
     refreshCanvas,
   } = useWorkspace();
-  const { cookieHealth } = useSession();
+  const { cookieHealth, can } = useSession();
+  const canWriteConversation = can("conversation.write_own");
+  const canWriteTask = can("task.write_own");
 
   // 纯 UI 本地状态（切页丢失无所谓）
   const [creating, setCreating] = useState(false);
@@ -119,7 +121,7 @@ export default function WorkspacePage() {
 
   const paragraphEnv = useMemo(
     () =>
-      taskId && realtime
+      taskId && realtime && canWriteTask
         ? {
             taskId,
             realtime,
@@ -129,7 +131,7 @@ export default function WorkspacePage() {
             refreshCanvas,
           }
         : undefined,
-    [taskId, realtime, registerRegenerateAnchor, patchCanvasModule, refreshCanvas],
+    [taskId, realtime, registerRegenerateAnchor, patchCanvasModule, refreshCanvas, canWriteTask],
   );
   const taskInProgress = Boolean(
     taskId && ["pending", "queued", "running", "paused"].includes(streamState.status),
@@ -196,6 +198,10 @@ export default function WorkspacePage() {
       keywords: string[];
       advanced: AdvancedConfig;
     }) => {
+      if (!canWriteConversation) {
+        setToast({ type: "err", message: "只读成员不能发送消息或发起分析" });
+        return;
+      }
       setCreating(true);
       setToast(null);
       const clientMessageId = generateIdempotencyKey();
@@ -370,6 +376,7 @@ export default function WorkspacePage() {
       taskId,
       canvasModel.modules,
       waitForCanvasModuleUpdate,
+      canWriteConversation,
     ],
   );
 
@@ -379,6 +386,10 @@ export default function WorkspacePage() {
 
   const handleModuleAction = useCallback(
     async (module: PrototypeModule, action: PrototypeAction) => {
+      if (!canWriteTask) {
+        setToast({ type: "err", message: "只读成员不能修改画布模块" });
+        return;
+      }
       if (!taskId || !realtime) {
         setToast({
           type: "ok",
@@ -446,11 +457,15 @@ export default function WorkspacePage() {
         setToast({ type: "ok", message: `模块「${module.title}」· ${action.label}` });
       }
     },
-    [taskId, realtime, setModuleBusy, refreshCanvas, waitForCanvasModuleUpdate],
+    [taskId, realtime, setModuleBusy, refreshCanvas, waitForCanvasModuleUpdate, canWriteTask],
   );
 
   const handlePause = useCallback(async () => {
     if (!taskId) return;
+    if (!canWriteTask) {
+      setToast({ type: "err", message: "只读成员不能控制任务" });
+      return;
+    }
     setControlBusy(true);
     try {
       const res = await apiPost(`/tasks/${encodeURIComponent(taskId)}/pause`, {}, { withAuth: true });
@@ -459,10 +474,14 @@ export default function WorkspacePage() {
     } finally {
       setControlBusy(false);
     }
-  }, [taskId]);
+  }, [taskId, canWriteTask]);
 
   const handleResume = useCallback(async () => {
     if (!taskId) return;
+    if (!canWriteTask) {
+      setToast({ type: "err", message: "只读成员不能控制任务" });
+      return;
+    }
     setControlBusy(true);
     try {
       const res = await apiPost(`/tasks/${encodeURIComponent(taskId)}/resume`, {}, { withAuth: true });
@@ -471,10 +490,14 @@ export default function WorkspacePage() {
     } finally {
       setControlBusy(false);
     }
-  }, [taskId]);
+  }, [taskId, canWriteTask]);
 
   const handleCancel = useCallback(async () => {
     if (!taskId) return;
+    if (!canWriteTask) {
+      setToast({ type: "err", message: "只读成员不能控制任务" });
+      return;
+    }
     setControlBusy(true);
     try {
       const res = await apiPost(`/tasks/${encodeURIComponent(taskId)}/cancel`, {}, { withAuth: true });
@@ -483,7 +506,7 @@ export default function WorkspacePage() {
     } finally {
       setControlBusy(false);
     }
-  }, [taskId]);
+  }, [taskId, canWriteTask]);
 
   const downloadExport = useCallback(
     async (format: "excel" | "json") => {
@@ -550,6 +573,8 @@ export default function WorkspacePage() {
           streamError={streamError}
           canvasCollapsed={canvasCollapsed}
           showCanvasToggle={canShowCanvas}
+          canWriteConversation={canWriteConversation}
+          canWriteTask={canWriteTask}
           onToggleCanvas={toggleCanvasCollapsed}
           onSubmit={handleSubmit}
           onNewAnalysis={handleNewAnalysis}
@@ -567,7 +592,7 @@ export default function WorkspacePage() {
           refreshDisabled={!taskId || !realtime}
           onExportExcel={() => downloadExport("excel")}
           onExportJson={() => downloadExport("json")}
-          onModuleAction={handleModuleAction}
+          onModuleAction={canWriteTask ? handleModuleAction : undefined}
           busyModuleIds={busyModuleIds}
           paragraphEnv={paragraphEnv}
         />

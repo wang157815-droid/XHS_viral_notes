@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, Query
 
 from ...core.responses import ok
-from ...core.security import get_current_user
+from ...core.security import RoleLevel, get_current_user, role_allows
 from ...application.task_service import task_service
 from ...services.conversation_store import get_conversation_store
 
@@ -20,7 +20,7 @@ async def list_history_tasks(
     current_user: dict = Depends(get_current_user),
 ):
     _ = (keyword, status, time_range)
-    include_all = current_user.get("role") == "admin"
+    include_all = role_allows(current_user.get("role"), RoleLevel.admin)
     records = task_service.list_tasks(str(current_user["user_id"]), include_all=include_all, limit=500)
     items: List[Dict[str, Any]] = []
     kw = (keyword or "").strip().lower()
@@ -64,7 +64,7 @@ async def list_history_timeline(
     current_user: dict = Depends(get_current_user),
 ):
     user_id = str(current_user["user_id"])
-    include_all = current_user.get("role") == "admin"
+    include_all = role_allows(current_user.get("role"), RoleLevel.admin)
     kw = (keyword or "").strip().lower()
     timeline: List[Dict[str, Any]] = []
 

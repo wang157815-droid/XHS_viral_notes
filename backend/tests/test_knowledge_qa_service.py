@@ -10,8 +10,23 @@ from viral_agent.models.document import DocumentSearchResult
 class FakeRag:
     def __init__(self, results):
         self.results = results
+        self.calls = []
 
-    def search(self, query, domains=None, top_k=5, min_score=0.0):
+    def search(
+        self,
+        query,
+        domains=None,
+        top_k=5,
+        min_score=0.0,
+        owner_user_id=None,
+        include_all=True,
+    ):
+        self.calls.append(
+            {
+                "owner_user_id": owner_user_id,
+                "include_all": include_all,
+            }
+        )
         return self.results
 
 
@@ -78,3 +93,31 @@ async def test_knowledge_qa_retrieval_failure_degrades():
     assert "知识库检索不可用" in answer
     assert citations == []
     assert debug["model_error_code"] == "KNOWLEDGE_RETRIEVAL_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_qa_passes_owner_filter_for_non_admin():
+    rag = FakeRag([])
+    service = KnowledgeQAService(rag_factory=lambda: rag)
+
+    await service.answer(
+        question="只检索我的知识库",
+        intent=IntentClassification(intent="knowledge_qa", should_retrieve_knowledge=True),
+        current_user={"user_id": "u1", "role": "analyst"},
+    )
+
+    assert rag.calls[-1] == {"owner_user_id": "u1", "include_all": False}
+
+
+@pytest.mark.asyncio
+async def test_knowledge_qa_allows_admin_global_search():
+    rag = FakeRag([])
+    service = KnowledgeQAService(rag_factory=lambda: rag)
+
+    await service.answer(
+        question="管理员检索知识库",
+        intent=IntentClassification(intent="knowledge_qa", should_retrieve_knowledge=True),
+        current_user={"user_id": "admin", "role": "admin"},
+    )
+
+    assert rag.calls[-1] == {"owner_user_id": "admin", "include_all": True}

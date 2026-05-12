@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+from ..core.security import normalize_role
 from ..infrastructure.db.engine import get_business_db_session
 
 try:
@@ -52,8 +53,8 @@ class IdentityStore:
             self._save(data)
             return record
 
-        # 第一位接入用户默认 admin，后续 user
-        role = "admin" if len(data) == 0 else "user"
+        # 第一位接入用户默认 admin，后续 analyst
+        role = "admin" if len(data) == 0 else "analyst"
         record = {
             "user_id": user_id,
             "username": f"xhs_{user_id}",
@@ -78,13 +79,14 @@ class IdentityStore:
         return self._load().get(user_id)
 
     def set_role(self, user_id: str, role: str) -> Optional[dict]:
-        if role not in ("admin", "user"):
+        if role not in ("admin", "user", "analyst", "viewer"):
             return None
+        normalized_role = normalize_role(role)
         data = self._load()
         record = data.get(user_id)
         if not record:
             return None
-        record["role"] = role
+        record["role"] = normalized_role
         record["updated_at"] = datetime.now(timezone.utc).isoformat()
         data[user_id] = record
         self._save(data)
@@ -113,7 +115,7 @@ class IdentityStore:
                     "user_id": uid,
                     "username": f"xhs_{uid}",
                     "nickname": "",
-                    "role": "user",
+                    "role": "analyst",
                     "created_at": now,
                     "updated_at": now,
                     "source": "identity_link_stub",
@@ -173,7 +175,7 @@ class SqlAlchemyIdentityStore:
                 )
             return self.get(user_id) or existing
 
-        role = "admin" if len(self.list_identities()) == 0 else "user"
+        role = "admin" if len(self.list_identities()) == 0 else "analyst"
         record = {
             "user_id": user_id,
             "username": f"xhs_{user_id}",
@@ -217,8 +219,9 @@ class SqlAlchemyIdentityStore:
         return self._from_row(row) if row else None
 
     def set_role(self, user_id: str, role: str) -> Optional[dict]:
-        if role not in ("admin", "user"):
+        if role not in ("admin", "user", "analyst", "viewer"):
             return None
+        normalized_role = normalize_role(role)
         with get_business_db_session() as session:
             session.execute(
                 text(
@@ -228,7 +231,7 @@ class SqlAlchemyIdentityStore:
                     WHERE user_id = :user_id
                     """
                 ),
-                {"user_id": user_id, "role": role},
+                {"user_id": user_id, "role": normalized_role},
             )
         return self.get(user_id)
 
@@ -255,7 +258,7 @@ class SqlAlchemyIdentityStore:
                     "user_id": uid,
                     "username": f"xhs_{uid}",
                     "nickname": "",
-                    "role": "user",
+                    "role": "analyst",
                     "created_at": now,
                     "updated_at": now,
                     "source": "identity_link_stub",
@@ -316,6 +319,7 @@ class SqlAlchemyIdentityStore:
             return v.astimezone(timezone.utc).isoformat() if isinstance(v, datetime) else str(v or "")
 
         data = dict(row)
+        data["role"] = normalize_role(data.get("role") or "analyst")
         data["created_at"] = _iso(data.get("created_at"))
         data["updated_at"] = _iso(data.get("updated_at"))
         data["linked_user_ids"] = list(data.get("linked_user_ids") or [])

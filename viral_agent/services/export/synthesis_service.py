@@ -3,7 +3,7 @@
 AI综合推理服务
 基于所有分析结果进行深度思考推理，生成最终爆文模型
 
-支持知识库注入，使用独立的提示词模块
+支持独立的提示词模块
 """
 import json
 import os
@@ -22,10 +22,6 @@ from viral_agent.prompts.viral_model_prompts import (
     get_system_prompt as get_viral_model_system_prompt,
     parse_viral_model_response
 )
-
-# 导入知识库
-from viral_agent.prompts.knowledge_base import detect_domain, get_domain_knowledge
-
 
 class SynthesisService:
     """AI综合推理服务 - 整合所有分析结果生成最终爆文模型"""
@@ -288,37 +284,13 @@ class SynthesisService:
     def _build_synthesis_prompt(self, summary_data: Dict) -> str:
         """
         构建综合推理的Prompt（使用独立的提示词模块）
-
-        支持知识库注入：根据关键词检测领域，自动注入相关知识
         """
-        # 检测领域并获取知识库
-        keyword = summary_data.get('keyword', '')
-        domains = detect_domain(keyword)
-        domain_knowledge = get_domain_knowledge(domains) if domains else ""
+        logger.info("构建爆文模型提示词")
 
-        # 获取领域名称
-        domain_name = ""
-        if domains:
-            from viral_agent.prompts.knowledge_base import DOMAIN_KEYWORDS, _USE_JSON_CONFIG
-            if _USE_JSON_CONFIG:
-                try:
-                    from viral_agent.config.knowledge_loader import get_knowledge_config
-                    config = get_knowledge_config()
-                    domain_info = config.get_domain_by_id(domains[0])
-                    if domain_info:
-                        domain_name = domain_info.get('name', '')
-                except Exception:
-                    pass
-            if not domain_name and domains[0] in DOMAIN_KEYWORDS:
-                domain_name = DOMAIN_KEYWORDS[domains[0]].get('name', '')
-
-        logger.info(f"构建爆文模型提示词，检测到领域: {domain_name or '通用'}")
-
-        # 使用提示词模块构建
         return build_viral_model_prompt(
             summary_data=summary_data,
-            knowledge=domain_knowledge,
-            domain_name=domain_name
+            knowledge="",
+            domain_name=""
         )
 
     def _parse_ai_response(self, response_text: str) -> Dict[str, Any]:

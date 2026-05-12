@@ -34,7 +34,7 @@ from ...application.module_regeneration import run_module_regeneration
 from ...application.paragraph_feedback import merge_feedback_into_content, normalize_feedback_entry
 from ...application.task_service import task_service
 from ...core.responses import ok
-from ...core.security import get_current_user
+from ...core.security import RoleLevel, get_current_user, role_allows
 from ...domain.canvas import CanvasSchema
 from ...domain.error_codes import ErrorCode, build_error
 from ...domain.events import TaskEventType
@@ -53,6 +53,11 @@ HEARTBEAT_INTERVAL_MS = int(os.getenv("SSE_HEARTBEAT_INTERVAL_MS", "15000"))
 MAX_EVENT_BYTES = int(os.getenv("SSE_MAX_EVENT_BYTES", "2097152"))
 
 
+def _require_task_write_role(current_user: dict) -> None:
+    if not role_allows(current_user.get("role"), RoleLevel.analyst):
+        raise HTTPException(status_code=403, detail="需要分析师或管理员权限")
+
+
 class CreateTaskRequest(BaseModel):
     raw_input: str = Field(..., min_length=1)
     keywords: List[str] = Field(default_factory=list)
@@ -67,6 +72,7 @@ async def create_task(
     current_user: dict = Depends(get_current_user),
     idem: IdempotencyContext = Depends(require_idempotency),
 ):
+    _require_task_write_role(current_user)
     if idem.cached_response is not None:
         return idem.cached_response
 
@@ -160,7 +166,7 @@ async def list_tasks(
         }
         for r in records
     ]
-    return ok({"items": items, "include_all_effective": include_all and current_user.get("role") == "admin"})
+    return ok({"items": items, "include_all_effective": include_all and role_allows(current_user.get("role"), RoleLevel.admin)})
 
 
 @router.get("/{task_id}")
@@ -191,6 +197,7 @@ async def _transition_endpoint(
     target: TaskStatus,
     action_name: str,
 ):
+    _require_task_write_role(current_user)
     resolve_task_record(task_id, current_user, action=action_name, write=True)
     try:
         record = task_service.transition(task_id, target)
@@ -221,6 +228,7 @@ async def resume_task(task_id: str, current_user: dict = Depends(get_current_use
 
 @router.post("/{task_id}/cancel")
 async def cancel_task(task_id: str, current_user: dict = Depends(get_current_user)):
+    _require_task_write_role(current_user)
     resolve_task_record(task_id, current_user, action="cancel", write=True)
     await get_orchestration_engine().cancel(task_id)
     try:
@@ -257,6 +265,7 @@ async def retry_task(
     """
     from uuid import uuid4
 
+    _require_task_write_role(current_user)
     source = resolve_task_record(task_id, current_user, action="retry", write=False)
     input_spec = source.input_spec or {}
     raw_input = str(input_spec.get("raw_input") or "")
@@ -386,6 +395,7 @@ async def regenerate_module(
     idem: IdempotencyContext = Depends(require_idempotency),
     version_guard: ModuleVersionGuard = Depends(if_match_header),
 ):
+    _require_task_write_role(current_user)
     if idem.cached_response is not None:
         return idem.cached_response
 
@@ -464,6 +474,7 @@ async def submit_paragraph_feedback(
     idem: IdempotencyContext = Depends(require_idempotency),
     version_guard: ModuleVersionGuard = Depends(if_match_header),
 ):
+    _require_task_write_role(current_user)
     if idem.cached_response is not None:
         return idem.cached_response
 
@@ -548,6 +559,7 @@ async def delete_module(
     idem: IdempotencyContext = Depends(require_idempotency),
     version_guard: ModuleVersionGuard = Depends(if_match_header),
 ):
+    _require_task_write_role(current_user)
     if idem.cached_response is not None:
         return idem.cached_response
 
@@ -593,6 +605,7 @@ async def restore_module(
     idem: IdempotencyContext = Depends(require_idempotency),
     version_guard: ModuleVersionGuard = Depends(if_match_header),
 ):
+    _require_task_write_role(current_user)
     if idem.cached_response is not None:
         return idem.cached_response
 

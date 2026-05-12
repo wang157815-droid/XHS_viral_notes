@@ -1,9 +1,11 @@
 """
 知识库 API：
-- /domains：领域规则 CRUD（PostgreSQL 持久化）
 - /documents：文档列表 / 上传（multipart） / 删除
   · 上传时调用 viral_agent.services.knowledge.document_parser 解析 + 分块
   · 可选向量化：如果 Embedding + pgvector 可用则自动入库，否则跳过不阻塞
+
+领域知识（domains）已于 2026-05 下线（B 方案）：路由层不再暴露 /domains CRUD，
+相关 DB 表与 domains 字段保留作为历史数据，待 Phase 5 一并清理。
 """
 
 from __future__ import annotations
@@ -11,12 +13,12 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from ...core.responses import ok
-from ...core.security import get_current_user, require_admin_user
+from ...core.security import RoleLevel, get_current_user, require_admin_user, role_allows
 from ...infrastructure.db.engine import get_business_db_session
 from ...services.knowledge_registry import knowledge_registry
 
@@ -28,78 +30,49 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {"pdf", "docx", "doc", "md", "markdown", "txt"}
 
 
-# ---------------------------------------------------------------------------
-# 领域规则 CRUD
-# ---------------------------------------------------------------------------
-class DomainPayload(BaseModel):
-    name: str = Field(..., min_length=1)
-    keywords: List[str] = Field(default_factory=list)
-    priority: str = "medium"
-    enabled: bool = True
+def _user_id(current_user: dict) -> str:
+    return str(current_user.get("user_id") or "")
 
 
-@router.get("/domains")
-async def list_domains():
-    return ok({"items": knowledge_registry.list_domains()})
+def _is_admin(current_user: dict) -> bool:
+    return role_allows(current_user.get("role"), RoleLevel.admin)
 
 
-@router.post("/domains")
-async def create_domain(
-    payload: DomainPayload,
-    current_user: dict = Depends(get_current_user),
-):
-    _ = current_user
-    record = knowledge_registry.create_domain(
-        name=payload.name.strip(),
-        keywords=[k.strip() for k in payload.keywords if k and k.strip()],
-        priority=payload.priority,
-        enabled=payload.enabled,
-    )
-    return ok(record)
+def _require_min_role(current_user: dict, minimum: RoleLevel) -> None:
+    if not role_allows(current_user.get("role"), minimum):
+        raise HTTPException(status_code=403, detail="权限不足")
 
 
-@router.put("/domains/{domain_id}")
-async def update_domain(
-    domain_id: str,
-    payload: DomainPayload,
-    current_user: dict = Depends(get_current_user),
-):
-    _ = current_user
-    record = knowledge_registry.update_domain(
-        domain_id,
-        name=payload.name.strip(),
-        keywords=[k.strip() for k in payload.keywords if k and k.strip()],
-        priority=payload.priority,
-        enabled=payload.enabled,
-    )
+def _require_document_access(doc_id: str, current_user: dict) -> dict:
+    record = knowledge_registry.get_document(doc_id)
     if not record:
-        raise HTTPException(status_code=404, detail=f"领域不存在: {domain_id}")
-    return ok(record)
-
-
-@router.delete("/domains/{domain_id}")
-async def delete_domain(
-    domain_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    _ = current_user
-    if not knowledge_registry.delete_domain(domain_id):
-        raise HTTPException(status_code=404, detail=f"领域不存在: {domain_id}")
-    return ok({"domain_id": domain_id, "deleted": True})
+        raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
+    if _is_admin(current_user) or record.get("owner_user_id") == _user_id(current_user):
+        return record
+    raise HTTPException(status_code=403, detail="无权访问此文档")
 
 
 # ---------------------------------------------------------------------------
 # 文档列表 / 删除
 # ---------------------------------------------------------------------------
 @router.get("/documents")
-async def list_documents(domain_id: Optional[str] = None):
-    return ok({"items": knowledge_registry.list_documents(domain_id=domain_id)})
+async def list_documents(current_user: dict = Depends(get_current_user)):
+    include_all = _is_admin(current_user)
+    return ok(
+        {
+            "items": knowledge_registry.list_documents(
+                owner_user_id=_user_id(current_user),
+                include_all=include_all,
+            ),
+            "include_all_effective": include_all,
+        }
+    )
 
 
 @router.delete("/documents/{doc_id}")
 async def delete_document(
     doc_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_admin_user),
 ):
     _ = current_user
     record = knowledge_registry.delete_document(doc_id)
@@ -114,9 +87,9 @@ async def delete_document(
 @router.post("/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    domain_ids: str = Form(default=""),  # 逗号分隔的 domain_id 列表
     current_user: dict = Depends(get_current_user),
 ):
+    _require_min_role(current_user, RoleLevel.analyst)
     filename = (file.filename or "unnamed").strip()
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
@@ -144,19 +117,19 @@ async def upload_document(
 
     chunks: List[str] = parsed["chunks"]
     keywords: List[str] = parsed["keywords"]
-    domain_ids_list = _split_domains(domain_ids)
 
-    # 1) 先登记元数据，拿到稳定的 doc_id
+    # 1) 先登记元数据，拿到稳定的 doc_id（domains 字段保持空列表，schema 兼容）
     record = knowledge_registry.register_document(
         filename=filename,
         raw_bytes=raw,
         size_bytes=size,
         chunks=len(chunks),
         keywords=keywords,
-        domains=domain_ids_list,
+        domains=[],
         vector_status="pending",
         vector_message="",
-        uploaded_by=str(current_user.get("user_id") or ""),
+        uploaded_by=_user_id(current_user),
+        owner_user_id=_user_id(current_user),
     )
     doc_id = record["doc_id"]
 
@@ -165,7 +138,7 @@ async def upload_document(
         doc_id=doc_id,
         doc_name=filename,
         chunks=chunks,
-        domain_ids=domain_ids_list,
+        owner_user_id=_user_id(current_user),
     )
 
     # 3) 用真实状态覆盖 pending
@@ -173,12 +146,6 @@ async def upload_document(
         doc_id, status=vector_status, message=vector_message
     )
     return ok(updated or record)
-
-
-def _split_domains(raw: str) -> List[str]:
-    if not raw:
-        return []
-    return [x.strip() for x in raw.split(",") if x.strip()]
 
 
 def _parse_and_chunk(filename: str, raw: bytes) -> dict:
@@ -216,7 +183,7 @@ async def _maybe_vectorize(
     doc_id: str,
     doc_name: str,
     chunks: List[str],
-    domain_ids: List[str],
+    owner_user_id: str,
 ) -> tuple[str, str]:
     """尝试写入 pgvector；失败或依赖缺失时返回 skipped，不抛异常阻塞上传。"""
     if not chunks:
@@ -242,13 +209,13 @@ async def _maybe_vectorize(
             "source": doc_name,
             "doc_id": doc_id,
             "title": doc_name,
-            "domains": ",".join(domain_ids),
+            "owner_user_id": owner_user_id,
         }
         return rag.upsert_chunks(
             doc_id=doc_id,
             title=doc_name,
             chunks=chunks,
-            domains=domain_ids,
+            domains=[],
             embeddings=embeddings,
             base_metadata=base_metadata,
         )
@@ -268,7 +235,7 @@ async def _maybe_vectorize(
 async def get_document_chunks(
     doc_id: str,
     limit: int = 200,
-    current_user: dict = Depends(require_admin_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     返回文档的分块列表（仅管理员可见）。
@@ -276,10 +243,7 @@ async def get_document_chunks(
     - 未向量化：回落到磁盘文件，用 document_parser 现场重新解析分块
     - 两种来源返回结构一致，前端无需区分
     """
-    _ = current_user
-    record = knowledge_registry.get_document(doc_id)
-    if not record:
-        raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
+    record = _require_document_access(doc_id, current_user)
 
     chunks: List[dict] = []
     source = "reparsed"
@@ -324,16 +288,21 @@ class ChunkSearchPayload(BaseModel):
 @router.post("/search")
 async def search_chunks(
     payload: ChunkSearchPayload,
-    current_user: dict = Depends(require_admin_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     RAG 检索测试：返回与 query 最相似的 top_k 分块（仅管理员可用）。
     要求 pgvector 有数据且 embedding 可用；否则返回 503。
     """
-    _ = current_user
+    if payload.doc_id:
+        _require_document_access(payload.doc_id, current_user)
     try:
         result = await asyncio.to_thread(
-            _pgvector_similarity_query, payload.query, payload.top_k, payload.doc_id
+            _pgvector_similarity_query,
+            payload.query,
+            payload.top_k,
+            payload.doc_id,
+            current_user,
         )
     except Exception as exc:
         logger.warning(f"RAG 检索异常: {exc}")
@@ -396,23 +365,62 @@ def _reparse_chunks(stored_path: str, limit: int) -> List[dict]:
     return items
 
 
-def _pgvector_similarity_query(query: str, top_k: int, doc_id: Optional[str]) -> dict:
+def _format_pgvector(vector: List[float]) -> str:
+    return "[" + ",".join(str(float(x)) for x in vector) + "]"
+
+
+def _pgvector_similarity_query(
+    query: str,
+    top_k: int,
+    doc_id: Optional[str],
+    current_user: dict,
+) -> dict:
+    from sqlalchemy import text as _sql
     from viral_agent.services.knowledge.rag_service import RAGService
 
     rag = RAGService()
-    results = rag.search(query, None, top_k=top_k, min_score=0.0)
+    query_embedding = rag._get_embeddings([query])[0]
+    params = {
+        "embedding": _format_pgvector(query_embedding),
+        "embedding_model": rag.embedding_model,
+        "top_k": top_k,
+        "owner_user_id": _user_id(current_user),
+    }
+    where = [
+        "c.embedding IS NOT NULL",
+        "c.embedding_model = :embedding_model",
+    ]
+    if not _is_admin(current_user):
+        where.append("d.owner_user_id = :owner_user_id")
     if doc_id:
-        results = [item for item in results if item.doc_id == doc_id]
+        where.append("c.doc_id = :doc_id")
+        params["doc_id"] = doc_id
+    where_sql = " AND ".join(where)
+    with get_business_db_session() as session:
+        rows = session.execute(
+            _sql(
+                f"""
+                SELECT c.doc_id, c.chunk_index, c.text, c.metadata,
+                       1 - (c.embedding <=> CAST(:embedding AS vector)) AS score
+                FROM knowledge_chunks c
+                JOIN knowledge_documents d ON d.doc_id = c.doc_id
+                WHERE {where_sql}
+                ORDER BY c.embedding <=> CAST(:embedding AS vector)
+                LIMIT :top_k
+                """
+            ),
+            params,
+        ).mappings().all()
     hits = []
-    for item in results[:top_k]:
+    for row in rows:
         hits.append(
             {
-                "chunk_id": f"{item.doc_id}:chunk:{item.chunk_index}",
-                "chunk_index": item.chunk_index,
-                "text": item.text,
-                "metadata": item.metadata,
+                "chunk_id": f"{row['doc_id']}:chunk:{row['chunk_index']}",
+                "chunk_index": int(row["chunk_index"]),
+                "text": str(row["text"] or ""),
+                "metadata": dict(row["metadata"] or {}),
                 "distance": None,
-                "similarity": item.score,
+                "similarity": round(float(row["score"] or 0), 4),
             }
         )
     return {"hits": hits, "total": len(hits)}

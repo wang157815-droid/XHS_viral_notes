@@ -31,6 +31,33 @@ def business_schema_sql() -> str:
     return f"""
 CREATE EXTENSION IF NOT EXISTS vector;
 
+CREATE TABLE IF NOT EXISTS redmuse_users (
+    user_id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    nickname TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'analyst',
+    status TEXT NOT NULL DEFAULT 'active',
+    xhs_credential_path TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS redmuse_users_updated_idx
+    ON redmuse_users(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS redmuse_projects (
+    project_id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES redmuse_users(user_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    archived_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_projects_owner
+    ON redmuse_projects(owner_user_id, sort_order);
+
 CREATE TABLE IF NOT EXISTS tasks (
     task_id VARCHAR(64) PRIMARY KEY,
     owner_user_id VARCHAR(128) NOT NULL,
@@ -52,12 +79,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS tasks_idempotency_key_uq
     ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS tasks_owner_updated_idx ON tasks(owner_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 
 CREATE TABLE IF NOT EXISTS identities (
     user_id VARCHAR(128) PRIMARY KEY,
     username VARCHAR(255) NOT NULL,
     nickname VARCHAR(255) NOT NULL DEFAULT '',
-    role VARCHAR(32) NOT NULL DEFAULT 'user',
+    role VARCHAR(32) NOT NULL DEFAULT 'analyst',
     source VARCHAR(64) NOT NULL DEFAULT 'xhs_selfinfo',
     linked_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -89,10 +118,14 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     vector_status VARCHAR(32) NOT NULL DEFAULT 'pending',
     vector_message TEXT NOT NULL DEFAULT '',
     uploaded_by VARCHAR(128) NOT NULL DEFAULT '',
+    owner_user_id VARCHAR(128) NOT NULL DEFAULT 'admin',
     uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb
 );
 CREATE INDEX IF NOT EXISTS knowledge_documents_uploaded_idx ON knowledge_documents(uploaded_at DESC);
+ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS owner_user_id VARCHAR(128) NOT NULL DEFAULT 'admin';
+UPDATE knowledge_documents SET owner_user_id = COALESCE(NULLIF(owner_user_id, ''), NULLIF(uploaded_by, ''), 'admin');
+CREATE INDEX IF NOT EXISTS knowledge_documents_owner_uploaded_idx ON knowledge_documents(owner_user_id, uploaded_at DESC);
 
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     chunk_id VARCHAR(128) PRIMARY KEY,
@@ -138,6 +171,8 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 CREATE INDEX IF NOT EXISTS conversations_owner_updated_idx
     ON conversations(owner_user_id, updated_at DESC);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS project_id TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project_id);
 
 CREATE TABLE IF NOT EXISTS conversation_messages (
     message_id VARCHAR(64) PRIMARY KEY,

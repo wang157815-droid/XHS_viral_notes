@@ -649,7 +649,7 @@ class ViralAnalyzer:
             AI分析洞察
         """
         try:
-            # 1. 检索相关知识（RAG + JSON配置）
+            # 1. 检索相关知识（RAG）
             knowledge = self._retrieve_knowledge(keyword, notes)
 
             # 准备分析数据
@@ -687,7 +687,7 @@ class ViralAnalyzer:
 
     def _retrieve_knowledge(self, keyword: str, notes: List[ViralNote]) -> Dict[str, Any]:
         """
-        检索相关知识（RAG + JSON配置）
+        检索相关知识（RAG）
 
         Args:
             keyword: 关键词
@@ -702,7 +702,6 @@ class ViralAnalyzer:
             retriever = UnifiedKnowledgeRetriever(enable_rag=True)
 
             # 使用搜索关键词 + 首篇笔记的标题和描述作为检索上下文
-            # 把搜索关键词加入标题，确保领域检测能匹配到
             note_title = notes[0].title if notes else ""
             title = f"{keyword} {note_title}"  # 关键词优先
             description = notes[0].desc[:200] if notes and notes[0].desc else ""
@@ -713,7 +712,7 @@ class ViralAnalyzer:
                 query=f"{keyword}的产品引出和植入技巧，爆款创作规律"
             )
 
-            logger.info(f"知识检索完成: JSON={knowledge['has_json']}, RAG={knowledge['has_rag']}")
+            logger.info(f"知识检索完成: RAG={knowledge['has_rag']}")
             return knowledge
 
         except Exception as e:

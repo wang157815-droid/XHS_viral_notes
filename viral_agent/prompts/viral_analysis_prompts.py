@@ -137,7 +137,7 @@ def build_viral_analysis_prompt(
         keyword: 搜索关键词
         samples: 样本笔记列表
         features: 统计特征字典
-        knowledge_section: 领域知识（可选）
+        knowledge_section: 补充知识（可选）
 
     Returns:
         格式化后的提示词

@@ -1,8 +1,11 @@
 """
-KnowledgeRegistry：知识库领域 + 文档元数据的文件级持久化。
+KnowledgeRegistry：知识库文档元数据的文件级持久化。
 
 阶段3：JSON 文件存元数据、二进制文件落盘 `datas/knowledge/files/`。
 阶段4 将迁移到 PostgreSQL + 对象存储。
+
+领域知识（domains）已于 2026-05 下线（B 方案）：registry 不再提供领域 CRUD。
+文档记录中的 ``domains`` 字段仅作为空列表保留以兼容历史 schema，待 Phase 5 一并清理。
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ class _JsonStore:
 
 
 class KnowledgeRegistry:
-    """领域（domains）+ 文档（documents）+ 文件落盘的统一入口。"""
+    """文档（documents）+ 文件落盘的统一入口。"""
 
     def __init__(self, root: Optional[Path] = None) -> None:
         repo_root = Path(__file__).resolve().parents[3]
@@ -64,91 +67,35 @@ class KnowledgeRegistry:
         self.files_dir = self.root / "files"
         self.files_dir.mkdir(exist_ok=True)
 
-        self._domains = _JsonStore(self.root / "domains.json")
         self._documents = _JsonStore(self.root / "documents.json")
-
-    # ------------------------------------------------------------------
-    # 领域
-    # ------------------------------------------------------------------
-    def list_domains(self) -> List[Dict[str, Any]]:
-        data = self._domains.load()
-        items = list(data.values())
-        items.sort(key=lambda d: d.get("updated_at") or "", reverse=True)
-        return items
-
-    def create_domain(
-        self,
-        *,
-        name: str,
-        keywords: List[str],
-        priority: str = "medium",
-        enabled: bool = True,
-    ) -> Dict[str, Any]:
-        data = self._domains.load()
-        domain_id = f"domain_{uuid.uuid4().hex[:12]}"
-        now = _utc_now()
-        record: Dict[str, Any] = {
-            "domain_id": domain_id,
-            "name": name,
-            "keywords": keywords,
-            "priority": priority,
-            "enabled": enabled,
-            "rule_count": len(keywords),
-            "created_at": now,
-            "updated_at": now,
-        }
-        data[domain_id] = record
-        self._domains.save(data)
-        return record
-
-    def update_domain(
-        self,
-        domain_id: str,
-        *,
-        name: Optional[str] = None,
-        keywords: Optional[List[str]] = None,
-        priority: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> Optional[Dict[str, Any]]:
-        data = self._domains.load()
-        record = data.get(domain_id)
-        if not record:
-            return None
-        if name is not None:
-            record["name"] = name
-        if keywords is not None:
-            record["keywords"] = keywords
-            record["rule_count"] = len(keywords)
-        if priority is not None:
-            record["priority"] = priority
-        if enabled is not None:
-            record["enabled"] = enabled
-        record["updated_at"] = _utc_now()
-        data[domain_id] = record
-        self._domains.save(data)
-        return record
-
-    def delete_domain(self, domain_id: str) -> bool:
-        data = self._domains.load()
-        if domain_id not in data:
-            return False
-        data.pop(domain_id)
-        self._domains.save(data)
-        return True
 
     # ------------------------------------------------------------------
     # 文档
     # ------------------------------------------------------------------
-    def list_documents(self, *, domain_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_documents(
+        self,
+        *,
+        owner_user_id: Optional[str] = None,
+        include_all: bool = False,
+    ) -> List[Dict[str, Any]]:
         data = self._documents.load()
-        items = list(data.values())
-        if domain_id:
-            items = [d for d in items if domain_id in (d.get("domains") or [])]
+        items = []
+        for record in data.values():
+            item = dict(record)
+            item["owner_user_id"] = item.get("owner_user_id") or item.get("uploaded_by") or "admin"
+            if not include_all and item.get("owner_user_id") != owner_user_id:
+                continue
+            items.append(item)
         items.sort(key=lambda d: d.get("uploaded_at") or "", reverse=True)
         return items
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
-        return self._documents.load().get(doc_id)
+        record = self._documents.load().get(doc_id)
+        if not record:
+            return None
+        item = dict(record)
+        item["owner_user_id"] = item.get("owner_user_id") or item.get("uploaded_by") or "admin"
+        return item
 
     def register_document(
         self,
@@ -162,6 +109,7 @@ class KnowledgeRegistry:
         vector_status: str,
         vector_message: str = "",
         uploaded_by: str = "",
+        owner_user_id: str = "",
     ) -> Dict[str, Any]:
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
         ext = Path(filename).suffix.lower().lstrip(".") or "txt"
@@ -181,6 +129,7 @@ class KnowledgeRegistry:
             "vector_status": vector_status,
             "vector_message": vector_message,
             "uploaded_by": uploaded_by,
+            "owner_user_id": owner_user_id or uploaded_by or "admin",
             "uploaded_at": _utc_now(),
         }
         data = self._documents.load()
@@ -242,109 +191,24 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
         self.files_dir = self.root / "files"
         self.files_dir.mkdir(exist_ok=True)
 
-    def list_domains(self) -> List[Dict[str, Any]]:
+    def list_documents(
+        self,
+        *,
+        owner_user_id: Optional[str] = None,
+        include_all: bool = False,
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {}
+        where_sql = ""
+        if not include_all:
+            where_sql = "WHERE owner_user_id = :owner_user_id"
+            params["owner_user_id"] = owner_user_id or ""
         with get_business_db_session() as session:
             rows = session.execute(
-                text("SELECT * FROM knowledge_domains ORDER BY updated_at DESC")
+                text(
+                    f"SELECT * FROM knowledge_documents {where_sql} ORDER BY uploaded_at DESC"
+                ),
+                params,
             ).mappings().all()
-        return [self._domain_from_row(row) for row in rows]
-
-    def create_domain(
-        self,
-        *,
-        name: str,
-        keywords: List[str],
-        priority: str = "medium",
-        enabled: bool = True,
-    ) -> Dict[str, Any]:
-        domain_id = f"domain_{uuid.uuid4().hex[:12]}"
-        now = _utc_now()
-        record = {
-            "domain_id": domain_id,
-            "name": name,
-            "keywords": keywords,
-            "priority": priority,
-            "enabled": enabled,
-            "rule_count": len(keywords),
-            "created_at": now,
-            "updated_at": now,
-        }
-        with get_business_db_session() as session:
-            session.execute(
-                text(
-                    """
-                    INSERT INTO knowledge_domains(
-                        domain_id, name, keywords, priority, enabled, rule_count, created_at, updated_at
-                    ) VALUES (
-                        :domain_id, :name, CAST(:keywords AS jsonb), :priority, :enabled,
-                        :rule_count, CAST(:created_at AS timestamptz), CAST(:updated_at AS timestamptz)
-                    )
-                    """
-                ),
-                {**record, "keywords": json.dumps(keywords, ensure_ascii=False)},
-            )
-        return record
-
-    def update_domain(
-        self,
-        domain_id: str,
-        *,
-        name: Optional[str] = None,
-        keywords: Optional[List[str]] = None,
-        priority: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> Optional[Dict[str, Any]]:
-        current = next((d for d in self.list_domains() if d.get("domain_id") == domain_id), None)
-        if not current:
-            return None
-        if name is not None:
-            current["name"] = name
-        if keywords is not None:
-            current["keywords"] = keywords
-            current["rule_count"] = len(keywords)
-        if priority is not None:
-            current["priority"] = priority
-        if enabled is not None:
-            current["enabled"] = enabled
-        current["updated_at"] = _utc_now()
-        with get_business_db_session() as session:
-            session.execute(
-                text(
-                    """
-                    UPDATE knowledge_domains SET
-                        name = :name,
-                        keywords = CAST(:keywords AS jsonb),
-                        priority = :priority,
-                        enabled = :enabled,
-                        rule_count = :rule_count,
-                        updated_at = CAST(:updated_at AS timestamptz)
-                    WHERE domain_id = :domain_id
-                    """
-                ),
-                {**current, "keywords": json.dumps(current.get("keywords") or [], ensure_ascii=False)},
-            )
-        return current
-
-    def delete_domain(self, domain_id: str) -> bool:
-        with get_business_db_session() as session:
-            result = session.execute(
-                text("DELETE FROM knowledge_domains WHERE domain_id = :domain_id"),
-                {"domain_id": domain_id},
-            )
-        return bool(result.rowcount)
-
-    def list_documents(self, *, domain_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        sql = "SELECT * FROM knowledge_documents ORDER BY uploaded_at DESC"
-        params: Dict[str, Any] = {}
-        if domain_id:
-            sql = """
-                SELECT * FROM knowledge_documents
-                WHERE domains @> CAST(:domain_filter AS jsonb)
-                ORDER BY uploaded_at DESC
-            """
-            params["domain_filter"] = json.dumps([domain_id], ensure_ascii=False)
-        with get_business_db_session() as session:
-            rows = session.execute(text(sql), params).mappings().all()
         return [self._document_from_row(row) for row in rows]
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
@@ -367,6 +231,7 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
         vector_status: str,
         vector_message: str = "",
         uploaded_by: str = "",
+        owner_user_id: str = "",
     ) -> Dict[str, Any]:
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
         ext = Path(filename).suffix.lower().lstrip(".") or "txt"
@@ -385,6 +250,7 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
             "vector_status": vector_status,
             "vector_message": vector_message,
             "uploaded_by": uploaded_by,
+            "owner_user_id": owner_user_id or uploaded_by or "admin",
             "uploaded_at": _utc_now(),
             "metadata": {},
         }
@@ -394,11 +260,12 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
                     """
                     INSERT INTO knowledge_documents(
                         doc_id, name, format, size_bytes, chunks, keywords, domains,
-                        stored_path, vector_status, vector_message, uploaded_by, uploaded_at, metadata
+                        stored_path, vector_status, vector_message, uploaded_by,
+                        owner_user_id, uploaded_at, metadata
                     ) VALUES (
                         :doc_id, :name, :format, :size_bytes, :chunks,
                         CAST(:keywords AS jsonb), CAST(:domains AS jsonb), :stored_path,
-                        :vector_status, :vector_message, :uploaded_by,
+                        :vector_status, :vector_message, :uploaded_by, :owner_user_id,
                         CAST(:uploaded_at AS timestamptz), CAST(:metadata AS jsonb)
                     )
                     """
@@ -456,18 +323,11 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
         return str(value or _utc_now())
 
     @classmethod
-    def _domain_from_row(cls, row: Any) -> Dict[str, Any]:
-        data = dict(row)
-        data["keywords"] = list(data.get("keywords") or [])
-        data["created_at"] = cls._iso(data.get("created_at"))
-        data["updated_at"] = cls._iso(data.get("updated_at"))
-        return data
-
-    @classmethod
     def _document_from_row(cls, row: Any) -> Dict[str, Any]:
         data = dict(row)
         data["keywords"] = list(data.get("keywords") or [])
         data["domains"] = list(data.get("domains") or [])
+        data["owner_user_id"] = data.get("owner_user_id") or data.get("uploaded_by") or "admin"
         data["uploaded_at"] = cls._iso(data.get("uploaded_at"))
         return data
 
