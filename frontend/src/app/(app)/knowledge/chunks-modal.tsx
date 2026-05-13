@@ -95,7 +95,7 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
   const sourceBadge = (() => {
     if (!data) return null;
     if (data.source === "chroma") {
-      return { bg: "#F0FAF0", color: "#3D8C40", label: "来源：ChromaDB 向量库" };
+      return { bg: "#E8F0E8", color: "#49715A", label: "来源：ChromaDB 向量库" };
     }
     if (data.source === "reparsed") {
       return { bg: "#FFF8E6", color: "#8B6914", label: "来源：磁盘重新解析（未向量化）" };
@@ -105,22 +105,22 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-obsidian/35 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="flex h-[80vh] w-[880px] max-w-[92vw] flex-col overflow-hidden rounded-[14px] border border-[#F0EEEB] bg-white shadow-2xl"
+        className="flex h-[80vh] w-[880px] max-w-[92vw] flex-col overflow-hidden rounded-[30px] border border-black/[0.05] bg-white/86 shadow-[0_30px_90px_rgba(26,26,26,0.18)] backdrop-blur-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between border-b border-[#F0EEEB] px-6 py-4">
+        <header className="flex items-center justify-between border-b border-black/[0.05] px-6 py-5">
           <div className="min-w-0">
-            <div className="truncate text-[16px] font-bold">{docName}</div>
-            <div className="mt-1 flex items-center gap-2 text-[12px] text-[#A8A4A0]">
+            <div className="truncate font-serif text-[22px] font-semibold tracking-[-0.03em] text-obsidian">{docName}</div>
+            <div className="mt-1 flex items-center gap-2 text-[12px] text-obsidian/34">
               <span>文档分块</span>
               {data ? <span>共 {data.total} 块</span> : null}
               {sourceBadge ? (
                 <span
-                  className="rounded px-2 py-0.5 text-[11px]"
+                  className="rounded-full px-2.5 py-1 text-[11px] font-semibold"
                   style={{ background: sourceBadge.bg, color: sourceBadge.color }}
                 >
                   {sourceBadge.label}
@@ -131,7 +131,7 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
           <button
             type="button"
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-[#E8E5E0] bg-white text-[#8A8580] transition hover:bg-[#F5F3F0] hover:text-[#5A5550]"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.06] bg-white/75 text-obsidian/40 transition hover:bg-moss hover:text-obsidian"
             aria-label="关闭"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -140,7 +140,7 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
           </button>
         </header>
 
-        <div className="border-b border-[#F0EEEB] bg-[#FAFAF8] px-6 py-3">
+        <div className="border-b border-black/[0.05] bg-fog/35 px-6 py-3">
           <div className="flex items-center gap-2">
             <input
               value={queryText}
@@ -152,13 +152,13 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
                 }
               }}
               placeholder="测试检索：输入查询文本，回车搜索该文档的 Top 5 分块"
-              className="h-9 flex-1 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+              className="h-9 flex-1 rounded-full border border-black/[0.08] bg-white/85 px-4 text-[13px] outline-none placeholder:text-obsidian/24 focus:border-dew"
             />
             <button
               type="button"
               onClick={() => void handleSearch()}
               disabled={searching || !queryText.trim()}
-              className="rounded-lg bg-[#FF4757] px-4 py-1.5 text-[13px] font-semibold text-white transition hover:bg-[#E8404F] disabled:cursor-not-allowed disabled:bg-[#FFB6BD]"
+              className="rounded-full border border-obsidian bg-obsidian px-4 py-1.5 text-[13px] font-semibold text-papyrus transition hover:bg-obsidian/86 disabled:cursor-not-allowed disabled:border-fog disabled:bg-fog disabled:text-obsidian/24"
             >
               {searching ? "检索中..." : "检索"}
             </button>
@@ -169,22 +169,22 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
                   setSearchResult(null);
                   setSearchError(null);
                 }}
-                className="rounded-lg border border-[#E8E5E0] bg-white px-3 py-1.5 text-[12px] text-[#5A5550] hover:bg-[#F5F3F0]"
+                className="rounded-full border border-black/[0.06] bg-white/75 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 hover:bg-moss hover:text-obsidian"
               >
                 显示全部分块
               </button>
             ) : null}
           </div>
           {searchError ? (
-            <div className="mt-2 text-[12px] text-[#C62828]">检索失败：{searchError}</div>
+            <div className="mt-2 text-[12px] text-[#9A5558]">检索失败：{searchError}</div>
           ) : null}
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {loading ? (
-            <div className="py-20 text-center text-[13px] text-[#A8A4A0]">加载中...</div>
+            <div className="py-20 text-center text-[13px] text-obsidian/32">加载中...</div>
           ) : error ? (
-            <div className="rounded-md border border-[#FDD8D8] bg-[#FFF2F2] px-4 py-3 text-[13px] text-[#C62828]">
+            <div className="rounded-2xl border border-[#E8CFC8] bg-[#FFF5F3] px-4 py-3 text-[13px] text-[#9A5558]">
               {error}
             </div>
           ) : searchResult ? (
@@ -200,7 +200,7 @@ export function ChunksModal({ docId, docName, onClose }: ChunksModalProps) {
 
 function ChunkList({ chunks }: { chunks: Chunk[] }) {
   if (!chunks.length) {
-    return <div className="py-10 text-center text-[13px] text-[#A8A4A0]">该文档无分块</div>;
+    return <div className="py-10 text-center text-[13px] text-obsidian/32">该文档无分块</div>;
   }
   return (
     <div className="space-y-3">
@@ -214,12 +214,12 @@ function ChunkList({ chunks }: { chunks: Chunk[] }) {
 function SearchHits({ query, hits }: { query: string; hits: Chunk[] }) {
   return (
     <div>
-      <div className="mb-3 text-[12px] text-[#8A8580]">
-        查询 <span className="font-semibold text-[#3a3936]">「{query}」</span>
+      <div className="mb-3 text-[12px] text-obsidian/40">
+        查询 <span className="font-semibold text-obsidian/72">「{query}」</span>
         &nbsp;·&nbsp; 命中 {hits.length} 条
       </div>
       {!hits.length ? (
-        <div className="rounded-md border border-dashed border-[#E8E5E0] bg-white px-4 py-8 text-center text-[13px] text-[#A8A4A0]">
+        <div className="rounded-2xl border border-dashed border-black/[0.08] bg-fog/40 px-4 py-10 text-center text-[13px] text-obsidian/36">
           没有匹配的分块
         </div>
       ) : (
@@ -235,12 +235,12 @@ function SearchHits({ query, hits }: { query: string; hits: Chunk[] }) {
 
 function ChunkCard({ chunk, highlightQuery }: { chunk: Chunk; highlightQuery?: string }) {
   return (
-    <div className="rounded-lg border border-[#F0EEEB] bg-white px-4 py-3">
-      <div className="mb-1.5 flex items-center gap-2 text-[11px] text-[#A8A4A0]">
-        <span className="rounded bg-[#F5F3F0] px-2 py-0.5 font-mono text-[10px] text-[#5A5550]">
+    <div className="rounded-2xl border border-black/[0.06] bg-white/90 px-4 py-3.5 shadow-[var(--redmuse-editorial-shadow)]">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-obsidian/38">
+        <span className="rounded-md bg-fog px-2 py-0.5 font-mono text-[10px] text-obsidian/48">
           #{chunk.chunk_index ?? "-"}
         </span>
-        <span className="font-mono">{chunk.chunk_id}</span>
+        <span className="font-mono text-[10px] text-obsidian/28">{chunk.chunk_id}</span>
         {typeof chunk.similarity === "number" ? (
           <span
             className="rounded px-1.5 py-0.5 text-[10px]"
@@ -253,7 +253,7 @@ function ChunkCard({ chunk, highlightQuery }: { chunk: Chunk; highlightQuery?: s
           </span>
         ) : null}
       </div>
-      <div className="whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-[#2D2A26]">
+      <div className="whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-obsidian/88">
         {highlightQuery ? highlightText(chunk.text, highlightQuery) : chunk.text}
       </div>
     </div>
@@ -265,7 +265,7 @@ function highlightText(text: string, query: string): React.ReactNode {
   const parts = text.split(new RegExp(`(${escapeRegex(query)})`, "gi"));
   return parts.map((p, i) =>
     p.toLowerCase() === query.toLowerCase() ? (
-      <mark key={i} className="rounded bg-[#FFF2B8] px-0.5 text-[#3a3936]">
+      <mark key={i} className="rounded bg-moss/80 px-0.5 text-obsidian">
         {p}
       </mark>
     ) : (

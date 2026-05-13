@@ -55,6 +55,31 @@ const TIME_FILTERS: Array<{ value: string; label: string; days: number | null }>
   { value: "all", label: "全部", days: null },
 ];
 
+const HISTORY_TIME_BUCKETS = ["today", "yesterday", "within_week", "older"] as const;
+type HistoryTimeBucket = (typeof HISTORY_TIME_BUCKETS)[number];
+
+const HISTORY_BUCKET_LABELS: Record<HistoryTimeBucket, string> = {
+  today: "今天",
+  yesterday: "昨天",
+  within_week: "本周",
+  older: "更早",
+};
+
+function getHistoryTimeBucket(updatedAtIso: string): HistoryTimeBucket {
+  const t = Date.parse(updatedAtIso);
+  if (Number.isNaN(t)) return "older";
+  const itemDay = new Date(t);
+  itemDay.setHours(0, 0, 0, 0);
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((startToday.getTime() - itemDay.getTime()) / 86_400_000);
+  if (diffDays < 0) return "today";
+  if (diffDays === 0) return "today";
+  if (diffDays === 1) return "yesterday";
+  if (diffDays >= 2 && diffDays <= 6) return "within_week";
+  return "older";
+}
+
 export default function HistoryPage() {
   const { can } = useSession();
   const canReadAll = can("task.read_all");
@@ -165,6 +190,19 @@ export default function HistoryPage() {
     [tasks.length, conversations.length],
   );
 
+  const groupedTimeline = useMemo(() => {
+    const buckets = new Map<HistoryTimeBucket, HistoryTimelineItem[]>();
+    for (const b of HISTORY_TIME_BUCKETS) buckets.set(b, []);
+    for (const item of filtered) {
+      buckets.get(getHistoryTimeBucket(item.updated_at))!.push(item);
+    }
+    return HISTORY_TIME_BUCKETS.filter((b) => (buckets.get(b)?.length ?? 0) > 0).map((bucket) => ({
+      bucket,
+      label: HISTORY_BUCKET_LABELS[bucket],
+      items: buckets.get(bucket)!,
+    }));
+  }, [filtered]);
+
   const handleCancel = useCallback(async (taskId: string) => {
     if (typeof window !== "undefined" && !window.confirm("确定取消该任务？")) return;
     const res = await apiPost(`/tasks/${encodeURIComponent(taskId)}/cancel`, {}, { withAuth: true });
@@ -239,12 +277,12 @@ export default function HistoryPage() {
         title="历史中心"
         actions={
           canReadAll ? (
-            <label className="flex items-center gap-2 text-[12px] text-[#5A5550]">
+            <label className="flex items-center gap-2 rounded-full border border-black/[0.05] bg-white/70 px-3 py-1.5 text-[12px] font-semibold text-obsidian/50">
               <input
                 type="checkbox"
                 checked={includeAll}
                 onChange={(e) => setIncludeAll(e.target.checked)}
-                className="h-3.5 w-3.5 accent-[#FF4757]"
+                className="h-3.5 w-3.5 accent-obsidian"
               />
               管理员视图：全部记录
             </label>
@@ -252,30 +290,30 @@ export default function HistoryPage() {
         }
       />
 
-      <main className="flex-1 overflow-y-auto px-8 py-6">
+      <main className="relative flex-1 overflow-y-auto bg-[radial-gradient(circle_at_82%_6%,rgba(185,206,209,0.22),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.7),rgba(247,247,245,0.94))] px-6 py-6 lg:px-8">
         {toast ? (
           <div
-            className={`pointer-events-auto fixed right-6 top-6 z-50 rounded-md border px-3 py-2 text-[12px] shadow-lg ${
+            className={`pointer-events-auto fixed right-6 top-6 z-50 rounded-2xl border px-4 py-2 text-[12px] font-semibold shadow-[0_18px_48px_rgba(26,26,26,0.12)] backdrop-blur ${
               toast.type === "ok"
-                ? "border-[#D7EAD9] bg-[#F0FAF1] text-[#3D8C40]"
-                : "border-[#FDD8D8] bg-[#FFF2F2] text-[#C62828]"
+                ? "border-[#D7EAD9] bg-moss/90 text-[#49715A]"
+                : "border-[#E8CFC8] bg-[#FFF5F3]/90 text-[#9A5558]"
             }`}
           >
             {toast.message}
           </div>
         ) : null}
 
-        <div className="mb-5 flex flex-wrap items-center gap-2.5">
+        <div className="mx-auto mb-5 flex max-w-[1180px] flex-wrap items-center gap-2.5 rounded-[28px] border border-black/[0.05] bg-white/74 p-3 shadow-[0_18px_48px_rgba(26,26,26,0.055)] backdrop-blur-xl">
           <input
             placeholder="搜索任务、对话、关键词..."
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            className="h-[38px] w-[260px] rounded-lg border border-[#E8E5E0] bg-white px-[14px] text-[13px] outline-none focus:border-[#FF4757]"
+            className="h-[38px] w-[260px] rounded-full border border-black/[0.08] bg-white/85 px-[14px] text-[13px] text-obsidian outline-none placeholder:text-obsidian/24 focus:border-dew"
           />
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="h-[38px] cursor-pointer rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none"
+            className="h-[38px] cursor-pointer rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] text-obsidian/64 outline-none focus:border-dew"
           >
             {STATUS_FILTERS.map((s) => (
               <option key={s.value} value={s.value}>
@@ -286,7 +324,7 @@ export default function HistoryPage() {
           <select
             value={timeFilter}
             onChange={(e) => setTimeFilter(e.target.value)}
-            className="h-[38px] cursor-pointer rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none"
+            className="h-[38px] cursor-pointer rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] text-obsidian/64 outline-none focus:border-dew"
           >
             {TIME_FILTERS.map((t) => (
               <option key={t.value} value={t.value}>
@@ -294,7 +332,7 @@ export default function HistoryPage() {
               </option>
             ))}
           </select>
-          <div className="flex rounded-lg border border-[#E8E5E0] bg-white p-0.5">
+          <div className="flex rounded-full border border-black/[0.06] bg-white/85 p-0.5">
             {HISTORY_TABS.map((tab) => (
               <button
                 key={tab.value}
@@ -302,8 +340,8 @@ export default function HistoryPage() {
                 onClick={() => setActiveTab(tab.value)}
                 className={`rounded-md px-3 py-1.5 text-[12px] transition ${
                   activeTab === tab.value
-                    ? "bg-[#FF4757] font-semibold text-white"
-                    : "text-[#5A5550] hover:bg-[#F5F3F0]"
+                    ? "bg-obsidian font-semibold text-papyrus"
+                    : "text-obsidian/50 hover:bg-moss hover:text-obsidian"
                 }`}
               >
                 {tab.label} {counts[tab.value]}
@@ -313,34 +351,47 @@ export default function HistoryPage() {
           <button
             type="button"
             onClick={() => void load()}
-            className="h-[38px] rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+            className="h-[38px] rounded-full border border-black/[0.06] bg-white/85 px-4 text-[13px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
           >
             刷新
           </button>
         </div>
 
         {loading && !filtered.length ? (
-          <div className="py-20 text-center text-[14px] text-[#A8A4A0]">加载中...</div>
+          <div className="py-20 text-center text-[14px] text-obsidian/32">加载中...</div>
         ) : filtered.length === 0 ? (
           <EmptyState activeTab={activeTab} />
         ) : (
-          <div className="flex flex-col gap-3">
-            {filtered.map((item) =>
-              item.type === "task" ? (
-                <TaskCard
-                  key={item.key}
-                  task={item.task}
-                  isAdmin={canReadAll}
-                  canWriteTask={canWriteTask}
-                  onCancel={handleCancel}
-                  onPause={handlePause}
-                  onExport={handleExport}
-                  onRetry={handleRetry}
-                />
-              ) : (
-                <ConversationCard key={item.key} conversation={item.conversation} isAdmin={canReadAll} />
-              ),
-            )}
+          <div className="mx-auto flex max-w-[1180px] flex-col gap-10">
+            {groupedTimeline.map((group) => (
+              <section key={group.bucket} aria-labelledby={`history-bucket-${group.bucket}`}>
+                <div className="mb-3 flex items-end gap-3 px-1">
+                  <h2 id={`history-bucket-${group.bucket}`} className="font-serif text-[15px] font-semibold tracking-tight text-obsidian/72">
+                    {group.label}
+                  </h2>
+                  <span className="pb-0.5 text-[11px] font-medium tabular-nums text-obsidian/28">{group.items.length} 条</span>
+                  <span className="mb-1 ml-1 h-px min-w-[48px] flex-1 bg-gradient-to-r from-dew/50 to-transparent" aria-hidden />
+                </div>
+                <div className="flex flex-col gap-3">
+                  {group.items.map((item) =>
+                    item.type === "task" ? (
+                      <TaskCard
+                        key={item.key}
+                        task={item.task}
+                        isAdmin={canReadAll}
+                        canWriteTask={canWriteTask}
+                        onCancel={handleCancel}
+                        onPause={handlePause}
+                        onExport={handleExport}
+                        onRetry={handleRetry}
+                      />
+                    ) : (
+                      <ConversationCard key={item.key} conversation={item.conversation} isAdmin={canReadAll} />
+                    ),
+                  )}
+                </div>
+              </section>
+            ))}
           </div>
         )}
       </main>
@@ -376,7 +427,7 @@ function TaskCard({
   const isFailed = task.status === "failed" || task.status === "cancelled";
 
   return (
-    <div className="flex items-center gap-5 rounded-[12px] border border-[#F0EEEB] bg-white px-6 py-5 transition hover:border-[#FFD6CC] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+    <div className="flex items-center gap-5 rounded-[24px] border border-black/[0.05] bg-white/78 px-6 py-5 shadow-[0_18px_48px_rgba(26,26,26,0.05)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(26,26,26,0.075)]">
       <span
         className="h-[10px] w-[10px] flex-shrink-0 rounded-full"
         style={{
@@ -385,22 +436,22 @@ function TaskCard({
         }}
       />
       <div className="min-w-0 flex-1">
-        <div className="text-[15px] font-semibold text-[#2D2A26] truncate" title={displayTitle}>
+        <div className="truncate font-serif text-[18px] font-semibold tracking-[-0.03em] text-obsidian" title={displayTitle}>
           {displayTitle}
         </div>
         {allKeywords.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {allKeywords.map((kw) => (
               <span
                 key={kw}
-                className="rounded-md bg-[#FFF0EE] px-2 py-0.5 text-[11px] font-medium text-[#FF4757]"
+                className="rounded-full bg-dew/12 px-2.5 py-1 text-[11px] font-medium text-obsidian/50"
               >
                 {kw}
               </span>
             ))}
           </div>
         ) : null}
-        <div className="mt-1 flex flex-wrap gap-4 text-[12px] text-[#A8A4A0]">
+        <div className="mt-2 flex flex-wrap gap-4 text-[12px] text-obsidian/34">
           <span>{createdLabel}</span>
           <span>{statusMeta.detail(task)}</span>
           {task.collected_count > 0 ? <span>{task.collected_count} 篇笔记</span> : null}
@@ -418,7 +469,7 @@ function TaskCard({
           <Link
             href={`/workspace?task=${encodeURIComponent(task.task_id)}`}
             prefetch
-            className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E8404F]"
+            className="rounded-full border border-obsidian bg-obsidian px-3.5 py-1.5 text-[12px] font-semibold text-papyrus transition hover:bg-obsidian/86"
           >
             查看结果
           </Link>
@@ -427,7 +478,7 @@ function TaskCard({
           <button
             type="button"
             onClick={() => onExport(task.task_id, "excel")}
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+            className="rounded-full border border-black/[0.06] bg-white/65 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
           >
             导出
           </button>
@@ -437,14 +488,14 @@ function TaskCard({
             <button
               type="button"
               onClick={() => onPause(task.task_id)}
-              className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+              className="rounded-full border border-black/[0.06] bg-white/65 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
             >
               暂停
             </button>
             <button
               type="button"
               onClick={() => onCancel(task.task_id)}
-              className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#FF4757] transition hover:bg-[#FFE8E0]"
+              className="rounded-full border border-[#E8CFC8] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] font-semibold text-[#9A5558] transition hover:bg-[#FFF0EE]"
             >
               取消
             </button>
@@ -454,7 +505,7 @@ function TaskCard({
           <button
             type="button"
             onClick={() => onCancel(task.task_id)}
-            className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#FF4757] transition hover:bg-[#FFE8E0]"
+            className="rounded-full border border-[#E8CFC8] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] font-semibold text-[#9A5558] transition hover:bg-[#FFF0EE]"
           >
             取消
           </button>
@@ -463,7 +514,7 @@ function TaskCard({
           <button
             type="button"
             onClick={() => onRetry(task.task_id)}
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+            className="rounded-full border border-black/[0.06] bg-white/65 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
           >
             重试
           </button>
@@ -479,29 +530,29 @@ function ConversationCard({ conversation, isAdmin }: { conversation: Conversatio
   const preview = conversation.last_message_preview || conversation.summary || "暂无消息摘要";
 
   return (
-    <div className="flex items-center gap-5 rounded-[12px] border border-[#F0EEEB] bg-white px-6 py-5 transition hover:border-[#FFD6CC] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[#FFF0EE] text-[13px] font-bold text-[#FF4757]">
+    <div className="flex items-center gap-5 rounded-[24px] border border-black/[0.05] bg-white/78 px-6 py-5 shadow-[0_18px_48px_rgba(26,26,26,0.05)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(26,26,26,0.075)]">
+      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-dew/16 text-[13px] font-bold text-[#6F9095]">
         对
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <div className="truncate text-[15px] font-semibold text-[#2D2A26]" title={conversation.title}>
+          <div className="truncate font-serif text-[18px] font-semibold tracking-[-0.03em] text-obsidian" title={conversation.title}>
             {conversation.title || "未命名对话"}
           </div>
           <span
-            className="flex-shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium"
+            className="flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium"
             style={{ background: intentMeta.bg, color: intentMeta.color }}
           >
             {intentMeta.label}
           </span>
           {conversation.active_task_id ? (
-            <span className="flex-shrink-0 rounded-md bg-[#F0FAF1] px-2 py-0.5 text-[11px] font-medium text-[#3D8C40]">
+            <span className="flex-shrink-0 rounded-full bg-moss px-2.5 py-1 text-[11px] font-medium text-[#49715A]">
               已关联分析任务
             </span>
           ) : null}
         </div>
-        <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-[#5A5550]">{preview}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-[#A8A4A0]">
+        <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-obsidian/58">{preview}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-obsidian/34">
           <span>{formatTime(conversation.updated_at || conversation.created_at)}</span>
           <span>{conversation.message_count} 条消息</span>
           {conversation.citations_count ? <span>{conversation.citations_count} 条引用</span> : null}
@@ -512,7 +563,7 @@ function ConversationCard({ conversation, isAdmin }: { conversation: Conversatio
             {recentKeywords.slice(0, 6).map((kw) => (
               <span
                 key={kw}
-                className="rounded-md bg-[#FAF8F5] px-2 py-0.5 text-[11px] font-medium text-[#8A8580]"
+                className="rounded-full bg-fog px-2.5 py-1 text-[11px] font-medium text-obsidian/42"
               >
                 {kw}
               </span>
@@ -526,7 +577,7 @@ function ConversationCard({ conversation, isAdmin }: { conversation: Conversatio
           <Link
             href={`/workspace?conversation=${encodeURIComponent(conversation.conversation_id)}`}
             prefetch
-            className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E8404F]"
+            className="rounded-full border border-obsidian bg-obsidian px-3.5 py-1.5 text-[12px] font-semibold text-papyrus transition hover:bg-obsidian/86"
           >
             继续并查看任务
           </Link>
@@ -534,7 +585,7 @@ function ConversationCard({ conversation, isAdmin }: { conversation: Conversatio
           <Link
             href={`/workspace?conversation=${encodeURIComponent(conversation.conversation_id)}`}
             prefetch
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+            className="rounded-full border border-black/[0.06] bg-white/65 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
           >
             继续对话
           </Link>
@@ -547,8 +598,8 @@ function ConversationCard({ conversation, isAdmin }: { conversation: Conversatio
 function Stat({ value, label }: { value: string; label: string }) {
   return (
     <div className="text-center">
-      <div className="text-[16px] font-bold text-[#2D2A26]">{value}</div>
-      <div className="text-[11px] text-[#A8A4A0]">{label}</div>
+      <div className="font-serif text-[18px] font-semibold text-obsidian">{value}</div>
+      <div className="text-[11px] text-obsidian/32">{label}</div>
     </div>
   );
 }
@@ -556,15 +607,15 @@ function Stat({ value, label }: { value: string; label: string }) {
 function EmptyState({ activeTab }: { activeTab: HistoryTab }) {
   const label = activeTab === "tasks" ? "历史任务" : activeTab === "conversations" ? "历史对话" : "历史记录";
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-[#A8A4A0]">
-      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-4 text-[#D5D0CB]">
+    <div className="mx-auto flex max-w-[1180px] flex-col items-center justify-center rounded-[28px] border border-dashed border-black/[0.08] bg-white/58 py-20 text-obsidian/34 backdrop-blur">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-4 text-obsidian/18">
         <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
       <p className="text-[14px]">暂无匹配的{label}</p>
       <Link
         href="/workspace"
         prefetch
-        className="mt-4 rounded-md border border-[#E8E5E0] bg-white px-4 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+        className="mt-4 rounded-full border border-black/[0.06] bg-white/75 px-4 py-2 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
       >
         去分析工作台发起新任务
       </Link>
@@ -581,7 +632,7 @@ function getStatusMeta(status: TaskStatus): {
   switch (status) {
     case "completed":
       return {
-        color: "#3D8C40",
+        color: "#49715A",
         label: "已完成",
         animated: false,
         detail: (t) => (t.duration_seconds ? `耗时 ${t.duration_seconds}s` : "已完成"),
@@ -598,7 +649,7 @@ function getStatusMeta(status: TaskStatus): {
     case "paused":
       return { color: "#E8A84C", label: "已暂停", animated: false, detail: () => "已暂停" };
     case "failed":
-      return { color: "#E04040", label: "失败", animated: false, detail: () => "失败，查看详情" };
+      return { color: "#9A5558", label: "失败", animated: false, detail: () => "失败，查看详情" };
     case "cancelled":
       return { color: "#A8A4A0", label: "已取消", animated: false, detail: () => "已取消" };
     default:
@@ -611,11 +662,11 @@ function getIntentMeta(intent: ConversationIntent): { label: string; bg: string;
     case "knowledge_qa":
       return { label: "知识库问答", bg: "#EEF5FF", color: "#2F6EB8" };
     case "xhs_analysis":
-      return { label: "爆文分析", bg: "#FFF0EE", color: "#FF4757" };
+      return { label: "爆文分析", bg: "#FFF5F3", color: "#9A5558" };
     case "refine_canvas":
       return { label: "画布追问", bg: "#F6F0FF", color: "#7B4DC4" };
     case "export":
-      return { label: "导出指令", bg: "#F0FAF1", color: "#3D8C40" };
+      return { label: "导出指令", bg: "#E8F0E8", color: "#49715A" };
     case "general_qa":
       return { label: "普通问答", bg: "#FAF8F5", color: "#5A5550" };
     default:

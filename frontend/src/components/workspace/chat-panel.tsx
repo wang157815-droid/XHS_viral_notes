@@ -1,13 +1,12 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { ChatMessage, CookieHealth, KnowledgeCitation } from "@/lib/contracts";
 import type { SseClientStatus } from "@/lib/sse/event-source-client";
 import type { TaskStreamState } from "@/lib/sse/event-reducer";
-import {
-  SUGGESTION_TAGS,
-} from "./mock-canvas-data";
+import { AgentTimeline } from "./agent-timeline";
+import { PromptComposer } from "./prompt-composer";
 
 interface ChatPanelProps {
   cookieHealth: CookieHealth | null;
@@ -21,6 +20,8 @@ interface ChatPanelProps {
   streamError: { code: string; message: string } | null;
   canvasCollapsed: boolean;
   showCanvasToggle: boolean;
+  canWriteConversation: boolean;
+  canWriteTask: boolean;
   onToggleCanvas: () => void;
   onSubmit: (input: { rawInput: string; keywords: string[]; advanced: AdvancedConfig }) => Promise<void>;
   onNewAnalysis: () => void;
@@ -50,8 +51,10 @@ const STATUS_BADGE: Record<SseClientStatus, { bg: string; color: string; label: 
   open: { bg: "#F0FAF0", color: "#3D8C40", label: "已接入推送" },
   reconnecting: { bg: "#FFF8E6", color: "#8B6914", label: "重连中" },
   closed: { bg: "#F5F3F0", color: "#8A8580", label: "已完成" },
-  failed: { bg: "#FFF0EE", color: "#FF4757", label: "推送异常" },
+  failed: { bg: "rgba(242, 142, 130, 0.14)", color: "#c2716b", label: "推送异常" },
 };
+
+const XHS_AUTH_SETTINGS_HREF = "/settings#xhs-credential";
 
 export function ChatPanel({
   cookieHealth,
@@ -65,6 +68,8 @@ export function ChatPanel({
   streamError,
   canvasCollapsed,
   showCanvasToggle,
+  canWriteConversation,
+  canWriteTask,
   onToggleCanvas,
   onSubmit,
   onNewAnalysis,
@@ -82,6 +87,7 @@ export function ChatPanel({
   const cookieBlocked = cookieHealth?.status === "expired";
   const hasTask = !!taskId;
   const hasMessages = messages.length > 0;
+  const isInitialState = !hasTask && !hasMessages;
   const lastMessageId = messages[messages.length - 1]?.message_id;
   const badge = STATUS_BADGE[connectionStatus];
 
@@ -110,17 +116,54 @@ export function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [hasTask, hasMessages, messages.length, lastMessageId, streamState.lastEventAt, streamState.status]);
 
+  if (isInitialState) {
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden">
+        <PromptComposer
+          value={input}
+          advanced={advanced}
+          expanded={advOpen}
+          disabled={!canWriteConversation}
+          busy={creating}
+          onValueChange={setInput}
+          onAdvancedChange={setAdvanced}
+          onToggleExpanded={() => setAdvOpen((v) => !v)}
+          onSubmit={handleSend}
+          onPickSuggestion={handleSuggestion}
+          notice={
+            <>
+              {cookieBlocked ? (
+                <div className="rounded-2xl border border-[#E8CFC8] bg-white/80 px-4 py-3 text-[12px] leading-6 text-[#9A5558] shadow-sm backdrop-blur">
+                  小红书 Cookie 已过期。普通问答仍可继续；如需发起采集任务，请先到
+                  <a href={XHS_AUTH_SETTINGS_HREF} className="mx-1 font-semibold underline underline-offset-2">
+                    数据源授权
+                  </a>
+                  重新授权。
+                </div>
+              ) : null}
+              {!canWriteConversation ? (
+                <div className="mt-2 rounded-2xl border border-black/[0.06] bg-white/75 px-4 py-3 text-[12px] text-obsidian/45 shadow-sm backdrop-blur">
+                  当前账号为只读成员，可查看历史与画布，但不能发送消息或发起分析。
+                </div>
+              ) : null}
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       style={!canvasCollapsed ? { width: "var(--workspace-chat-width, 380px)" } : undefined}
-      className={`flex h-full flex-shrink-0 flex-col border-r border-[#F0EEEB] bg-white ${
+      className={`flex h-full flex-shrink-0 flex-col border-r border-black/[0.06] bg-white/78 backdrop-blur-xl ${
         canvasCollapsed ? "w-full" : "w-auto"
       }`}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-[#F0EEEB] px-[18px] py-[14px] text-[14px] font-bold">
-        <span>对话</span>
+      <header className="flex items-center justify-between gap-2 border-b border-black/[0.06] px-[18px] py-[14px] text-[14px] font-bold">
+        <span className="font-serif text-[17px] font-semibold tracking-[-0.02em]">Muse 对话</span>
         <div className="flex items-center gap-2">
-          {hasTask ? (
+          {hasTask && canWriteTask ? (
             <TaskControls
               status={streamState.status}
               busy={controlBusy}
@@ -143,7 +186,7 @@ export function ChatPanel({
               type="button"
               onClick={onToggleCanvas}
               title="收起/展开画布"
-              className="flex h-[30px] w-[30px] items-center justify-center rounded-lg border border-[#E8E5E0] bg-white text-[#8A8580] transition hover:bg-[#F5F3F0] hover:text-[#5A5550]"
+              className="flex h-[30px] w-[30px] items-center justify-center rounded-full border border-black/[0.06] bg-white text-obsidian/42 transition hover:bg-moss hover:text-obsidian"
             >
               <svg
                 width="16"
@@ -162,18 +205,12 @@ export function ChatPanel({
       </header>
 
       <div ref={scrollAreaRef} className="flex-1 overflow-y-auto px-[18px] py-[18px]">
-        {hasTask || hasMessages ? (
-          <ConversationView
-            messages={messages}
-            streamState={streamState}
-            userMessage={userInput ?? ""}
-            taskId={taskId}
-          />
-        ) : (
-          <WelcomeView
-            onPick={handleSuggestion}
-          />
-        )}
+        <ConversationView
+          messages={messages}
+          streamState={streamState}
+          userMessage={userInput ?? ""}
+          taskId={taskId}
+        />
 
         {streamError ? (
           <div className="mt-3 rounded-md border border-[#FFE8E0] bg-[#FFF8F5] px-3 py-2 text-[11px] text-[#8B6914]">
@@ -191,21 +228,6 @@ export function ChatPanel({
             </div>
           </div>
         ) : null}
-        {streamState.error?.code === "AUTH_XHS_NOT_BOUND" ? (
-          <div className="mt-3 rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3 py-2 text-[12px] text-[#C62828]">
-            <div className="flex items-center justify-between gap-2">
-              <span>
-                小红书数据源尚未授权 · {streamState.error.message || "请先在「数据源授权」绑定 Cookie"}
-              </span>
-              <a
-                href="/settings"
-                className="rounded border border-[#FF4757] bg-[#FF4757] px-2 py-0.5 text-white hover:bg-[#E03B4A]"
-              >
-                前往授权
-              </a>
-            </div>
-          </div>
-        ) : null}
         <div ref={bottomRef} />
       </div>
 
@@ -214,16 +236,25 @@ export function ChatPanel({
       <div className="border-t border-[#F0EEEB] px-[18px] py-[14px]">
         {cookieBlocked ? (
           <div className="mb-2 rounded border border-[#FDD8D8] bg-[#FFF2F2] px-2 py-1.5 text-[11px] text-[#C62828]">
-            Cookie 已过期。普通问答仍可继续；如需发起小红书采集任务，请先到“系统设置”页重新登录。
+            小红书 Cookie 已过期。普通问答仍可继续；如需发起采集任务，请先到
+            <a href={XHS_AUTH_SETTINGS_HREF} className="mx-0.5 font-semibold underline underline-offset-2">
+              数据源授权
+            </a>
+            重新授权。
+          </div>
+        ) : null}
+        {!canWriteConversation ? (
+          <div className="mb-2 rounded border border-[#E8E5E0] bg-[#FAFAF8] px-2 py-1.5 text-[11px] text-[#8A8580]">
+            当前账号为只读成员，可查看历史与画布，但不能发送消息或发起分析。
           </div>
         ) : null}
         <div className="flex items-end gap-2">
           <textarea
-            className="h-[40px] max-h-[120px] min-h-[40px] flex-1 resize-none rounded-xl border-[1.5px] border-[#E8E5E0] px-[14px] py-[10px] text-[13px] leading-[1.5] outline-none placeholder:text-[#B8B4B0] focus:border-[#FF4757]"
+            className="h-[40px] max-h-[120px] min-h-[40px] flex-1 resize-none rounded-xl border-[1.5px] border-black/[0.08] bg-white/80 px-[14px] py-[10px] text-[13px] leading-[1.5] outline-none placeholder:text-obsidian/24 focus:border-dew"
             placeholder="问我问题，或描述你想分析的品类/品牌..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={creating}
+            disabled={creating || !canWriteConversation}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -234,50 +265,14 @@ export function ChatPanel({
           <button
             type="button"
             onClick={handleSend}
-            disabled={creating || !input.trim()}
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-[#FF4757] text-white transition hover:bg-[#E8404F] disabled:cursor-not-allowed disabled:bg-[#FFB6BD]"
+            disabled={creating || !canWriteConversation || !input.trim()}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-dew text-white transition hover:bg-[#9CBBC0] disabled:cursor-not-allowed disabled:bg-fog disabled:text-obsidian/20"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M13 5l7 7-7 7M5 12h14" />
             </svg>
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function WelcomeView({
-  onPick,
-}: {
-  onPick: (text: string) => void | Promise<void>;
-}) {
-  return (
-    <div>
-      <div className="pt-10 pb-5 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-[14px] bg-gradient-to-br from-[#FFE8E0] to-[#FFD6CC]">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF4757" strokeWidth="2">
-            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-          </svg>
-        </div>
-        <h3 className="text-[16px] font-semibold">告诉我你想分析什么</h3>
-        <p className="mt-2 text-[13px] leading-[1.6] text-[#8A8580]">
-          描述你关注的品类、品牌或内容方向，
-          <br />
-          我会自动完成数据采集、多维洞察和爆文模型生成。
-        </p>
-      </div>
-      <div className="flex flex-col gap-2">
-        {SUGGESTION_TAGS.map((text) => (
-          <button
-            key={text}
-            type="button"
-            onClick={() => onPick(text)}
-            className="rounded-[10px] border border-[#F0EEEB] bg-[#FAFAF8] px-[14px] py-[10px] text-left text-[12px] leading-[1.5] text-[#5A5550] transition hover:border-[#FFD6CC] hover:bg-[#FFF8F5]"
-          >
-            {text}
-          </button>
-        ))}
       </div>
     </div>
   );
@@ -294,9 +289,7 @@ function ConversationView({
   userMessage: string;
   taskId: string | null;
 }) {
-  const milestoneBubbles = useMemo(() => buildTaskMilestoneBubbles(streamState), [streamState]);
   const firstMsg = userMessage || "正在分析…";
-  const taskIsActive = taskId && ["pending", "queued", "running", "paused", "unknown"].includes(streamState.status);
   const showCompletionHint = !!taskId && streamState.status === "completed" && messages.length === 0;
 
   return (
@@ -319,21 +312,7 @@ function ConversationView({
         <Message role="user" bubble={firstMsg} time={taskId.slice(-6)} />
       ) : null}
 
-      {taskId
-        ? milestoneBubbles.map((item) => (
-            <Message
-              key={item.id}
-              role="ai"
-              bubble={
-                <div className="flex items-center gap-2">
-                  <MilestoneDot tone={item.tone} loading={item.loading} />
-                  <span>{item.text}</span>
-                </div>
-              }
-              time={item.time}
-            />
-          ))
-        : null}
+      {taskId ? <AgentTimeline state={streamState} taskId={taskId} /> : null}
 
       {showCompletionHint ? (
         <Message
@@ -367,7 +346,7 @@ function MessageContent({ message }: { message: ChatMessage }) {
     return (
       <div className="flex items-center gap-2 text-[#8A8580]">
         <span className="inline-flex h-4 w-4 items-center justify-center">
-          <span className="h-2 w-2 animate-ping rounded-full bg-[#FF4757]" />
+          <span className="h-2 w-2 animate-ping rounded-full bg-dew" />
         </span>
         <span>{label}</span>
       </div>
@@ -377,7 +356,7 @@ function MessageContent({ message }: { message: ChatMessage }) {
   return (
     <div>
       <MarkdownContent content={message.content} />
-      {streaming ? <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-[#FF4757] align-[-2px]" /> : null}
+      {streaming ? <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-dew align-[-2px]" /> : null}
     </div>
   );
 }
@@ -563,7 +542,7 @@ function renderInlineMarkdown(text: string): ReactNode[] {
             href={safeHref}
             target="_blank"
             rel="noreferrer"
-            className="text-[#FF4757] underline decoration-[#FFD6CC] underline-offset-2"
+            className="text-[#c2716b] underline decoration-dew/50 underline-offset-2"
           >
             {link?.[1]}
           </a>
@@ -630,7 +609,7 @@ function Message({
 }) {
   const avatarStyle: CSSProperties =
     role === "ai"
-      ? { background: "#FFF0EE", color: "#FF4757" }
+      ? { background: "rgba(242, 142, 130, 0.14)", color: "#c2716b" }
       : { background: "#F0EEEB", color: "#5A5550" };
   const bubbleStyle: CSSProperties =
     role === "ai"
@@ -656,167 +635,6 @@ function Message({
       </div>
     </div>
   );
-}
-
-
-type MilestoneBubble = {
-  id: string;
-  text: string;
-  tone: "info" | "success" | "warn" | "error";
-  loading?: boolean;
-  time: string;
-};
-
-function buildTaskMilestoneBubbles(state: TaskStreamState): MilestoneBubble[] {
-  const out: MilestoneBubble[] = [];
-  const ts = state.lastEventAt
-    ? new Date(state.lastEventAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
-    : "";
-
-  const has = (agentId: string) => Boolean(state.agentStatus[agentId]);
-  const isTerminal = ["completed", "failed", "cancelled"].includes(state.status);
-  const done = (agentId: string, nextAgentIds: string[] = []) =>
-    Boolean(
-      state.agentStatus[agentId]?.done ||
-        isTerminal ||
-        nextAgentIds.some((id) => has(id)),
-    );
-
-  if (["pending", "queued"].includes(state.status)) {
-    out.push({
-      id: "task-created",
-      text: "任务已创建，正在进入执行队列。",
-      tone: "info",
-      loading: true,
-      time: ts,
-    });
-  }
-  if (state.status === "running") {
-    out.push({
-      id: "task-running",
-      text: "任务开始执行，正在持续接收进度。",
-      tone: "info",
-      loading: true,
-      time: ts,
-    });
-  }
-  if (state.status === "paused") {
-    out.push({ id: "task-paused", text: "任务已暂停，可在右上角继续。", tone: "warn", time: ts });
-  }
-
-  if (has("CrawlerAgent")) {
-    const isDone = done("CrawlerAgent", ["ImageAnalysisAgent", "VideoAnalysisAgent", "ViralModelAgent"]);
-    out.push({
-      id: "crawler-progress",
-      text: isDone ? "数据采集完成，进入图文/视频分析。" : "正在采集行业池、竞品、互动TOP与 SERP 数据。",
-      tone: isDone ? "success" : "info",
-      loading: !isDone,
-      time: ts,
-    });
-  }
-
-  const imageHas = has("ImageAnalysisAgent");
-  const videoHas = has("VideoAnalysisAgent");
-  if (imageHas || videoHas) {
-    const isDone =
-      done("ImageAnalysisAgent", ["ViralModelAgent", "InsightAgent", "CanvasRenderAgent"]) &&
-      done("VideoAnalysisAgent", ["ViralModelAgent", "InsightAgent", "CanvasRenderAgent"]);
-    out.push({
-      id: "multimodal-progress",
-      text: isDone ? "图文/视频 6 要素标注完成。" : "正在进行图文/视频 6 要素标注。",
-      tone: isDone ? "success" : "info",
-      loading: !isDone,
-      time: ts,
-    });
-  }
-
-  if (has("ViralModelAgent")) {
-    const isDone = done("ViralModelAgent", ["InsightAgent", "RAGAgent", "CanvasRenderAgent"]);
-    out.push({
-      id: "modeling-progress",
-      text: isDone ? "爆文模型矩阵生成完成。" : "正在生成爆文模型矩阵（混合聚类）。",
-      tone: isDone ? "success" : "info",
-      loading: !isDone,
-      time: ts,
-    });
-  }
-
-  if (has("InsightAgent") || has("RAGAgent")) {
-    const insightDone =
-      done("InsightAgent", ["CanvasRenderAgent"]) &&
-      done("RAGAgent", ["CanvasRenderAgent"]);
-    out.push({
-      id: "insight-progress",
-      text: insightDone ? "洞察与业务约束检索完成。" : "正在生成洞察并检索业务约束知识。",
-      tone: insightDone ? "success" : "info",
-      loading: !insightDone,
-      time: ts,
-    });
-  }
-
-  if (has("CanvasRenderAgent")) {
-    const isDone = done("CanvasRenderAgent");
-    out.push({
-      id: "canvas-progress",
-      text: isDone ? "Canvas 渲染完成。" : "正在渲染 Canvas 模块。",
-      tone: isDone ? "success" : "info",
-      loading: !isDone,
-      time: ts,
-    });
-  }
-
-  if (state.videoAsyncState === "pending") {
-    out.push({
-      id: "video-async-pending",
-      text: "视频异步分析仍在后台进行，结果会自动补全。",
-      tone: "info",
-      loading: true,
-      time: ts,
-    });
-  } else if (state.videoAsyncState === "partial") {
-    out.push({
-      id: "video-async-partial",
-      text: "视频异步分析部分完成，已有结果已写入画布。",
-      tone: "warn",
-      time: ts,
-    });
-  } else if (state.videoAsyncState === "failed") {
-    out.push({
-      id: "video-async-failed",
-      text: "视频异步分析失败，可稍后重试相关模块。",
-      tone: "error",
-      time: ts,
-    });
-  }
-
-  if (state.status === "completed") {
-    out.push({
-      id: "task-completed",
-      text: "分析完成，右侧画布已可查看与编辑。",
-      tone: "success",
-      time: ts,
-    });
-  } else if (state.status === "failed") {
-    out.push({ id: "task-failed", text: "任务执行失败，请查看日志后重试。", tone: "error", time: ts });
-  } else if (state.status === "cancelled") {
-    out.push({ id: "task-cancelled", text: "任务已取消。", tone: "warn", time: ts });
-  }
-
-  return out;
-}
-
-function MilestoneDot({ tone, loading }: { tone: MilestoneBubble["tone"]; loading?: boolean }) {
-  if (loading) {
-    return (
-      <span className="inline-flex h-4 w-4 items-center justify-center">
-        <span className="h-2 w-2 animate-ping rounded-full bg-[#FF4757]" />
-      </span>
-    );
-  }
-  if (tone === "success") return <span className="h-[8px] w-[8px] flex-shrink-0 rounded-full bg-[#3D8C40]" />;
-  if (tone === "warn") return <span className="h-[8px] w-[8px] flex-shrink-0 rounded-full bg-[#E8A84C]" />;
-  if (tone === "error") return <span className="h-[8px] w-[8px] flex-shrink-0 rounded-full bg-[#E04040]" />;
-  return <span className="h-[8px] w-[8px] flex-shrink-0 rounded-full bg-[#8A8580]" />;
 }
 
 function AdvancedBar({
@@ -901,7 +719,7 @@ function Field({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-8 rounded-[7px] border border-[#E8E5E0] bg-[#FAFAF8] px-2.5 text-[12px] text-[#2D2A26] outline-none focus:border-[#FF4757]"
+        className="h-8 rounded-[7px] border border-black/[0.08] bg-white/75 px-2.5 text-[12px] text-obsidian outline-none focus:border-dew"
       >
         {options.map((opt) => (
           <option key={opt} value={opt}>
@@ -961,7 +779,7 @@ function TaskControls({
           void onCancel();
         }}
         disabled={busy}
-        className={`rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2.5 py-1 text-[11px] text-[#FF4757] transition hover:bg-[#FFE8E0] disabled:cursor-not-allowed disabled:opacity-50`}
+        className={`rounded-md border border-[#e8cfc8] bg-[#fff5f3] px-2.5 py-1 text-[11px] text-[#c2716b] transition hover:bg-[#fff0ed] disabled:cursor-not-allowed disabled:opacity-50`}
       >
         取消
       </button>

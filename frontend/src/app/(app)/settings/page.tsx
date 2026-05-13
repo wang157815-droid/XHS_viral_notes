@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import Link from "next/link";
 
-
-import { PageHeader } from "@/components/layout/page-header";
+import { SettingsNav, type SettingsNavKey } from "@/components/settings/settings-nav";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api-client";
 import { roleLabel, type Role } from "@/lib/rbac";
 import { useSession } from "@/lib/session-context";
@@ -161,6 +161,35 @@ export default function SettingsPage() {
   // Phase 2-C: XHS 数据源凭据
   const [xhsCred, setXhsCred] = useState<XhsCredentialPublic | null>(null);
   const [xhsCredAction, setXhsCredAction] = useState<XhsCredentialAction>(null);
+  const [activeNav, setActiveNav] = useState<SettingsNavKey>("account");
+
+  const settingsNavEntries = useMemo(() => {
+    const base: Array<{ key: SettingsNavKey; label: string; targetId: string }> = [
+      { key: "account", label: "系统账号", targetId: "settings-account" },
+      { key: "xhs", label: "数据源授权", targetId: "xhs-credential" },
+      { key: "ai", label: "AI 模型", targetId: "settings-ai" },
+      { key: "crawler", label: "定时爬虫", targetId: "settings-crawler" },
+    ];
+    if (canReadObservability) {
+      base.push({ key: "observability", label: "系统观测", targetId: "settings-observability" });
+    }
+    if (canManageUsers) {
+      base.push({ key: "users", label: "用户管理", targetId: "settings-users" });
+    }
+    if (canRunMaintenance) {
+      base.push({ key: "maintenance", label: "系统维护", targetId: "settings-maintenance" });
+    }
+    return base;
+  }, [canReadObservability, canManageUsers, canRunMaintenance]);
+
+  const handleSettingsNavigate = useCallback((key: SettingsNavKey, targetId: string) => {
+    setActiveNav(key);
+    try {
+      window.history.replaceState(null, "", `#${targetId}`);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const loadXhsCredential = useCallback(async () => {
     const res = await fetchMyXhsCredential();
@@ -307,6 +336,71 @@ export default function SettingsPage() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  useEffect(() => {
+    const hashToKey: Record<string, SettingsNavKey> = {
+      "settings-account": "account",
+      "xhs-credential": "xhs",
+      "settings-ai": "ai",
+      "settings-crawler": "crawler",
+      "settings-observability": "observability",
+      "settings-users": "users",
+      "settings-maintenance": "maintenance",
+    };
+
+    const allowedIds = new Set(settingsNavEntries.map((e) => e.targetId));
+
+    const syncFromHash = () => {
+      const raw = window.location.hash.replace(/^#/, "");
+      if (!raw) return;
+      /** 旧版独立「关注关键词」hash 并入定时爬虫 */
+      if (raw === "settings-keywords") {
+        setActiveNav("crawler");
+        try {
+          window.history.replaceState(null, "", "#settings-crawler");
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      if (!allowedIds.has(raw)) {
+        const first = settingsNavEntries[0];
+        if (first) {
+          setActiveNav(first.key);
+          try {
+            window.history.replaceState(null, "", `#${first.targetId}`);
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
+      const key = hashToKey[raw];
+      if (key) setActiveNav(key);
+    };
+
+    syncFromHash();
+    const retryTimer = window.setTimeout(syncFromHash, 150);
+    window.addEventListener("hashchange", syncFromHash);
+    return () => {
+      window.clearTimeout(retryTimer);
+      window.removeEventListener("hashchange", syncFromHash);
+    };
+  }, [settingsNavEntries]);
+
+  /** 权限变化导致当前分区从导航中消失时，回到第一个可见分区 */
+  useEffect(() => {
+    if (settingsNavEntries.some((e) => e.key === activeNav)) return;
+    const first = settingsNavEntries[0];
+    if (first) {
+      setActiveNav(first.key);
+      try {
+        window.history.replaceState(null, "", `#${first.targetId}`);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [settingsNavEntries, activeNav]);
 
   const handleSaveSystem = useCallback(
     async (patch: Partial<SystemSettings>) => {
@@ -474,108 +568,136 @@ export default function SettingsPage() {
   );
 
   return (
-    <>
-      <PageHeader title="系统设置" />
-      <main className="flex-1 overflow-y-auto px-8 py-6">
-        {toast ? (
-          <div
-            className={`pointer-events-auto fixed right-6 top-6 z-50 rounded-md border px-3 py-2 text-[12px] shadow-lg ${
-              toast.type === "ok"
-                ? "border-[#D7EAD9] bg-[#F0FAF1] text-[#3D8C40]"
-                : "border-[#FDD8D8] bg-[#FFF2F2] text-[#C62828]"
-            }`}
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-papyrus">
+      <header className="glass-panel flex shrink-0 items-center gap-4 border-b border-black/[0.06] px-6 py-4 md:px-8">
+        <Link
+          href="/workspace"
+          prefetch
+          className="group flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-obsidian/50 transition hover:bg-black/[0.04] hover:text-obsidian"
+          aria-label="返回工作台"
+          title="返回工作台"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            className="transition-transform group-hover:-translate-x-0.5"
           >
-            {toast.message}
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+        </Link>
+        <h1 className="font-serif text-xl font-light tracking-tight text-obsidian underline decoration-dew/40 underline-offset-8">
+          设置中心
+        </h1>
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <SettingsNav
+          entries={settingsNavEntries}
+          activeKey={activeNav}
+          onNavigate={handleSettingsNavigate}
+          onLogout={logout}
+        />
+
+        <main className="relative min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_82%_6%,rgba(185,206,209,0.18),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.72),rgba(247,247,245,0.96))] px-4 py-5 md:px-8 md:py-6">
+          <div className="pointer-events-none absolute right-[6%] top-20 h-48 w-48 rounded-full bg-moss/40 blur-3xl md:right-[8%] md:top-28 md:h-56 md:w-56" />
+          {toast ? (
+            <div
+              className={`pointer-events-auto fixed right-4 top-20 z-50 rounded-2xl border px-4 py-2 text-[12px] font-semibold shadow-[0_18px_48px_rgba(26,26,26,0.12)] backdrop-blur md:right-6 md:top-24 ${
+                toast.type === "ok"
+                  ? "border-[#D7EAD9] bg-moss/90 text-[#49715A]"
+                  : "border-[#E8CFC8] bg-[#FFF5F3]/90 text-[#9A5558]"
+              }`}
+            >
+              {toast.message}
+            </div>
+          ) : null}
+
+          <div className="relative mx-auto max-w-[1000px] px-1 pb-16 pt-2 md:px-4 md:pt-4">
+            {activeNav === "account" ? <AccountSection user={user} /> : null}
+            {activeNav === "xhs" ? (
+              <XhsCredentialSection
+                credential={xhsCred}
+                action={xhsCredAction}
+                canManageCredential={canManageCredential}
+                onRefresh={() => void loadXhsCredential()}
+                onProbe={() => void handleProbeXhsCredential()}
+                onUnbind={() => void handleUnbindXhsCredential()}
+                onPasteBind={(cookies: string) => void handlePasteBindXhsCredential(cookies)}
+              />
+            ) : null}
+            {activeNav === "ai" ? (
+              <AIModelSection
+                system={system}
+                governance={governance}
+                canManageSystem={canManageSystem}
+                onUpdateSystem={handleSaveSystem}
+              />
+            ) : null}
+            {activeNav === "crawler" ? (
+              <div className="space-y-8">
+                <CrawlerScheduleSection
+                  system={system}
+                  status={crawlerStatus}
+                  triggering={triggering}
+                  onUpdate={handleSaveCrawlerSchedule}
+                  onTrigger={handleTriggerCrawler}
+                />
+                <FocusKeywordsSection
+                  keywords={focusKeywords}
+                  input={kwInput}
+                  canEdit={canManageSystem}
+                  onInputChange={setKwInput}
+                  onAdd={handleAddKeyword}
+                  onRemove={handleRemoveKeyword}
+                />
+              </div>
+            ) : null}
+            {activeNav === "observability" && canReadObservability ? (
+              <SystemObservabilitySection metrics={metrics} onRefresh={loadMetrics} />
+            ) : null}
+            {activeNav === "users" && canManageUsers ? (
+              <UserManagementSection
+                users={users}
+                currentUserId={user?.user_id ?? ""}
+                createUserForm={createUserForm}
+                creatingUser={creatingUser}
+                onCreateFormChange={setCreateUserForm}
+                onCreateUser={handleCreateUser}
+                onUpdateRole={handleUpdateUserRole}
+                onDelete={handleDeleteUser}
+              />
+            ) : null}
+            {activeNav === "maintenance" && canRunMaintenance ? (
+              <SystemMaintenanceSection
+                stats={maintenance}
+                cleaningTarget={cleaningTarget}
+                onClean={handleCleanCache}
+              />
+            ) : null}
           </div>
-        ) : null}
-
-        <AccountSection user={user} />
-
-        <XhsCredentialSection
-          credential={xhsCred}
-          action={xhsCredAction}
-          canManageCredential={canManageCredential}
-          onRefresh={() => void loadXhsCredential()}
-          onProbe={() => void handleProbeXhsCredential()}
-          onUnbind={() => void handleUnbindXhsCredential()}
-          onPasteBind={(cookies: string) => void handlePasteBindXhsCredential(cookies)}
-        />
-
-        <AIModelSection
-          system={system}
-          governance={governance}
-          canManageSystem={canManageSystem}
-          onUpdateSystem={handleSaveSystem}
-        />
-
-        <CrawlerScheduleSection
-          system={system}
-          status={crawlerStatus}
-          triggering={triggering}
-          onUpdate={handleSaveCrawlerSchedule}
-          onTrigger={handleTriggerCrawler}
-        />
-
-        <FocusKeywordsSection
-          keywords={focusKeywords}
-          input={kwInput}
-          canEdit={canManageSystem}
-          onInputChange={setKwInput}
-          onAdd={handleAddKeyword}
-          onRemove={handleRemoveKeyword}
-        />
-
-        {canReadObservability ? (
-          <SystemObservabilitySection metrics={metrics} onRefresh={loadMetrics} />
-        ) : null}
-
-        {canManageUsers ? (
-          <UserManagementSection
-            users={users}
-            currentUserId={user?.user_id ?? ""}
-            createUserForm={createUserForm}
-            creatingUser={creatingUser}
-            onCreateFormChange={setCreateUserForm}
-            onCreateUser={handleCreateUser}
-            onUpdateRole={handleUpdateUserRole}
-            onDelete={handleDeleteUser}
-          />
-        ) : null}
-
-        {canRunMaintenance ? (
-          <SystemMaintenanceSection
-            stats={maintenance}
-            cleaningTarget={cleaningTarget}
-            onClean={handleCleanCache}
-          />
-        ) : null}
-
-        <div className="mb-8">
-          <button
-            type="button"
-            onClick={() => void logout()}
-            className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-5 py-2.5 text-[14px] text-[#E04040] transition hover:bg-[#FFE8E0]"
-          >
-            退出登录
-          </button>
-        </div>
-      </main>
-    </>
+        </main>
+      </div>
+    </div>
   );
 }
 
 function SectionTitle({ title, desc }: { title: string; desc?: string }) {
   return (
     <div className="mb-4">
-      <div className="text-[16px] font-bold">{title}</div>
-      {desc ? <div className="mt-1 text-[13px] text-[#8A8580]">{desc}</div> : null}
+      <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-obsidian/28">Settings</div>
+      <div className="mt-1 font-serif text-[22px] font-semibold tracking-[-0.03em] text-obsidian">{title}</div>
+      {desc ? <div className="mt-1 text-[13px] leading-5 text-obsidian/42">{desc}</div> : null}
     </div>
   );
 }
 
 function Card({ children, style }: { children: React.ReactNode; style?: CSSProperties }) {
   return (
-    <div className="overflow-hidden rounded-[12px] border border-[#F0EEEB] bg-white" style={style}>
+    <div className="overflow-hidden rounded-[26px] border border-black/[0.05] bg-white/78 shadow-[0_18px_48px_rgba(26,26,26,0.055)] backdrop-blur" style={style}>
       {children}
     </div>
   );
@@ -591,10 +713,10 @@ function Row({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-[#F5F3F0] px-5 py-4 last:border-b-0">
+    <div className="flex items-center justify-between gap-4 border-b border-black/[0.04] px-5 py-4 last:border-b-0">
       <div className="min-w-0 flex-1">
-        <div className="text-[14px] font-semibold">{label}</div>
-        {hint ? <div className="mt-0.5 text-[12px] text-[#A8A4A0]">{hint}</div> : null}
+        <div className="text-[14px] font-semibold text-obsidian">{label}</div>
+        {hint ? <div className="mt-0.5 text-[12px] leading-5 text-obsidian/34">{hint}</div> : null}
       </div>
       <div className="flex items-center gap-2">{children}</div>
     </div>
@@ -610,7 +732,7 @@ function AccountSection({
   // 小红书数据源（cookies / xhs_user_id / 健康检查 / 重新授权）
   // 全部归到下方的 XhsCredentialSection，避免与系统身份混淆。
   return (
-    <section className="mb-8">
+    <section id="settings-account" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle
         title="系统账号"
         desc="当前登录 RedMuse 的账号信息（与小红书数据源无关）"
@@ -624,10 +746,10 @@ function AccountSection({
         </Row>
         <Row label="系统角色" hint="决定可访问的功能范围">
           <span
-            className={`rounded px-2.5 py-0.5 text-[11px] font-semibold ${
+            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
               user?.role === "admin"
-                ? "bg-[#FFF0EE] text-[#FF4757]"
-                : "bg-[#F5F3F0] text-[#5A5550]"
+                ? "bg-[#FFF5F3] text-[#9A5558]"
+                : "bg-fog text-obsidian/55"
             }`}
           >
             {roleLabel(user?.role)}
@@ -666,11 +788,11 @@ function XhsCredentialSection({
   const dotColor = (() => {
     switch (meta.tone) {
       case "ok":
-        return "#3D8C40";
+        return "#49715A";
       case "warn":
         return "#E8A84C";
       case "err":
-        return "#E04040";
+        return "#9A5558";
       default:
         return "#A8A4A0";
     }
@@ -678,7 +800,7 @@ function XhsCredentialSection({
   const labelColor = meta.tone === "warn" ? "#B8860B" : dotColor;
 
   return (
-    <section id="xhs-credential" className="mb-8 scroll-mt-6">
+    <section id="xhs-credential" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle
         title="数据源授权"
         desc="为当前 RedMuse 账号绑定一份小红书 Cookie；任务前置 XhsAuthAgent 会以此校验授权状态。"
@@ -718,7 +840,7 @@ function XhsCredentialSection({
               type="button"
               onClick={onProbe}
               disabled={busy || !canManageCredential}
-              className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-60"
+              className="rounded-full border border-black/[0.06] bg-white/65 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian disabled:opacity-60"
             >
               {action === "probe" ? "检查中…" : "立即检查"}
             </button>
@@ -726,7 +848,7 @@ function XhsCredentialSection({
               type="button"
               onClick={onUnbind}
               disabled={busy || !isBound || !canManageCredential}
-              className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#E04040] transition hover:bg-[#FFE8E0] disabled:opacity-50"
+              className="rounded-full border border-[#E8CFC8] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] font-semibold text-[#9A5558] transition hover:bg-[#FFF7F5] disabled:opacity-50"
             >
               {action === "unbind" ? "解绑中…" : "解绑"}
             </button>
@@ -739,7 +861,7 @@ function XhsCredentialSection({
           {canManageCredential ? (
             <XhsQrLoginPanel onBound={onRefresh} />
           ) : (
-            <span className="text-[12px] text-[#A8A4A0]">只读成员不可重新授权</span>
+            <span className="text-[12px] text-obsidian/32">只读成员不可重新授权</span>
           )}
         </Row>
         <Row
@@ -749,7 +871,7 @@ function XhsCredentialSection({
           {canManageCredential ? (
             <SmsAutoLoginPanel onBound={onRefresh} />
           ) : (
-            <span className="text-[12px] text-[#A8A4A0]">只读成员不可重新授权</span>
+            <span className="text-[12px] text-obsidian/32">只读成员不可重新授权</span>
           )}
         </Row>
         <Row label="高级：粘贴 Cookie 绑定" hint="从浏览器 DevTools 复制完整 cookie，仅管理员排障使用">
@@ -757,26 +879,26 @@ function XhsCredentialSection({
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
             disabled={!canManageCredential}
-            className="rounded-md border border-[#E8E5E0] bg-transparent px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0]"
+            className="rounded-full border border-black/[0.06] bg-white/65 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian"
           >
             {showAdvanced ? "收起" : "展开"}
           </button>
         </Row>
         {showAdvanced && canManageCredential ? (
-          <div className="px-5 py-4 border-t border-[#F5F3F0] bg-[#FAFAF8]">
+          <div className="border-t border-black/[0.04] bg-fog/35 px-5 py-4">
             <textarea
               value={cookieDraft}
               onChange={(e) => setCookieDraft(e.target.value)}
               placeholder="a1=...; web_session=...; webId=..."
               spellCheck={false}
-              className="block w-full min-h-[96px] rounded-md border border-[#E8E5E0] bg-white px-3 py-2 font-mono text-[12px] text-[#3A3530] focus:border-[#FF4757] focus:outline-none"
+              className="block min-h-[96px] w-full rounded-2xl border border-black/[0.08] bg-white/85 px-3 py-2 font-mono text-[12px] text-obsidian focus:border-dew focus:outline-none"
             />
             <div className="mt-3 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setCookieDraft("")}
                 disabled={busy || !cookieDraft}
-                className="rounded-md border border-[#E8E5E0] bg-white px-3.5 py-1.5 text-[12px] text-[#5A5550] transition hover:bg-[#F5F3F0] disabled:opacity-50"
+                className="rounded-full border border-black/[0.06] bg-white/75 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 transition hover:bg-moss hover:text-obsidian disabled:opacity-50"
               >
                 清空
               </button>
@@ -787,12 +909,12 @@ function XhsCredentialSection({
                   setCookieDraft("");
                 }}
                 disabled={busy || !cookieDraft.trim()}
-                className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E03B4A] disabled:opacity-50"
+                className="rounded-full border border-obsidian bg-obsidian px-3.5 py-1.5 text-[12px] font-semibold text-papyrus transition hover:bg-obsidian/86 disabled:opacity-50"
               >
                 {action === "bind" ? "绑定中…" : "绑定到当前账号"}
               </button>
             </div>
-            <p className="mt-2 text-[12px] text-[#8A8580]">
+            <p className="mt-2 text-[12px] text-obsidian/42">
               系统会调用 selfinfo 校验 Cookie 有效性，成功后写入 XhsCredentialStore。失败原因会显示在右上角提示。
             </p>
           </div>
@@ -881,7 +1003,7 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
         type="button"
         onClick={() => void handleStart()}
         disabled={busy}
-        className="rounded-md border border-[#FF4757] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#FF4757] transition hover:bg-[#FFE8E0] disabled:opacity-60"
+        className="rounded-full border border-obsidian bg-obsidian px-3.5 py-1.5 text-[12px] font-semibold text-papyrus transition hover:bg-obsidian/86 disabled:opacity-60"
       >
         {busy ? "启动中…" : "开始自动登录"}
       </button>
@@ -891,9 +1013,9 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
   const meta = describeSmsLoginStatus(session.status);
   const toneColor =
     meta.tone === "ok"
-      ? "#3D8C40"
+      ? "#49715A"
       : meta.tone === "err"
-        ? "#E04040"
+        ? "#9A5558"
         : meta.tone === "warn"
           ? "#B8860B"
           : "#5A5550";
@@ -913,7 +1035,7 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
             <button
               type="button"
               onClick={() => setSession(null)}
-              className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0]"
+              className="rounded-full border border-black/[0.06] bg-white/75 px-3 py-1 text-obsidian/50 hover:bg-moss hover:text-obsidian"
             >
               重新开始
             </button>
@@ -922,7 +1044,7 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
               type="button"
               onClick={() => void handleCancel()}
               disabled={busy}
-              className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0] disabled:opacity-60"
+              className="rounded-full border border-black/[0.06] bg-white/75 px-3 py-1 text-obsidian/50 hover:bg-moss hover:text-obsidian disabled:opacity-60"
             >
               取消
             </button>
@@ -932,7 +1054,7 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
               type="button"
               onClick={() => void handleBind()}
               disabled={busy}
-              className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3 py-1 text-white hover:bg-[#E03B4A] disabled:opacity-60"
+              className="rounded-full border border-obsidian bg-obsidian px-3 py-1 font-semibold text-papyrus hover:bg-obsidian/86 disabled:opacity-60"
             >
               绑定到当前账号
             </button>
@@ -940,22 +1062,22 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
         </div>
       </div>
 
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#F5F3F0]">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-obsidian/[0.06]">
         <div
           className="h-full rounded-full transition-all"
           style={{
             width: `${meta.progress}%`,
             background:
               meta.tone === "ok"
-                ? "#3D8C40"
+                ? "#49715A"
                 : meta.tone === "err"
-                  ? "#E04040"
-                  : "#FF4757",
+                  ? "#9A5558"
+                  : "#B9CED1",
           }}
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#8A8580]">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-obsidian/38">
         <span>会话：{session.session_id}</span>
         {session.phone ? (
           <span>
@@ -965,7 +1087,7 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
         ) : null}
         {session.phone_reused ? (
           <span
-            className="rounded-md border border-[#D4ECD6] bg-[#F3F9F4] px-1.5 py-0.5 text-[10px] text-[#3D8C40]"
+            className="rounded-full border border-[#D4ECD6] bg-moss px-1.5 py-0.5 text-[10px] text-[#49715A]"
             title="本次复用上次失败的虚拟号（20 分钟内、未收过验证码），未重复扣费"
           >
             ♻ 复用
@@ -975,18 +1097,18 @@ function SmsAutoLoginPanel({ onBound }: { onBound: () => void }) {
       </div>
 
       {session.error_message ? (
-        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+        <div className="rounded-xl border border-[#E8CFC8] bg-[#FFF5F3] px-2 py-1 text-[#9A5558]">
           {session.error_code ? `[${session.error_code}] ` : ""}
           {session.error_message}
         </div>
       ) : null}
       {bindMessage ? (
-        <div className="rounded-md border border-[#D4ECD6] bg-[#F3F9F4] px-2 py-1 text-[#3D8C40]">
+        <div className="rounded-xl border border-[#D4ECD6] bg-moss px-2 py-1 text-[#49715A]">
           {bindMessage}
         </div>
       ) : null}
       {error ? (
-        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+        <div className="rounded-xl border border-[#E8CFC8] bg-[#FFF5F3] px-2 py-1 text-[#9A5558]">
           {error}
         </div>
       ) : null}
@@ -1136,7 +1258,7 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
         type="button"
         onClick={() => void handleStart()}
         disabled={busy}
-        className="rounded-md border border-[#FF4757] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#FF4757] transition hover:bg-[#FFE8E0] disabled:opacity-60"
+        className="rounded-full border border-obsidian bg-obsidian px-3.5 py-1.5 text-[12px] font-semibold text-papyrus transition hover:bg-obsidian/86 disabled:opacity-60"
       >
         {busy ? "启动中…" : "开始扫码登录"}
       </button>
@@ -1148,9 +1270,9 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
   const statusLabel = isBound ? "已保存到当前账号" : meta.label;
   const toneColor =
     meta.tone === "ok"
-      ? "#3D8C40"
+      ? "#49715A"
       : meta.tone === "err"
-        ? "#E04040"
+        ? "#9A5558"
         : meta.tone === "warn"
           ? "#B8860B"
           : "#5A5550";
@@ -1173,7 +1295,7 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
                 setError(null);
                 setBindMessage(null);
               }}
-              className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0]"
+              className="rounded-full border border-black/[0.06] bg-white/75 px-3 py-1 text-obsidian/50 hover:bg-moss hover:text-obsidian"
             >
               重置
             </button>
@@ -1183,7 +1305,7 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
                 type="button"
                 onClick={() => void handleRefresh()}
                 disabled={busy}
-                className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0] disabled:opacity-60"
+                className="rounded-full border border-black/[0.06] bg-white/75 px-3 py-1 text-obsidian/50 hover:bg-moss hover:text-obsidian disabled:opacity-60"
               >
                 刷新
               </button>
@@ -1191,7 +1313,7 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
                 type="button"
                 onClick={() => void handleCancel()}
                 disabled={busy}
-                className="rounded-md border border-[#E8E5E0] bg-white px-3 py-1 text-[#5A5550] hover:bg-[#F5F3F0] disabled:opacity-60"
+                className="rounded-full border border-black/[0.06] bg-white/75 px-3 py-1 text-obsidian/50 hover:bg-moss hover:text-obsidian disabled:opacity-60"
               >
                 取消
               </button>
@@ -1202,7 +1324,7 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
 
       {/* 绑定成功后隐藏截图：此时后端返回的是登录后的 explore 页面，不再是二维码，不该留在面板上。 */}
       {!isBound && session.qrcode_base64 ? (
-        <div className="flex justify-center overflow-hidden rounded-md border border-[#F0EEEB] bg-white p-2">
+        <div className="flex justify-center overflow-hidden rounded-2xl border border-black/[0.05] bg-white/85 p-2 shadow-sm">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             key={`${session.session_id}-${session.screenshot_version ?? 0}`}
@@ -1213,7 +1335,7 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
         </div>
       ) : null}
       {!isBound && !session.qrcode_base64 ? (
-        <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-[#E8E5E0] bg-[#FAFAF8] text-[11px] text-[#A8A4A0]">
+        <div className="flex h-24 items-center justify-center rounded-2xl border border-dashed border-black/[0.08] bg-fog/45 text-[11px] text-obsidian/32">
           {meta.tone === "err" ? "二维码生成失败" : "二维码加载中…"}
         </div>
       ) : null}
@@ -1226,14 +1348,14 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
             onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, ""))}
             maxLength={6}
             placeholder="输入短信验证码"
-            className="h-8 flex-1 rounded-md border border-[#E8E5E0] bg-white px-2 text-[12px] outline-none focus:border-[#FF4757]"
+            className="h-8 flex-1 rounded-full border border-black/[0.08] bg-white/85 px-3 text-[12px] outline-none focus:border-dew"
             disabled={busy}
           />
           <button
             type="button"
             onClick={() => void handleSubmitSms()}
             disabled={busy || smsCode.trim().length < 4}
-            className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3 py-1 text-[12px] text-white hover:bg-[#E03B4A] disabled:opacity-60"
+            className="rounded-full border border-obsidian bg-obsidian px-3 py-1 text-[12px] font-semibold text-papyrus hover:bg-obsidian/86 disabled:opacity-60"
           >
             {busy ? "提交中…" : "提交"}
           </button>
@@ -1241,21 +1363,21 @@ function XhsQrLoginPanel({ onBound }: { onBound: () => void }) {
       ) : null}
 
       {!isBound ? (
-        <div className="text-[11px] text-[#8A8580]">会话：{session.session_id}</div>
+        <div className="text-[11px] text-obsidian/38">会话：{session.session_id}</div>
       ) : null}
 
       {session.error_message ? (
-        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+        <div className="rounded-xl border border-[#E8CFC8] bg-[#FFF5F3] px-2 py-1 text-[#9A5558]">
           {session.error_message}
         </div>
       ) : null}
       {bindMessage ? (
-        <div className="rounded-md border border-[#D4ECD6] bg-[#F3F9F4] px-2 py-1 text-[#3D8C40]">
+        <div className="rounded-xl border border-[#D4ECD6] bg-moss px-2 py-1 text-[#49715A]">
           {bindMessage}
         </div>
       ) : null}
       {error ? (
-        <div className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-2 py-1 text-[#C62828]">
+        <div className="rounded-xl border border-[#E8CFC8] bg-[#FFF5F3] px-2 py-1 text-[#9A5558]">
           {error}
         </div>
       ) : null}
@@ -1275,7 +1397,7 @@ function AIModelSection({
   onUpdateSystem: (patch: Partial<SystemSettings>) => void;
 }) {
   return (
-    <section className="mb-8">
+    <section id="settings-ai" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle title="AI 模型配置" desc="控制各环节使用的 AI 模型和 API" />
       <Card>
         <Row label="文本分析模型" hint="用于语义分析、策略生成、综合推理">
@@ -1387,13 +1509,13 @@ function CrawlerScheduleSection({
       };
     }
     if (lastRun.status === "failed") {
-      return { color: "#E04040", dot: "#E04040", text: `失败 · ${tsLabel}` };
+      return { color: "#9A5558", dot: "#9A5558", text: `失败 · ${tsLabel}` };
     }
     return { color: "#E8A84C", dot: "#E8A84C", text: `${lastRun.status} · ${tsLabel}` };
   })();
 
   return (
-    <section className="mb-8">
+    <section id="settings-crawler" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle
         title="定时爬虫预热"
         desc="后台自动抓取热榜关键词，预热数据到向量库，减少用户等待时间"
@@ -1478,35 +1600,35 @@ function UserManagementSection({
   onDelete: (userId: string) => void;
 }) {
   return (
-    <section className="mb-8">
+    <section id="settings-users" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle title="用户管理" desc="管理系统中的所有用户（仅管理员可见）" />
       <Card>
-        <div className="mb-5 rounded-xl border border-[#F0EEEB] bg-[#FAFAF8] p-4">
-          <div className="mb-3 text-[13px] font-semibold text-[#2A2420]">添加系统用户</div>
+        <div className="mb-5 rounded-2xl border border-black/[0.05] bg-fog/35 p-4">
+          <div className="mb-3 text-[13px] font-semibold text-obsidian">添加系统用户</div>
           <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_140px_auto]">
             <input
               value={createUserForm.username}
               onChange={(event) => onCreateFormChange({ ...createUserForm, username: event.target.value })}
               placeholder="用户名"
-              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+              className="h-9 rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] outline-none focus:border-dew"
             />
             <input
               value={createUserForm.password}
               onChange={(event) => onCreateFormChange({ ...createUserForm, password: event.target.value })}
               type="password"
               placeholder="初始密码"
-              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+              className="h-9 rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] outline-none focus:border-dew"
             />
             <input
               value={createUserForm.nickname}
               onChange={(event) => onCreateFormChange({ ...createUserForm, nickname: event.target.value })}
               placeholder="昵称（可选）"
-              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+              className="h-9 rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] outline-none focus:border-dew"
             />
             <select
               value={createUserForm.role}
               onChange={(event) => onCreateFormChange({ ...createUserForm, role: event.target.value as Role })}
-              className="h-9 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+              className="h-9 rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] outline-none focus:border-dew"
             >
               <option value="admin">管理员</option>
               <option value="analyst">分析师</option>
@@ -1516,7 +1638,7 @@ function UserManagementSection({
               type="button"
               disabled={creatingUser}
               onClick={onCreateUser}
-              className="h-9 rounded-lg bg-[#FF4757] px-4 text-[13px] font-semibold text-white hover:bg-[#E8404F] disabled:cursor-not-allowed disabled:bg-[#FFB6BD]"
+              className="h-9 rounded-full border border-obsidian bg-obsidian px-4 text-[13px] font-semibold text-papyrus hover:bg-obsidian/86 disabled:cursor-not-allowed disabled:border-fog disabled:bg-fog disabled:text-obsidian/24"
             >
               {creatingUser ? "创建中..." : "添加用户"}
             </button>
@@ -1563,10 +1685,10 @@ function UserManagementSection({
                     </td>
                     <td className="border-b border-[#F5F3F0] px-4 py-[14px]">
                       <span
-                        className={`rounded px-2.5 py-0.5 text-[11px] font-semibold ${
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                           u.role === "admin"
-                            ? "bg-[#FFF0EE] text-[#FF4757]"
-                            : "bg-[#F5F3F0] text-[#5A5550]"
+                            ? "bg-[#FFF5F3] text-[#9A5558]"
+                            : "bg-fog text-obsidian/55"
                         }`}
                       >
                         {roleLabel(u.role)}
@@ -1583,7 +1705,7 @@ function UserManagementSection({
                           <select
                             value={u.role}
                             onChange={(event) => onUpdateRole(u.user_id, event.target.value as Role)}
-                            className="rounded-md border border-[#E8E5E0] bg-white px-2.5 py-1 text-[12px] text-[#5A5550] outline-none transition hover:bg-[#F5F3F0]"
+                            className="rounded-full border border-black/[0.06] bg-white/75 px-2.5 py-1 text-[12px] text-obsidian/50 outline-none transition hover:bg-moss hover:text-obsidian"
                           >
                             <option value="admin">管理员</option>
                             <option value="analyst">分析师</option>
@@ -1592,7 +1714,7 @@ function UserManagementSection({
                           <button
                             type="button"
                             onClick={() => onDelete(u.user_id)}
-                            className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3 py-1 text-[12px] text-[#E04040] transition hover:bg-[#FFE8E0]"
+                            className="rounded-full border border-[#E8CFC8] bg-[#FFF5F3] px-3 py-1 text-[12px] font-semibold text-[#9A5558] transition hover:bg-[#FFF7F5]"
                           >
                             删除
                           </button>
@@ -1625,7 +1747,7 @@ function SystemObservabilitySection({
   ];
 
   return (
-    <section className="mb-8">
+    <section id="settings-observability" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle title="系统观测" desc="最近 24 小时的任务、模型调用和 Eval 摘要（仅管理员可见）" />
       <Card>
         <div className="grid grid-cols-2 gap-0 border-b border-[#F5F3F0] md:grid-cols-4">
@@ -1707,7 +1829,7 @@ function SystemMaintenanceSection({
   ];
 
   return (
-    <section className="mb-8">
+    <section id="settings-maintenance" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle title="系统维护" desc="清理视频、分析和浏览器缓存临时文件" />
       <Card>
         {items.map((item) => (
@@ -1719,7 +1841,7 @@ function SystemMaintenanceSection({
               type="button"
               onClick={() => onClean(item.target)}
               disabled={cleaningTarget === item.target}
-              className="rounded-md border border-[#FFD6CC] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] text-[#E04040] transition hover:bg-[#FFE8E0] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-full border border-[#E8CFC8] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] font-semibold text-[#9A5558] transition hover:bg-[#FFF7F5] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {cleaningTarget === item.target ? "清理中..." : "清理"}
             </button>
@@ -1757,25 +1879,25 @@ function FocusKeywordsSection({
   onRemove: (kw: string) => void;
 }) {
   return (
-    <section className="mb-8">
+    <section className="relative mx-auto mb-0 max-w-[1180px]">
       <SectionTitle
         title="重点关注词"
-        desc="手动配置需要定期预热的关键词，系统会每 24 小时自动采集这些词的最新数据"
+        desc="与定时爬虫预热配合：配置需定期采集、写入向量库的热词（每 24 小时自动采集）"
       />
       <Card>
-        <div className="flex flex-wrap gap-2 border-b border-[#F5F3F0] px-5 py-4">
+        <div className="flex flex-wrap gap-2 border-b border-black/[0.04] px-5 py-4">
           {keywords.length ? (
             keywords.map((kw) => (
               <span
                 key={kw}
-                className="flex items-center gap-1.5 rounded-md border border-[#FFD6CC] bg-[#FFF0EE] px-3 py-[5px] text-[13px] text-[#FF4757]"
+                className="flex items-center gap-1.5 rounded-full border border-dew/35 bg-dew/10 px-3 py-[5px] text-[13px] text-obsidian/55"
               >
                 {kw}
                 <button
                   type="button"
                   onClick={() => onRemove(kw)}
                   disabled={!canEdit}
-                  className="text-[#A8A4A0] hover:text-[#E04040]"
+                  className="text-obsidian/30 hover:text-[#9A5558]"
                   aria-label={`删除 ${kw}`}
                 >
                   ×
@@ -1783,7 +1905,7 @@ function FocusKeywordsSection({
               </span>
             ))
           ) : (
-            <span className="text-[12px] text-[#A8A4A0]">暂无重点关注词</span>
+            <span className="text-[12px] text-obsidian/32">暂无重点关注词</span>
           )}
         </div>
         <div className="flex gap-2 px-5 py-4">
@@ -1798,13 +1920,13 @@ function FocusKeywordsSection({
             }}
             disabled={!canEdit}
             placeholder="输入关键词，回车添加"
-            className="h-9 flex-1 rounded-lg border border-[#E8E5E0] bg-white px-3 text-[13px] outline-none focus:border-[#FF4757]"
+            className="h-9 flex-1 rounded-full border border-black/[0.08] bg-white/85 px-3 text-[13px] outline-none focus:border-dew"
           />
           <button
             type="button"
             onClick={onAdd}
             disabled={!canEdit}
-            className="rounded-md border border-[#FF4757] bg-[#FF4757] px-3.5 py-1.5 text-[12px] text-white transition hover:bg-[#E8404F]"
+            className="rounded-full border border-obsidian bg-obsidian px-3.5 py-1.5 text-[12px] font-semibold text-papyrus transition hover:bg-obsidian/86 disabled:border-fog disabled:bg-fog disabled:text-obsidian/24"
           >
             添加
           </button>
@@ -1822,7 +1944,7 @@ function Toggle({ on, onToggle, disabled = false }: { on: boolean; onToggle: () 
       disabled={disabled}
       aria-pressed={on}
       className="relative h-6 w-11 cursor-pointer rounded-full transition disabled:cursor-not-allowed disabled:opacity-60"
-      style={{ background: on ? "#FF4757" : "#E8E5E0" }}
+      style={{ background: on ? "#1A1A1A" : "#E8E5E0" }}
     >
       <span
         className="absolute top-[2px] h-5 w-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.1)] transition-all"

@@ -268,7 +268,7 @@ export const DEMO_CANVAS: PrototypeCanvasModel = {
       moduleId: "mod-viral-model-matrix",
       layer: 1,
       title: "爆文模型矩阵",
-      icon: { character: "M", bg: "#FFF0EE", color: "#FF4757" },
+      icon: { character: "M", bg: "rgba(185, 206, 209, 0.28)", color: "#4a5d4a" },
       badges: [
         { text: "重点维度", color: "red" },
         { text: "2 个模型 · 示例演示", color: "amber" },
@@ -449,7 +449,7 @@ export const DEMO_CANVAS: PrototypeCanvasModel = {
       moduleId: "mod-competitor-samples",
       layer: 3,
       title: "样本 · 竞品爆文",
-      icon: { character: "X", bg: "#FFF0EE", color: "#FF4757" },
+      icon: { character: "X", bg: "rgba(185, 206, 209, 0.28)", color: "#4a5d4a" },
       badges: [{ text: "1 条竞品样本", color: "red" }],
       version: 1,
       actions: [],

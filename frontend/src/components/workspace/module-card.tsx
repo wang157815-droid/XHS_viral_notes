@@ -39,10 +39,10 @@ interface ModuleCardProps {
 }
 
 const BADGE_STYLE: Record<PrototypeBadge["color"], CSSProperties> = {
-  red: { background: "#FFF0EE", color: "#FF4757" },
-  green: { background: "#F0FAF0", color: "#3D8C40" },
+  red: { background: "#FFF5F3", color: "#9A5558" },
+  green: { background: "#E8F0E8", color: "#49715A" },
   amber: { background: "#FFF8E6", color: "#8B6914" },
-  gray: { background: "#F5F3F0", color: "#8A8580" },
+  gray: { background: "#F0F0F0", color: "rgba(26,26,26,0.48)" },
 };
 
 // ---- 爆文模型矩阵专用配置 ----
@@ -159,31 +159,37 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
 
   return (
     <div
-      className={`mb-3 overflow-hidden rounded-[14px] border bg-white ${
-        module.highlighted ? "border-[#FFD6CC] shadow-[0_0_0_2px_rgba(255,71,87,0.06)]" : "border-[#F0EEEB]"
+      className={`group/module overflow-hidden rounded-[26px] border bg-white/82 shadow-[0_18px_48px_rgba(26,26,26,0.055)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(26,26,26,0.08)] ${
+        module.highlighted ? "border-dew/55 ring-4 ring-dew/10" : "border-black/[0.05]"
       }`}
     >
       <div
-        className="flex cursor-pointer items-center justify-between px-[18px] py-[14px] hover:bg-[#FAFAF8]"
+        className="flex cursor-pointer items-center justify-between gap-4 px-5 py-4 transition hover:bg-moss/25"
         onClick={() => setOpen((v) => !v)}
       >
-        <div className="flex items-center gap-[10px]">
+        <div className="flex min-w-0 items-center gap-3">
           <div
-            className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-[12px] font-bold"
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl text-[14px] font-bold shadow-sm"
             style={{ background: module.icon.bg, color: module.icon.color }}
           >
             {module.icon.character}
           </div>
-          <div className="text-[13px] font-bold">{module.title}</div>
-          {module.badges.map((badge, idx) => (
-            <span
-              key={idx}
-              className="ml-1.5 rounded px-2 py-0.5 text-[10px] font-semibold"
-              style={BADGE_STYLE[badge.color]}
-            >
-              {badge.text}
-            </span>
-          ))}
+          <div className="min-w-0">
+            <div className="truncate font-serif text-[18px] font-semibold tracking-[-0.03em] text-obsidian">{module.title}</div>
+            {module.badges.length ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {module.badges.map((badge, idx) => (
+                  <span
+                    key={idx}
+                    className="rounded-full px-2.5 py-1 text-[10px] font-semibold"
+                    style={BADGE_STYLE[badge.color]}
+                  >
+                    {badge.text}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           {onActionClick
@@ -198,10 +204,10 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
                       e.stopPropagation();
                       onActionClick(module, action);
                     }}
-                    className={`rounded-[5px] border px-2.5 py-[3px] text-[10px] transition ${
+                    className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold transition ${
                       isDelete
-                        ? "border-[#E8E5E0] bg-transparent text-[#A8A4A0] hover:border-[#FFD6CC] hover:bg-[#FFF5F3] hover:text-[#E04040]"
-                        : "border-[#E8E5E0] bg-transparent text-[#8A8580] hover:bg-[#F5F3F0] hover:text-[#5A5550]"
+                        ? "border-[#E8CFC8] bg-white/65 text-[#9A5558] hover:bg-[#FFF5F3]"
+                        : "border-black/[0.06] bg-white/65 text-obsidian/42 hover:bg-moss hover:text-obsidian"
                     } disabled:cursor-not-allowed disabled:opacity-60`}
                   >
                     {action.label}
@@ -209,20 +215,20 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
                 );
               })
             : null}
-          <span className={`ml-1 text-[16px] text-[#C5C0BA] transition ${open ? "rotate-90" : ""}`}>
+          <span className={`ml-1 text-[16px] text-obsidian/25 transition ${open ? "rotate-90" : ""}`}>
             ▸
           </span>
         </div>
       </div>
 
       {!open && module.summary ? (
-        <div className="px-[18px] pb-[10px] pl-[54px] text-[11px] leading-[1.5] text-[#8A8580]">
+        <div className="px-5 pb-4 pl-[76px] text-[12px] leading-6 text-obsidian/42">
           {module.summary}
         </div>
       ) : null}
 
       {open ? (
-        <div className="px-[18px] pb-[18px] text-[13px] leading-[1.8] text-[#3E3A36]">
+        <div className="border-t border-black/[0.04] px-5 pb-5 pt-4 text-[13px] leading-[1.9] text-obsidian/72">
           {module.sections.map((section) => (
             <SectionRenderer key={section.id} section={section} module={module} env={paragraphEnv} />
           ))}
@@ -354,19 +360,19 @@ function EditableParagraph({
 
   const annotationClass =
     state.annotation === "liked"
-      ? "border-l-2 border-[#3D8C40] bg-[#F0FAF0] -ml-2 pl-2 rounded"
+      ? "border-l-2 border-[#49715A] bg-moss/45 -ml-2 pl-2 rounded-xl"
       : state.annotation === "disliked"
-        ? "border-l-2 border-[#E8A84C] bg-[#FFF8E6] -ml-2 pl-2 rounded"
+        ? "border-l-2 border-[#8B6914] bg-[#FFF8E6] -ml-2 pl-2 rounded-xl"
         : "";
 
-  const editedClass = state.edited ? "border-l-2 border-[#E8A84C] -ml-2 pl-2" : "";
+  const editedClass = state.edited ? "border-l-2 border-dew -ml-2 pl-2" : "";
 
   return (
     <div
-      className={`group relative rounded-md px-1 py-0.5 transition hover:bg-[#FFF8F5] focus-within:bg-white focus-within:shadow-[0_0_0_2px_rgba(255,71,87,0.15)] ${annotationClass} ${editedClass}`}
+      className={`group relative rounded-xl px-1.5 py-1 transition hover:bg-moss/18 focus-within:bg-white focus-within:shadow-[0_0_0_2px_rgba(185,206,209,0.28)] ${annotationClass} ${editedClass}`}
       data-paragraph-id={paragraphId}
     >
-      <span className="pointer-events-none absolute right-0 -top-5 hidden rounded border border-[#F0EEEB] bg-white px-1.5 py-px text-[9px] text-[#A8A4A0] group-hover:block group-focus-within:block group-focus-within:border-[#FFD6CC] group-focus-within:text-[#FF4757]">
+      <span className="pointer-events-none absolute right-0 -top-5 hidden rounded-full border border-black/[0.05] bg-white px-2 py-px text-[9px] text-obsidian/34 shadow-sm group-hover:block group-focus-within:block group-focus-within:border-dew/45 group-focus-within:text-obsidian/55">
         双击编辑
       </span>
       <div
@@ -394,8 +400,8 @@ function EditableParagraph({
           title="标记为优质"
           active={state.annotation === "liked"}
           disabled={pending}
-          activeClass="text-[#3D8C40] bg-[#F0FAF0] border-[#3D8C40]"
-          hoverClass="hover:text-[#3D8C40] hover:bg-[#F0FAF0] hover:border-[#3D8C40]"
+          activeClass="text-[#49715A] bg-moss border-[#49715A]"
+          hoverClass="hover:text-[#49715A] hover:bg-moss/70 hover:border-[#49715A]"
           onClick={() => {
             env?.registerRegenerateAnchor?.(module.moduleId, paragraphId);
             const prev = state.annotation;
@@ -413,8 +419,8 @@ function EditableParagraph({
           title="标记待修正"
           active={state.annotation === "disliked"}
           disabled={pending}
-          activeClass="text-[#E04040] bg-[#FFF0EE] border-[#E04040]"
-          hoverClass="hover:text-[#E04040] hover:bg-[#FFF0EE] hover:border-[#E04040]"
+          activeClass="text-[#9A5558] bg-[#FFF5F3] border-[#9A5558]"
+          hoverClass="hover:text-[#9A5558] hover:bg-[#FFF5F3] hover:border-[#9A5558]"
           onClick={() => {
             env?.registerRegenerateAnchor?.(module.moduleId, paragraphId);
             const prev = state.annotation;
@@ -433,7 +439,7 @@ function EditableParagraph({
           active={false}
           disabled={pending}
           activeClass=""
-          hoverClass="hover:text-[#E04040] hover:bg-[#FFF0EE] hover:border-[#E04040]"
+          hoverClass="hover:text-[#9A5558] hover:bg-[#FFF5F3] hover:border-[#9A5558]"
           onClick={() => {
             env?.registerRegenerateAnchor?.(module.moduleId, paragraphId);
             if (typeof window !== "undefined" && window.confirm("确定删除这段内容？")) {
@@ -478,7 +484,7 @@ function ParaIconButton({
         e.stopPropagation();
         onClick();
       }}
-      className={`flex h-6 w-6 items-center justify-center rounded-md border border-[#E8E5E0] bg-white text-[12px] text-[#A8A4A0] transition ${
+      className={`flex h-6 w-6 items-center justify-center rounded-full border border-black/[0.06] bg-white/90 text-[12px] text-obsidian/32 shadow-sm transition ${
         active ? activeClass : hoverClass
       } disabled:cursor-not-allowed disabled:opacity-50`}
     >
@@ -526,8 +532,8 @@ function ParagraphFeedbackMini({
         title="赞"
         active={annotation === "liked"}
         disabled={pending}
-        activeClass="text-[#3D8C40] bg-[#F0FAF0] border-[#3D8C40]"
-        hoverClass="hover:text-[#3D8C40] hover:bg-[#F0FAF0]"
+        activeClass="text-[#49715A] bg-moss border-[#49715A]"
+        hoverClass="hover:text-[#49715A] hover:bg-moss/70"
         onClick={() => {
           env?.registerRegenerateAnchor?.(module.moduleId, paragraphId);
           const prev = annotation;
@@ -545,8 +551,8 @@ function ParagraphFeedbackMini({
         title="踩"
         active={annotation === "disliked"}
         disabled={pending}
-        activeClass="text-[#E04040] bg-[#FFF0EE] border-[#E04040]"
-        hoverClass="hover:text-[#E04040] hover:bg-[#FFF0EE]"
+        activeClass="text-[#9A5558] bg-[#FFF5F3] border-[#9A5558]"
+        hoverClass="hover:text-[#9A5558] hover:bg-[#FFF5F3]"
         onClick={() => {
           env?.registerRegenerateAnchor?.(module.moduleId, paragraphId);
           const prev = annotation;
@@ -574,7 +580,7 @@ function TagRowView({ section }: { section: TagRowSection }) {
         {section.tags.map((tag) => (
           <span
             key={tag}
-            className="rounded-[5px] border border-[#F5E6CC] bg-[#FFF8F0] px-2.5 py-[3px] text-[11px] text-[#8B6914]"
+            className="rounded-full border border-dew/35 bg-dew/10 px-3 py-1 text-[11px] font-medium text-obsidian/55"
           >
             {tag}
           </span>
@@ -589,7 +595,7 @@ function CaseCardView({ section }: { section: CaseCardSection }) {
   if (deleted) return null;
 
   return (
-    <div className="relative mt-2 rounded-lg border border-[#F0EEEB] px-[14px] py-[12px]">
+    <div className="relative mt-2 rounded-2xl border border-black/[0.05] bg-white/70 px-4 py-3 shadow-sm">
       <button
         type="button"
         title="删除此案例"
@@ -599,20 +605,20 @@ function CaseCardView({ section }: { section: CaseCardSection }) {
             setDeleted(true);
           }
         }}
-        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-md border border-[#E8E5E0] bg-white text-[12px] text-[#A8A4A0] transition hover:border-[#E04040] hover:bg-[#FFF0EE] hover:text-[#E04040]"
+        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full border border-black/[0.06] bg-white text-[12px] text-obsidian/32 transition hover:border-[#9A5558] hover:bg-[#FFF5F3] hover:text-[#9A5558]"
       >
         ✗
       </button>
-      <div className="text-[12px] font-semibold leading-tight">{section.title}</div>
+      <div className="pr-8 text-[12px] font-semibold leading-tight text-obsidian">{section.title}</div>
       {section.meta.length ? (
-        <div className="mt-0.5 flex gap-2.5 text-[10px] text-[#A8A4A0]">
+        <div className="mt-1 flex gap-2.5 text-[10px] text-obsidian/32">
           {section.meta.map((m) => (
             <span key={m}>{m}</span>
           ))}
         </div>
       ) : null}
       {section.description ? (
-        <div className="mt-1 text-[11px] leading-[1.5] text-[#5A5550]">{section.description}</div>
+        <div className="mt-2 text-[11px] leading-5 text-obsidian/52">{section.description}</div>
       ) : null}
     </div>
   );
@@ -646,7 +652,7 @@ function CoverThumb({
   if (!hasUrl || failed) {
     return (
       <div
-        className="flex items-center justify-center rounded border border-[#F0EEEB] bg-[#F5F3F0] text-[9px] text-[#A8A4A0]"
+        className="flex items-center justify-center rounded-xl border border-black/[0.05] bg-fog text-[9px] text-obsidian/28"
         style={boxStyle}
       >
         无图
@@ -661,7 +667,7 @@ function CoverThumb({
       referrerPolicy="no-referrer"
       loading="lazy"
       onError={() => setFailed(true)}
-      className="rounded border border-[#F0EEEB] object-cover"
+      className="rounded-xl border border-black/[0.05] object-cover shadow-sm"
       style={boxStyle}
     />
   );
@@ -705,19 +711,19 @@ function DataTableView({
     <div>
       {section.disclaimer ? (
         <div
-          className="mb-2.5 rounded border-l-[3px] border-[#E8E5E0] bg-[#FAFAF8] px-3 py-2 text-[11px] text-[#A8A4A0]"
+          className="mb-3 rounded-2xl border border-black/[0.05] bg-white/65 px-3 py-2 text-[11px] leading-5 text-obsidian/38"
         >
           {section.disclaimer}
         </div>
       ) : null}
-      <div className="overflow-x-auto">
-        <table className="mt-2 w-full border-collapse text-[12px]">
+      <div className="overflow-x-auto rounded-2xl border border-black/[0.05] bg-white/72">
+        <table className="w-full border-collapse text-[12px]">
           <thead>
             <tr>
               {section.headers.map((h) => (
                 <th
                   key={h}
-                  className="border-b border-[#F0EEEB] px-2.5 py-[7px] text-left text-[10px] font-semibold text-[#8A8580]"
+                  className="border-b border-black/[0.05] bg-fog/45 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-obsidian/42"
                 >
                   {h}
                 </th>
@@ -733,7 +739,7 @@ function DataTableView({
                     const isLast = cidx === row.length - 1;
                     const showFeedback = isLast && pid && env?.taskId && env.realtime;
                     return (
-                      <td key={cidx} className="border-b border-[#F5F3F0] px-2.5 py-[9px] align-middle">
+                      <td key={cidx} className="border-b border-black/[0.035] px-3 py-2.5 align-middle text-obsidian/62">
                         {showFeedback ? (
                           <div className="flex w-full min-w-0 items-center justify-between gap-2">
                             <div className="min-w-0 flex-1">
@@ -768,12 +774,12 @@ function DataTableCellView({ cell }: { cell: DataTableCell }) {
   if (cell.tagColor) {
     const style =
       cell.tagColor === "red"
-        ? { background: "#FFF0EE", color: "#FF4757" }
+        ? { background: "#FFF5F3", color: "#9A5558" }
         : cell.tagColor === "green"
-          ? { background: "#F0FAF0", color: "#3D8C40" }
+          ? { background: "#E8F0E8", color: "#49715A" }
           : { background: "#FFF8E6", color: "#8B6914" };
     return (
-      <span className="inline-block rounded px-2 py-0.5 text-[10px] font-semibold" style={style}>
+      <span className="inline-block rounded-full px-2.5 py-1 text-[10px] font-semibold" style={style}>
         {cell.text ?? ""}
       </span>
     );
@@ -805,7 +811,7 @@ function ViralMatrixView({
 }) {
   if (!section.models.length && !section.unusedDirections.length) {
     return (
-      <p className="mt-2 text-[12px] text-[#A8A4A0]">
+      <p className="mt-2 text-[12px] text-obsidian/32">
         <em>暂无爆文模型矩阵(等待样本聚类完成)。</em>
       </p>
     );
@@ -813,13 +819,13 @@ function ViralMatrixView({
 
   return (
     <div className="mt-2 space-y-3">
-      <div className="text-[11px] text-[#8A8580]">
+      <div className="text-[11px] text-obsidian/42">
         总样本 {section.totalSampleCount} 条 · 统计轴
-        <span className="ml-1 rounded bg-[#F5F3F0] px-1.5 py-px text-[#5A5550]">
+        <span className="ml-1 rounded-full bg-obsidian/[0.06] px-2 py-0.5 text-obsidian/55">
           {section.statsAxisLabel}
         </span>
         {section.taxonomyVersion ? (
-          <span className="ml-2 text-[#C5C0BA]">taxonomy v{section.taxonomyVersion}</span>
+          <span className="ml-2 text-obsidian/25">taxonomy v{section.taxonomyVersion}</span>
         ) : null}
       </div>
 
@@ -856,41 +862,41 @@ function ViralModelCard({
 
   return (
     <div
-      className="rounded-[10px] border border-[#F0EEEB] bg-white"
+      className="overflow-hidden rounded-2xl border border-black/[0.05] bg-white/72 shadow-sm"
       data-paragraph-id={model.paragraph_id ?? undefined}
     >
       <div
-        className="flex cursor-pointer items-center justify-between px-3 py-2 hover:bg-[#FAFAF8]"
+        className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 transition hover:bg-moss/20"
         onClick={() => setOpen((v) => !v)}
       >
-        <div className="flex items-center gap-2">
-          <span className="rounded bg-[#FFF0EE] px-2 py-0.5 text-[11px] font-bold text-[#FF4757]">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="rounded-full bg-dew/18 px-2.5 py-1 text-[11px] font-bold text-[#6F9095]">
             {model.model_id || "M?"}
           </span>
-          <span className="text-[13px] font-semibold text-[#3E3A36]">{model.name || "(未命名)"}</span>
-          <span className="text-[10px] text-[#A8A4A0]">
+          <span className="text-[13px] font-semibold text-obsidian">{model.name || "(未命名)"}</span>
+          <span className="text-[10px] text-obsidian/34">
             coverage {coveragePct}% · 均互动 {Math.trunc(model.avg_interaction).toLocaleString("zh-CN")}
           </span>
           {model.paragraph_id && env?.taskId && env.realtime ? (
             <ParagraphFeedbackMini paragraphId={model.paragraph_id} module={module} env={env} />
           ) : null}
         </div>
-        <span className={`text-[14px] text-[#C5C0BA] transition ${open ? "rotate-90" : ""}`}>▸</span>
+        <span className={`text-[14px] text-obsidian/25 transition ${open ? "rotate-90" : ""}`}>▸</span>
       </div>
 
       {model.description ? (
-        <div className="px-3 pb-1 text-[11px] leading-[1.5] text-[#8A8580]">{model.description}</div>
+        <div className="px-4 pb-3 text-[11px] leading-5 text-obsidian/48">{model.description}</div>
       ) : null}
 
       {open ? (
-        <div className="border-t border-[#F5F3F0] px-3 py-2">
+        <div className="border-t border-black/[0.04] px-4 py-3">
           {ELEMENT_ORDER.map((code) => {
             const cats = model.elements[code] ?? [];
             if (!cats.length) return null;
             return <ElementRow key={code} code={code} categories={cats} module={module} env={env} />;
           })}
           {ELEMENT_ORDER.every((c) => !(model.elements[c] ?? []).length) ? (
-            <p className="text-[11px] text-[#A8A4A0]">
+            <p className="text-[11px] text-obsidian/32">
               <em>该模型暂无 6 要素分布数据。</em>
             </p>
           ) : null}
@@ -913,8 +919,8 @@ function ElementRow({
 }) {
   const label = ELEMENT_LABEL_MAP[code] ?? code;
   return (
-    <div className="mt-2 flex gap-3 first:mt-0">
-      <div className="w-[68px] flex-shrink-0 pt-[2px] text-[11px] font-semibold text-[#5A5550]">
+    <div className="mt-2.5 flex gap-3 first:mt-0">
+      <div className="w-[68px] flex-shrink-0 pt-[4px] text-[11px] font-semibold text-obsidian/55">
         {label}
       </div>
       <div className="flex flex-1 flex-col gap-1.5">
@@ -944,12 +950,12 @@ function CategoryBar({
 
   return (
     <div
-      className="rounded-md border border-[#F5F3F0] bg-[#FAFAF8] px-2 py-1.5"
+      className="rounded-xl border border-black/[0.045] bg-fog/32 px-3 py-2"
       data-paragraph-id={category.paragraph_id ?? undefined}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] text-[#3E3A36]">{category.type || "(未分类)"}</span>
-        <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-[#8A8580]">
+        <span className="text-[12px] text-obsidian/68">{category.type || "(未分类)"}</span>
+        <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-obsidian/42">
           <span>
             {ratioPct}% · {category.count} 条
           </span>
@@ -958,9 +964,9 @@ function CategoryBar({
           ) : null}
         </span>
       </div>
-      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[#F0EEEB]">
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-obsidian/[0.06]">
         <div
-          className="h-full rounded-full bg-[#FFD6CC]"
+          className="h-full rounded-full bg-dew"
           style={{ width: `${ratioPct}%` }}
         />
       </div>
@@ -988,21 +994,21 @@ function UnusedDirectionsPanel({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-[10px] border border-[#F5E6CC] bg-[#FFF8F0]">
+    <div className="overflow-hidden rounded-2xl border border-[#F1E3B6] bg-[#FFF8E6]/70">
       <div
-        className="flex cursor-pointer items-center justify-between px-3 py-2 text-[11px] font-semibold text-[#8B6914] hover:bg-[#FFF5E0]"
+        className="flex cursor-pointer items-center justify-between px-4 py-3 text-[11px] font-semibold text-[#8B6914] transition hover:bg-[#FFF8E6]"
         onClick={() => setOpen((v) => !v)}
       >
         <span>不做的方向(互动量高但链路差 · {directions.length} 条)</span>
-        <span className={`text-[14px] text-[#C5C0BA] transition ${open ? "rotate-90" : ""}`}>▸</span>
+        <span className={`text-[14px] text-[#8B6914]/45 transition ${open ? "rotate-90" : ""}`}>▸</span>
       </div>
       {open ? (
-        <ul className="space-y-1 px-3 pb-2 text-[11px] text-[#5A5550]">
+        <ul className="space-y-1 px-4 pb-3 text-[11px] text-obsidian/58">
           {directions.map((d, idx) => (
             <li key={`${d.direction}-${idx}`}>
               <span className="font-semibold">{d.direction}</span>
-              <span className="text-[#A8A4A0]"> · 占比 {Math.round(d.ratio * 100)}% · 均互动 {d.avg_interaction.toLocaleString("zh-CN")}</span>
-              {d.reason ? <span className="text-[#A8A4A0]"> · {d.reason}</span> : null}
+              <span className="text-obsidian/34"> · 占比 {Math.round(d.ratio * 100)}% · 均互动 {d.avg_interaction.toLocaleString("zh-CN")}</span>
+              {d.reason ? <span className="text-obsidian/34"> · {d.reason}</span> : null}
             </li>
           ))}
         </ul>

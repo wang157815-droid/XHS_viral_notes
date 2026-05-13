@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { apiGet, apiUpload } from "@/lib/api-client";
@@ -71,7 +71,8 @@ export default function KnowledgePage() {
   return (
     <>
       <PageHeader title="知识库 · RAG 文档" />
-      <div className="flex-1 overflow-y-auto bg-[#FAFAF8] px-8 py-6">
+      <div className="relative flex-1 overflow-y-auto bg-[radial-gradient(circle_at_85%_8%,rgba(185,206,209,0.22),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.7),rgba(247,247,245,0.94))] px-6 py-6 lg:px-8">
+        <div className="pointer-events-none absolute left-[8%] top-24 h-44 w-44 rounded-full bg-moss/45 blur-3xl" />
         <DocumentsView
           docs={docs}
           loading={loading}
@@ -130,12 +131,23 @@ function DocumentsView({
     }
   };
 
+  const sortedDocs = useMemo(
+    () =>
+      [...docs].sort((a, b) => {
+        const ta = a.uploaded_at ? Date.parse(a.uploaded_at) : 0;
+        const tb = b.uploaded_at ? Date.parse(b.uploaded_at) : 0;
+        return tb - ta;
+      }),
+    [docs],
+  );
+
   return (
-    <section className="rounded-[14px] border border-[#F0EEEB] bg-white p-6 shadow-sm">
+    <section className="canvas-card relative mx-auto max-w-[1180px] border border-black/[0.04] bg-gradient-to-br from-white/92 via-white/84 to-moss/[0.08] p-6 shadow-[0_22px_60px_rgba(26,26,26,0.075)] backdrop-blur-xl">
       <header className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <div className="text-[15px] font-bold">RAG 文档</div>
-          <div className="mt-1 text-[12px] text-[#A8A4A0]">
+          <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-obsidian/28">Knowledge Base</div>
+          <div className="mt-1 font-serif text-[24px] font-semibold tracking-[-0.03em] text-obsidian">RAG 文档</div>
+          <div className="mt-1 text-[12px] leading-5 text-obsidian/42">
             支持 PDF / Word / Markdown / TXT，单文件 ≤ 10MB；上传后自动解析、分块并写入 pgvector。
           </div>
         </div>
@@ -143,7 +155,7 @@ function DocumentsView({
           <button
             type="button"
             onClick={() => void onRefresh()}
-            className="rounded-lg border border-[#E8E5E0] bg-white px-3 py-1.5 text-[12px] text-[#5A5550] hover:bg-[#F5F3F0]"
+            className="rounded-full border border-black/[0.06] bg-white/75 px-4 py-2 text-[12px] font-semibold text-obsidian/50 shadow-sm transition hover:bg-moss hover:text-obsidian"
           >
             刷新
           </button>
@@ -151,7 +163,7 @@ function DocumentsView({
             type="button"
             onClick={triggerPick}
             disabled={uploading || !canUpload}
-            className="rounded-lg bg-[#FF4757] px-4 py-1.5 text-[13px] font-semibold text-white hover:bg-[#E8404F] disabled:cursor-not-allowed disabled:bg-[#FFB6BD]"
+            className="rounded-full border border-obsidian bg-obsidian px-4 py-2 text-[12px] font-semibold text-papyrus shadow-sm transition hover:bg-obsidian/86 disabled:cursor-not-allowed disabled:border-fog disabled:bg-fog disabled:text-obsidian/24"
           >
             {uploading ? "上传中..." : canUpload ? "+ 上传文档" : "无上传权限"}
           </button>
@@ -166,14 +178,19 @@ function DocumentsView({
       </header>
 
       {loading ? (
-        <div className="py-12 text-center text-[13px] text-[#A8A4A0]">加载中...</div>
+        <div className="py-12 text-center text-[13px] text-obsidian/32">加载中...</div>
       ) : docs.length === 0 ? (
-        <div className="rounded-[12px] border border-dashed border-[#E8E5E0] bg-[#FAFAF8] py-12 text-center text-[13px] text-[#A8A4A0]">
-          还没有任何文档，点击右上角「+ 上传文档」开始构建 RAG 知识库。
+        <div className="flex flex-col items-center justify-center rounded-[24px] border border-dashed border-black/[0.09] bg-gradient-to-b from-fog/55 to-white/35 py-16 text-center">
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" className="mb-3 text-obsidian/16">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+          </svg>
+          <p className="max-w-sm text-[14px] text-obsidian/42">还没有任何文档资产</p>
+          <p className="mt-1 text-[12px] text-obsidian/30">点击「+ 上传文档」添加 PDF / Word / Markdown / TXT，自动分块并向量化。</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {docs.map((doc) => (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {sortedDocs.map((doc) => (
             <DocCard
               key={doc.doc_id}
               doc={doc}
@@ -202,33 +219,37 @@ function DocCard({
   const icon = getDocIconStyle(doc.format);
   const status = (doc.vector_status || "").toLowerCase();
   const statusBadge = (() => {
-    if (status === "indexed") return { bg: "#F0FAF0", color: "#3D8C40", label: "已向量化" };
+    if (status === "indexed") return { bg: "#E8F0E8", color: "#49715A", label: "已向量化" };
     if (status === "pending") return { bg: "#FFF8E6", color: "#8B6914", label: "向量化中" };
     if (status === "skipped") return { bg: "#F5F3F0", color: "#5A5550", label: "未向量化" };
-    if (status === "failed") return { bg: "#FFF2F2", color: "#C62828", label: "向量化失败" };
+    if (status === "failed") return { bg: "#FFF5F3", color: "#9A5558", label: "向量化失败" };
     return null;
   })();
 
+  const uploadedLabel = formatUploadedAt(doc.uploaded_at);
+
   return (
-    <article className="flex flex-col gap-3 rounded-[12px] border border-[#F0EEEB] bg-white p-4 transition hover:border-[#E0DCD6] hover:shadow-sm">
+    <article className="group relative flex flex-col gap-3 overflow-hidden rounded-[26px] border border-black/[0.05] bg-gradient-to-br from-white/96 via-white/88 to-moss/[0.06] p-4 pl-[18px] shadow-[var(--redmuse-soft-shadow)] transition hover:-translate-y-0.5 hover:shadow-[0_22px_56px_rgba(26,26,26,0.08)] before:pointer-events-none before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-gradient-to-b before:from-dew/90 before:to-moss/50">
       <div className="flex items-start gap-3">
         <span
-          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg text-[12px] font-bold"
+          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl text-[12px] font-bold shadow-[0_6px_16px_rgba(26,26,26,0.06)] ring-1 ring-black/[0.04]"
           style={{ background: icon.bg, color: icon.color }}
         >
           {(doc.format || "?").toUpperCase()}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] font-semibold" title={doc.name}>
+          <div className="truncate font-serif text-[15px] font-semibold tracking-tight text-obsidian" title={doc.name}>
             {doc.name}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-[#A8A4A0]">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-obsidian/34">
+            {uploadedLabel ? <span>{uploadedLabel}</span> : null}
+            {uploadedLabel ? <span className="text-obsidian/20">·</span> : null}
             <span>{formatBytes(doc.size_bytes)}</span>
             <span>·</span>
             <span>{doc.chunks} 分块</span>
             {statusBadge ? (
               <span
-                className="rounded px-1.5 py-0.5 text-[11px]"
+                className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
                 style={{ background: statusBadge.bg, color: statusBadge.color }}
               >
                 {statusBadge.label}
@@ -236,17 +257,17 @@ function DocCard({
             ) : null}
           </div>
           {doc.vector_message ? (
-            <div className="mt-1 truncate text-[11px] text-[#A8A4A0]" title={doc.vector_message}>
+            <div className="mt-1 truncate text-[11px] text-obsidian/34" title={doc.vector_message}>
               {doc.vector_message}
             </div>
           ) : null}
         </div>
       </div>
-      <div className="flex items-center justify-end gap-2 border-t border-[#F5F3F0] pt-3">
+      <div className="flex items-center justify-end gap-2 border-t border-black/[0.04] pt-3">
         <button
           type="button"
           onClick={onView}
-          className="rounded border border-[#E8E5E0] bg-white px-3 py-1 text-[12px] text-[#5A5550] hover:bg-[#F5F3F0]"
+          className="rounded-full border border-black/[0.06] bg-white/75 px-3.5 py-1.5 text-[12px] font-semibold text-obsidian/50 hover:bg-moss hover:text-obsidian"
         >
           查看分块
         </button>
@@ -254,7 +275,7 @@ function DocCard({
           <button
             type="button"
             onClick={onDelete}
-            className="rounded border border-[#FFD6D6] bg-[#FFF2F2] px-3 py-1 text-[12px] text-[#C62828] hover:bg-[#FFE0E0]"
+            className="rounded-full border border-[#E8CFC8] bg-[#FFF5F3] px-3.5 py-1.5 text-[12px] font-semibold text-[#9A5558] hover:bg-[#FFF0EE]"
           >
             删除
           </button>
@@ -267,15 +288,15 @@ function DocCard({
 function getDocIconStyle(format: string): { bg: string; color: string } {
   switch ((format || "").toLowerCase()) {
     case "pdf":
-      return { bg: "#FFF0EE", color: "#FF4757" };
+      return { bg: "#FFF5F3", color: "#9A5558" };
     case "docx":
     case "doc":
       return { bg: "#F0F4FF", color: "#4A7AE8" };
     case "md":
     case "markdown":
-      return { bg: "#F0FAF0", color: "#3D8C40" };
+      return { bg: "#E8F0E8", color: "#49715A" };
     default:
-      return { bg: "#F5F3F0", color: "#8A8580" };
+      return { bg: "#F0F0F0", color: "rgba(26,26,26,0.48)" };
   }
 }
 
@@ -283,4 +304,11 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatUploadedAt(iso?: string): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(t);
 }

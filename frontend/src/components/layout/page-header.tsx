@@ -13,8 +13,8 @@ export interface PageHeaderProps {
  */
 export function PageHeader({ title, actions }: PageHeaderProps) {
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-[#F0EEEB] bg-white px-8 py-4">
-      <div className="text-[18px] font-bold">{title}</div>
+    <header className="glass-panel flex items-center justify-between gap-3 border-b border-black/[0.06] px-8 py-5">
+      <div className="font-serif text-[22px] font-semibold tracking-[-0.02em] text-obsidian">{title}</div>
       {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
     </header>
   );

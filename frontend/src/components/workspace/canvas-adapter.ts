@@ -42,8 +42,8 @@ type IconSpec = PrototypeIcon;
 // 新画布模块 + 静态草稿图标表(mod-source-samples 已下线,旧数据过滤不展示)
 const ICON_BY_MODULE: Record<string, IconSpec> = {
   "mod-overview-stats":          { character: "O", bg: "#FFF8F0", color: "#8B6914" },
-  "mod-viral-model-matrix":      { character: "M", bg: "#FFF0EE", color: "#FF4757" },
-  "mod-competitor-samples":      { character: "X", bg: "#FFF0EE", color: "#FF4757" },
+  "mod-viral-model-matrix":      { character: "M", bg: "rgba(185, 206, 209, 0.28)", color: "#4a5d4a" },
+  "mod-competitor-samples":      { character: "X", bg: "rgba(185, 206, 209, 0.28)", color: "#4a5d4a" },
   "mod-competitor-samples-image": { character: "X", bg: "#FFF5F3", color: "#E85D4C" },
   "mod-competitor-samples-video": { character: "X", bg: "#FFECE8", color: "#C73E1D" },
   "mod-top-interaction-samples": { character: "T", bg: "#FFF8F0", color: "#8B6914" },
@@ -219,7 +219,7 @@ function buildOverviewStats(
     kind: "static",
     html:
       `<strong>总样本数:</strong>${total} 篇 · 图文 ${img} / 视频 ${video}` +
-      (keyword ? ` · 关键词 <span style="color:#FF4757">${escapeHtml(keyword)}</span>` : ""),
+      (keyword ? ` · 关键词 <span style="color:#6F9095">${escapeHtml(keyword)}</span>` : ""),
   });
 
   const sourceBreakdown = Array.isArray(content.source_breakdown)

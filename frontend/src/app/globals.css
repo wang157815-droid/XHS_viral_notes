@@ -1,25 +1,82 @@
 @import "tailwindcss";
 
+/* 与参考项目 RED-MUSE-（Vite 原型）index.css 对齐的设计 token */
 :root {
-  --background: #fafaf8;
-  --foreground: #2d2a26;
+  --background: #f7f7f5;
+  --foreground: #1a1a1a;
+  --redmuse-papyrus: #f7f7f5;
+  --redmuse-obsidian: #1a1a1a;
+  --redmuse-moss: #e8f0e8;
+  --redmuse-dew: #b9ced1;
+  --redmuse-fog: #f0f0f0;
+  --redmuse-muted: rgba(26, 26, 26, 0.48);
+  --redmuse-border: rgba(26, 26, 26, 0.08);
+  --redmuse-shadow: 0 24px 70px rgba(26, 26, 26, 0.08);
+  --redmuse-soft-shadow: 0 16px 40px rgba(26, 26, 26, 0.05);
+  --redmuse-editorial-shadow: 0 20px 50px rgba(26, 26, 26, 0.03);
+  --redmuse-warm-shadow: 0 10px 30px rgba(185, 206, 209, 0.2);
+  --redmuse-accent-warm: #f28e82;
+  --redmuse-forest: #4a5d4a;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-papyrus: var(--redmuse-papyrus);
+  --color-obsidian: var(--redmuse-obsidian);
+  --color-moss: var(--redmuse-moss);
+  --color-dew: var(--redmuse-dew);
+  --color-fog: var(--redmuse-fog);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-serif: Georgia, "Times New Roman", "Songti SC", serif;
+  --radius-xl: 32px;
+  --radius-2xl: 48px;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "PingFang SC",
-    "Microsoft YaHei",
-    "Helvetica Neue",
-    sans-serif;
+@layer base {
+  body {
+    @apply bg-papyrus text-obsidian antialiased;
+    font-family:
+      var(--font-geist-sans),
+      -apple-system,
+      BlinkMacSystemFont,
+      "PingFang SC",
+      "Microsoft YaHei",
+      "Helvetica Neue",
+      sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-serif font-semibold tracking-tight text-obsidian;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply border border-white/20 bg-white/40 backdrop-blur-[20px];
+  }
+
+  .canvas-card {
+    overflow: hidden;
+    border-radius: 2rem;
+    border: 1px solid rgba(0, 0, 0, 0.02);
+    background: #fff;
+    box-shadow: var(--redmuse-editorial-shadow);
+    transition: all 0.5s ease;
+  }
+
+  .sidebar-gradient {
+    background: linear-gradient(180deg, rgb(232 240 232 / 0.55) 0%, var(--redmuse-papyrus) 100%);
+  }
+}
+
+::selection {
+  background: rgba(185, 206, 209, 0.35);
+  color: var(--redmuse-obsidian);
 }
