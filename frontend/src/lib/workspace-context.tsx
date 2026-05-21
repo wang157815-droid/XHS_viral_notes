@@ -196,7 +196,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     // 没有快照时：若有 REST 验证状态且流状态未知，用验证状态修正
     if (!snapHasData) {
       if (verifiedTaskStatus && streamState.status === "unknown") {
-        return { ...streamState, status: verifiedTaskStatus };
+        return { ...streamState, status: verifiedTaskStatus as TaskStreamState["status"] };
       }
       return streamState;
     }
