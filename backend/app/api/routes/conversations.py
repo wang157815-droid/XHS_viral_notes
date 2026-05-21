@@ -7,21 +7,28 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field, model_validator
 
 from ...application.conversation_service import ConversationService
 from ...core.config import settings
 from ...core.responses import ok
 from ...core.security import RoleLevel, get_current_user, role_allows
+from ...domain.conversation import new_id
 from ...domain.error_codes import ErrorCode, build_error
+from ...domain.conversation_surfaces import parse_surfaces_query
 from ...services.conversation_store import get_conversation_store
 
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_ALLOWED_UPLOAD_EXT = {".txt", ".md", ".markdown", ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
 class CreateConversationRequest(BaseModel):
@@ -29,13 +36,25 @@ class CreateConversationRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PatchConversationRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=512)
+
+
 class SendMessageRequest(BaseModel):
-    content: str = Field(..., min_length=1)
+    content: str = Field(default="", max_length=32000)
     keywords: List[str] = Field(default_factory=list)
     competitor_keywords: List[str] = Field(default_factory=list)
     advanced_config: Dict[str, Any] = Field(default_factory=dict)
     active_task_id: Optional[str] = None
     client_message_id: Optional[str] = None
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+    knowledge_refs: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _content_or_attachments(self) -> "SendMessageRequest":
+        if not (self.content or "").strip() and not self.attachments:
+            raise ValueError("至少需要输入文字或添加附件")
+        return self
 
 
 class UpdateConversationStateRequest(BaseModel):
@@ -97,6 +116,15 @@ def _require_owned_conversation(conversation_id: str, current_user: Dict[str, An
         )
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
+def _safe_filename(name: str) -> str:
+    base = Path(name).name
+    return re.sub(r"[^a-zA-Z0-9._-]", "_", base)[:180] or "upload"
+
+
 @router.post("")
 async def create_conversation(
     payload: CreateConversationRequest,
@@ -112,24 +140,152 @@ async def create_conversation(
     return ok(conversation.to_dict())
 
 
+@router.post("/uploads")
+async def upload_conversation_file(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """上传对话附件（图片/文档），供发送消息时引用。"""
+    _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
+    uid = _user_id(current_user)
+    raw_name = file.filename or "file"
+    ext = Path(raw_name).suffix.lower()
+    if ext and ext not in _ALLOWED_UPLOAD_EXT:
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}")
+    body = await file.read()
+    if len(body) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="文件超过 10MB 限制")
+    fid = new_id("att")
+    safe = _safe_filename(raw_name)
+    sub = f"{uid}/{fid}_{safe}"
+    base = _repo_root() / "datas" / "conversation_uploads"
+    dest = base / sub
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(body)
+    mime = file.content_type or "application/octet-stream"
+
+    # 立即解析文档（PDF/文本），缓存解析结果供发送消息时直接使用
+    parsed_meta: Optional[Dict[str, Any]] = None
+    if ext in {".pdf", ".txt", ".md", ".markdown", ".doc", ".docx"}:
+        try:
+            from viral_agent.services.knowledge.document_parser import DocumentParser
+
+            parser = DocumentParser()
+            parsed = parser.parse_file(str(dest))
+            parsed_cache = {
+                "text": parsed.get("text") or "",
+                "metadata": parsed.get("metadata") or {},
+            }
+            (dest.parent / f"{dest.name}.parsed.json").write_text(
+                json.dumps(parsed_cache, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            meta = parsed.get("metadata") or {}
+            parsed_meta = {
+                "word_count": meta.get("word_count"),
+                "pages": meta.get("pages"),
+                "format": meta.get("format"),
+            }
+        except Exception:
+            # 解析失败不阻塞上传，发送消息时回落到现场解析
+            pass
+
+    return ok(
+        {
+            "file_id": fid,
+            "filename": raw_name,
+            "mime_type": mime,
+            "size_bytes": len(body),
+            "storage_subpath": sub.replace("\\", "/"),
+            "parsed": parsed_meta,
+        }
+    )
+
+
+def _upload_subpath_for_user(uid: str, subpath: str) -> Path:
+    sub = (subpath or "").strip().replace("\\", "/")
+    if not sub or ".." in sub:
+        raise HTTPException(status_code=400, detail="无效的 subpath")
+    prefix = f"{uid}/"
+    if not sub.startswith(prefix) or len(sub) <= len(prefix):
+        raise HTTPException(status_code=403, detail="无权访问该附件")
+    base = _repo_root() / "datas" / "conversation_uploads"
+    path = base / sub
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="附件不存在")
+    return path
+
+
+@router.get("/uploads/content")
+async def download_conversation_upload(
+    subpath: str = Query(..., description="上传接口返回的 storage_subpath"),
+    current_user: dict = Depends(get_current_user),
+):
+    """下载本人上传的对话附件（供前端带鉴权拉取预览）。"""
+    _ensure_conversation_enabled()
+    uid = _user_id(current_user)
+    path = _upload_subpath_for_user(uid, subpath)
+    mime = "application/octet-stream"
+    ext = path.suffix.lower()
+    guessed = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".markdown": "text/markdown; charset=utf-8",
+    }
+    if ext in guessed:
+        mime = guessed[ext]
+    return FileResponse(path, filename=path.name, media_type=mime)
+
+
 @router.get("")
 async def list_conversations(
     include_all: bool = Query(False),
     include_archived: bool = Query(False),
     keyword: Optional[str] = Query(None),
+    surfaces: Optional[str] = Query(
+        None,
+        description="逗号分隔：insight,hotspot,post_investment；不传则返回全部",
+    ),
     limit: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
 ):
     _ensure_conversation_enabled()
     include_all_effective = include_all and role_allows(current_user.get("role"), RoleLevel.admin)
+    surface_list = parse_surfaces_query(surfaces)
     items = get_conversation_store().list_for_owner(
         _user_id(current_user),
         limit=limit,
         include_all=include_all_effective,
         include_archived=include_archived,
         keyword=keyword,
+        surfaces=surface_list,
     )
     return ok({"items": items, "include_all_effective": include_all_effective})
+
+
+@router.patch("/{conversation_id}")
+async def patch_conversation(
+    conversation_id: str,
+    payload: PatchConversationRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
+    _require_owned_conversation(conversation_id, current_user)
+    if payload.title is None:
+        raise HTTPException(status_code=400, detail="至少需要提供 title")
+    conversation = get_conversation_store().update_conversation(
+        conversation_id,
+        title=payload.title,
+        metadata_patch={"auto_titled": False, "manual_titled": True},
+    )
+    return ok(conversation.to_dict())
 
 
 @router.get("/{conversation_id}")
@@ -245,6 +401,8 @@ async def send_message(
         active_task_id=payload.active_task_id,
         client_message_id=payload.client_message_id,
         current_user=current_user,
+        attachments=payload.attachments,
+        knowledge_refs=payload.knowledge_refs,
     )
     return ok(
         {
@@ -278,6 +436,8 @@ async def send_message_stream(
             active_task_id=payload.active_task_id,
             client_message_id=payload.client_message_id,
             current_user=current_user,
+            attachments=payload.attachments,
+            knowledge_refs=payload.knowledge_refs,
         ):
             data = json.dumps(event, ensure_ascii=False)
             yield f"event: conversation\ndata: {data}\n\n"

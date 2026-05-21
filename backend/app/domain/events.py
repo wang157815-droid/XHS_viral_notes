@@ -34,6 +34,10 @@ class TaskEventType(str, Enum):
     # 视频异步分析支路结束(阶段 4.2)：主任务 DONE 后,视频模块还在后台分析;
     # 分析收尾后发此事件,前端 SSE 客户端据此关闭保活连接。
     TASK_VIDEO_DONE = "task_video_done"
+    # LLM 流式推理片段（按句子推送，支持 <think> 推理链提取）
+    AGENT_THINKING_CHUNK = "agent_thinking_chunk"
+    # 某个 Agent 的流式推理结束
+    AGENT_THINKING_DONE = "agent_thinking_done"
 
 
 @dataclass

@@ -26,10 +26,11 @@ class KnowledgeQAService:
         intent: IntentClassification,
         conversation_summary: str = "",
         current_user: Optional[Dict[str, Any]] = None,
+        restrict_doc_ids: Optional[List[str]] = None,
     ) -> Tuple[str, List[KnowledgeCitation], Dict[str, Any]]:
         queries = self._rewrite_queries(question, conversation_summary)
         try:
-            raw_results = await self._search(queries, current_user=current_user)
+            raw_results = await self._search(queries, current_user=current_user, restrict_doc_ids=restrict_doc_ids)
         except Exception as exc:
             logger.warning("Knowledge QA retrieval unavailable: {}", exc)
             return (
@@ -86,9 +87,10 @@ class KnowledgeQAService:
         intent: IntentClassification,
         conversation_summary: str = "",
         current_user: Optional[Dict[str, Any]] = None,
+        restrict_doc_ids: Optional[List[str]] = None,
     ) -> Tuple[List[Dict[str, str]], List[KnowledgeCitation], Dict[str, Any]]:
         queries = self._rewrite_queries(question, conversation_summary)
-        raw_results = await self._search(queries, current_user=current_user)
+        raw_results = await self._search(queries, current_user=current_user, restrict_doc_ids=restrict_doc_ids)
         citations = self._to_citations(raw_results)
         if not citations:
             return (
@@ -119,6 +121,7 @@ class KnowledgeQAService:
         queries: List[str],
         *,
         current_user: Optional[Dict[str, Any]] = None,
+        restrict_doc_ids: Optional[List[str]] = None,
     ) -> List[Any]:
         rag = self._create_rag()
         combined: List[Any] = []
@@ -133,6 +136,7 @@ class KnowledgeQAService:
                 0.0,
                 owner_user_id,
                 include_all,
+                restrict_doc_ids,
             )
             combined.extend(results or [])
         return combined

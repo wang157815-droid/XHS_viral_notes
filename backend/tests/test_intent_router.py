@@ -11,12 +11,6 @@ def test_intent_router_classifies_xhs_analysis():
     assert result.extracted_keywords == ["防晒"]
 
 
-def test_intent_router_classifies_knowledge_qa():
-    result = IntentRouter().classify(content="知识库里护肤合规规则怎么说")
-
-    assert result.intent == "knowledge_qa"
-    assert result.should_retrieve_knowledge is True
-
 
 def test_intent_router_classifies_refine_when_task_active():
     result = IntentRouter().classify(content="把产品植入改得更自然", active_task_id="task_1")

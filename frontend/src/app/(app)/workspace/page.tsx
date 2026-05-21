@@ -7,6 +7,7 @@ import { useSession } from "@/lib/session-context";
 import { useWorkspace } from "@/lib/workspace-context";
 import { CanvasView } from "@/components/workspace/canvas-view";
 import { ChatPanel, type AdvancedConfig } from "@/components/workspace/chat-panel";
+import { ResizeDivider } from "@/components/workspace/resize-divider";
 import { adaptCanvas } from "@/components/workspace/canvas-adapter";
 import {
   DEMO_CANVAS,
@@ -21,8 +22,25 @@ import {
   generateIdempotencyKey,
 } from "@/lib/api-client";
 import { getAuthToken } from "@/lib/auth-storage";
-import { createConversation, getConversation, sendConversationMessageStream } from "@/lib/conversation-api";
-import type { CanvasSchema, ChatMessage, ConversationStreamEvent } from "@/lib/contracts";
+import {
+  createConversation,
+  getConversation,
+  sendConversationMessageStream,
+  uploadConversationFile,
+} from "@/lib/conversation-api";
+import type {
+  CanvasSchema,
+  ChatMessage,
+  ConversationStreamEvent,
+  ConversationSurface,
+} from "@/lib/contracts";
+
+const SURFACE_QUERY_VALUES = new Set<string>(["insight", "hotspot", "post_investment"]);
+
+function surfaceFromQuery(raw: string | null): ConversationSurface | undefined {
+  if (!raw || !SURFACE_QUERY_VALUES.has(raw)) return undefined;
+  return raw as ConversationSurface;
+}
 
 /** 优先使用模块更完整的画布，避免 SSE 截断/空 payload 覆盖 REST 兜底。 */
 function pickCanvas(
@@ -59,6 +77,8 @@ function pickCanvas(
 }
 
 export default function WorkspacePage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const {
     taskId,
     lastUserInput,
@@ -91,12 +111,15 @@ export default function WorkspacePage() {
   const [controlBusy, setControlBusy] = useState(false);
   const [canvasRefreshing, setCanvasRefreshing] = useState(false);
   const [toast, setToast] = useState<{ type: "ok" | "err"; message: string } | null>(null);
+  /** 可拖拽分隔器控制 ChatPanel 宽度 [300, 768] px */
+  const [chatWidth, setChatWidth] = useState(380);
+  const handleResizeDrag = useCallback((dx: number) => {
+    setChatWidth((w) => Math.min(768, Math.max(300, w + dx)));
+  }, []);
   const regenAnchorRef = useRef<{ moduleId: string; paragraphId: string } | null>(null);
   const registerRegenerateAnchor = useCallback((moduleId: string, paragraphId: string) => {
     regenAnchorRef.current = { moduleId, paragraphId };
   }, []);
-  const autoExpandedTaskRef = useRef<string | null>(null);
-
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 3500);
@@ -140,23 +163,6 @@ export default function WorkspacePage() {
   // 只要非进行中且存在真实画布数据，就允许展示画布与右上角按钮。
   const canShowCanvas = Boolean(taskId && realtime && !taskInProgress);
 
-  // 画布可展示时，每个 task 仅自动展开一次，避免用户手动收起后被强制展开。
-  useEffect(() => {
-    if (!taskId) {
-      autoExpandedTaskRef.current = null;
-      return;
-    }
-    if (!canShowCanvas) {
-      autoExpandedTaskRef.current = null;
-      return;
-    }
-    if (autoExpandedTaskRef.current === taskId) return;
-    if (canShowCanvas && canvasCollapsed) {
-      setCanvasCollapsed(false);
-      autoExpandedTaskRef.current = taskId;
-    }
-  }, [taskId, canShowCanvas, canvasCollapsed, setCanvasCollapsed]);
-
   const handleRefreshCanvas = useCallback(async () => {
     if (!taskId || !realtime) {
       setToast({ type: "err", message: "请先发起一次真实分析再刷新画布" });
@@ -193,28 +199,71 @@ export default function WorkspacePage() {
   );
 
   const handleSubmit = useCallback(
-    async ({ rawInput, keywords, advanced }: {
+    async ({
+      rawInput,
+      keywords,
+      advanced,
+      attachments = [],
+      knowledgeRefs = [],
+      localMediaFiles,
+    }: {
       rawInput: string;
       keywords: string[];
       advanced: AdvancedConfig;
+      attachments?: Array<{
+        file_id: string;
+        filename: string;
+        mime_type: string;
+        size_bytes: number;
+        storage_subpath: string;
+      }>;
+      knowledgeRefs?: Array<{ doc_id: string; title?: string }>;
+      localMediaFiles?: File[];
     }) => {
       if (!canWriteConversation) {
         setToast({ type: "err", message: "只读成员不能发送消息或发起分析" });
-        return;
+        return false;
       }
+
+      const mergedAttachments: Array<{
+        file_id: string;
+        filename: string;
+        mime_type: string;
+        size_bytes: number;
+        storage_subpath: string;
+      }> = [...(attachments ?? [])];
+      // 兼容旧逻辑：如果 attachments 已包含预上传结果，直接使用；否则从 localMediaFiles 上传
+      if (!mergedAttachments.length && localMediaFiles?.length) {
+        for (const file of localMediaFiles) {
+          const uploaded = await uploadConversationFile(file);
+          if (!uploaded.ok) {
+            setToast({
+              type: "err",
+              message: `「${file.name}」上传失败：${uploaded.error.message}`,
+            });
+            return false;
+          }
+          mergedAttachments.push(uploaded.data);
+        }
+      }
+
       setCreating(true);
       setToast(null);
       const clientMessageId = generateIdempotencyKey();
       let currentConversationId = conversationId ?? "pending_conversation";
       try {
         if (!conversationId) {
-          const created = await createConversation(rawInput.slice(0, 24) || "新对话");
+          const surface = surfaceFromQuery(searchParams.get("surface")) ?? "insight";
+          const created = await createConversation(
+            rawInput.trim().slice(0, 24) || (localMediaFiles?.[0]?.name ?? "").slice(0, 24) || "新对话",
+            { surface },
+          );
           if (!created.ok) {
             setToast({
               type: "err",
               message: `创建会话失败：${created.error.code} · ${created.error.message}`,
             });
-            return;
+            return false;
           }
           currentConversationId = created.data.conversation_id;
           setConversation(currentConversationId, []);
@@ -232,7 +281,8 @@ export default function WorkspacePage() {
           citations: [],
           task_handoff: null,
           linked_task_id: taskId,
-          debug: { optimistic: true },
+          debug: { optimistic: true, knowledge_refs: knowledgeRefs },
+          attachments: mergedAttachments as unknown as Array<Record<string, unknown>>,
           created_at: new Date().toISOString(),
         };
         appendConversationMessages([optimisticMessage]);
@@ -240,6 +290,9 @@ export default function WorkspacePage() {
         let assistantMessageId = `stream_${clientMessageId}`;
         let assistantContent = "";
         let assistantInserted = false;
+        // 积累本轮思考内容（供最终消息渲染思考框用）
+        let thinkContent = "";
+        let thinkDurationMs = 0;
         const makeAssistantMessage = (patch: Partial<ChatMessage> = {}): ChatMessage => ({
           message_id: assistantMessageId,
           conversation_id: currentConversationId,
@@ -266,7 +319,12 @@ export default function WorkspacePage() {
           assistantMessageId = message.message_id;
         };
         const handleFinalAssistant = (message: ChatMessage) => {
-          upsertAssistant(message);
+          // 将本轮积累的思考内容合并进 debug，供渲染思考框使用
+          const enriched: ChatMessage =
+            thinkContent
+              ? { ...message, debug: { ...(message.debug ?? {}), think_content: thinkContent, think_duration_ms: thinkDurationMs } }
+              : message;
+          upsertAssistant(enriched);
           const handoff = message.task_handoff;
           if (handoff?.task_id) {
             startTask(handoff.task_id, rawInput);
@@ -297,6 +355,8 @@ export default function WorkspacePage() {
             advancedConfig: advanced as unknown as Record<string, unknown>,
             activeTaskId: taskId,
             clientMessageId,
+            attachments: mergedAttachments as unknown as Array<Record<string, unknown>>,
+            knowledgeRefs,
           },
           (event: ConversationStreamEvent) => {
             if (event.type === "user_message") {
@@ -324,6 +384,22 @@ export default function WorkspacePage() {
               upsertAssistant(makeAssistantMessage({ message_id: event.message_id, content: assistantContent }));
               return;
             }
+            if (event.type === "thinking_done") {
+              thinkContent = event.think || thinkContent;
+              thinkDurationMs = event.duration_ms || 0;
+              upsertAssistant(makeAssistantMessage({ debug: { streaming: true, thinking_live: false, think_content: thinkContent, think_duration_ms: thinkDurationMs } }));
+              return;
+            }
+            if (event.type === "thinking_start") {
+              thinkContent = "";
+              upsertAssistant(makeAssistantMessage({ debug: { streaming: true, thinking_live: true, think_content: "", think_duration_ms: 0 } }));
+              return;
+            }
+            if (event.type === "thinking_delta") {
+              thinkContent += event.delta;
+              upsertAssistant(makeAssistantMessage({ debug: { streaming: true, thinking_live: true, think_content: thinkContent, think_duration_ms: 0 } }));
+              return;
+            }
             if (event.type === "message_done") {
               if (event.assistant_message) {
                 handleFinalAssistant(event.assistant_message);
@@ -331,6 +407,13 @@ export default function WorkspacePage() {
               }
               assistantContent = event.content || assistantContent;
               upsertAssistant(makeAssistantMessage({ message_id: event.message_id, content: assistantContent, debug: { streaming: false } }));
+              return;
+            }
+            if (event.type === "conversation_updated") {
+              // LLM 标题生成完毕，此时才刷新侧边栏（避免先出现旧标题再闪变）
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(new Event("redmuse-conversations-refresh"));
+              }
               return;
             }
             if (event.type === "assistant_message") {
@@ -343,6 +426,7 @@ export default function WorkspacePage() {
             }
           },
         );
+        return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         appendConversationMessages([
@@ -362,14 +446,19 @@ export default function WorkspacePage() {
           },
         ]);
         setToast({ type: "err", message: `发送消息失败：${message}` });
+        return false;
       } finally {
         setCreating(false);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("redmuse-conversations-refresh"));
+        }
       }
     },
     [
       appendConversationMessages,
       conversationId,
       replaceConversationMessage,
+      searchParams,
       setConversation,
       setModuleBusy,
       startTask,
@@ -382,7 +471,12 @@ export default function WorkspacePage() {
 
   const handleNewAnalysis = useCallback(() => {
     resetWorkspace();
-  }, [resetWorkspace]);
+    const surface = surfaceFromQuery(searchParams.get("surface"));
+    router.replace(
+      surface ? `/workspace?surface=${encodeURIComponent(surface)}` : "/workspace",
+      { scroll: false },
+    );
+  }, [resetWorkspace, router, searchParams]);
 
   const handleModuleAction = useCallback(
     async (module: PrototypeModule, action: PrototypeAction) => {
@@ -399,12 +493,18 @@ export default function WorkspacePage() {
       }
 
       if (
+        action.id === "regen_sheet2_narrative" ||
+        action.id === "rename_models" ||
         action.id === "regenerate" ||
         action.id === "regenerate_cascade" ||
         action.id === "delete" ||
         action.id === "restore"
       ) {
-        const isRegen = action.id === "regenerate" || action.id === "regenerate_cascade";
+        const isRegen =
+          action.id === "regen_sheet2_narrative" ||
+          action.id === "rename_models" ||
+          action.id === "regenerate" ||
+          action.id === "regenerate_cascade";
         const path =
           isRegen
             ? `/tasks/${encodeURIComponent(taskId)}/modules/${encodeURIComponent(module.moduleId)}/regenerate`
@@ -418,10 +518,13 @@ export default function WorkspacePage() {
           const paragraphId =
             isRegen && anchor && anchor.moduleId === module.moduleId ? anchor.paragraphId : undefined;
           const cascade = action.id === "regenerate_cascade";
+          const actionHint =
+            action.id === "regen_sheet2_narrative" ? "regen_sheet2_narrative" :
+            action.id === "rename_models" ? "rename_models" : "";
           const res = await apiPost(
             path,
             isRegen
-              ? { instruction: "", cascade, paragraph_id: paragraphId, feedback_hint: "" }
+              ? { instruction: "", cascade, paragraph_id: paragraphId, feedback_hint: "", action_hint: actionHint }
               : { reason: "user_action" },
             {
               withAuth: true,
@@ -529,7 +632,14 @@ export default function WorkspacePage() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${taskId}.${format === "excel" ? "xlsx" : "json"}`;
+        // 从响应头解析服务端生成的文件名，解析不到则降级
+        const cd = res.headers.get("Content-Disposition") ?? "";
+        const nameMatch = cd.match(/filename\*=UTF-8''([^;]+)/i)
+          ?? cd.match(/filename="([^"]+)"/i);
+        const filename = nameMatch
+          ? decodeURIComponent(nameMatch[1])
+          : `${taskId}.${format === "excel" ? "xlsx" : "json"}`;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -575,6 +685,8 @@ export default function WorkspacePage() {
           showCanvasToggle={canShowCanvas}
           canWriteConversation={canWriteConversation}
           canWriteTask={canWriteTask}
+          canReadKnowledge={can("knowledge.read")}
+          chatWidth={chatWidth}
           onToggleCanvas={toggleCanvasCollapsed}
           onSubmit={handleSubmit}
           onNewAnalysis={handleNewAnalysis}
@@ -583,19 +695,26 @@ export default function WorkspacePage() {
           onResume={handleResume}
           onCancel={handleCancel}
         />
-        <CanvasView
-          canvas={canvasModel}
-          collapsed={!canShowCanvas || canvasCollapsed}
-          onToggleCollapsed={() => setCanvasCollapsed(!canvasCollapsed)}
-          onRefresh={() => void handleRefreshCanvas()}
-          refreshBusy={canvasRefreshing}
-          refreshDisabled={!taskId || !realtime}
-          onExportExcel={() => downloadExport("excel")}
-          onExportJson={() => downloadExport("json")}
-          onModuleAction={canWriteTask ? handleModuleAction : undefined}
-          busyModuleIds={busyModuleIds}
-          paragraphEnv={paragraphEnv}
-        />
+        {!canvasCollapsed && canShowCanvas ? (
+          <>
+            <ResizeDivider onDrag={handleResizeDrag} />
+            <div className="min-w-[504px] flex-1 flex flex-col overflow-hidden">
+              <CanvasView
+                canvas={canvasModel}
+                collapsed={false}
+                onToggleCollapsed={() => setCanvasCollapsed(!canvasCollapsed)}
+                onRefresh={() => void handleRefreshCanvas()}
+                refreshBusy={canvasRefreshing}
+                refreshDisabled={!taskId || !realtime}
+                onExportExcel={() => downloadExport("excel")}
+                onExportJson={() => downloadExport("json")}
+                onModuleAction={canWriteTask ? handleModuleAction : undefined}
+                busyModuleIds={busyModuleIds}
+                paragraphEnv={paragraphEnv}
+              />
+            </div>
+          </>
+        ) : null}
       </div>
     </>
   );
@@ -603,49 +722,71 @@ export default function WorkspacePage() {
 
 /**
  * URL 同步：
- * - `?new=<ts>` → 触发 reset，然后清 query（侧边栏"新建分析"按钮用）
- * - `?task=<id>` → 一次性加载该任务后立即清除 URL 参数（历史任务页跳转用）
- * - `?conversation=<id>` → 恢复历史对话；若绑定 active_task_id，同时恢复 Canvas
- *
- * URL 参数消费后会清除，避免刷新时重复触发。
+ * - `?new=<ts>` → 触发 reset，然后清 query（侧边栏「新建」用）
+ * - `?task=<id>` → 一次性加载该任务后清除 URL 参数（历史任务页跳转用）
+ * - `?conversation=<id>` → 拉取并恢复对话；**保留** `conversation` 在地址栏，便于刷新、分享、收藏
+ * - 当上下文已有 `conversationId` 但与地址栏不一致时，写入 `?conversation=`（新建会话后等）
  */
 function WorkspaceUrlSync() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { resetWorkspace, setTaskId, setConversation } = useWorkspace();
+  const { resetWorkspace, setTaskId, setConversation, conversationId } = useWorkspace();
 
   const newFlag = searchParams.get("new");
   const urlTask = searchParams.get("task");
   const urlConversation = searchParams.get("conversation");
+  const surfaceQ = searchParams.get("surface");
 
-  // ?new=<ts> → reset 回初始界面
+  // ?new=<ts> → reset 回初始界面（保留 surface 供新建会话 metadata 使用）
   useEffect(() => {
     if (!newFlag) return;
     resetWorkspace();
-    router.replace("/workspace");
-  }, [newFlag, resetWorkspace, router]);
+    const surface = surfaceFromQuery(surfaceQ);
+    router.replace(surface ? `/workspace?surface=${encodeURIComponent(surface)}` : "/workspace", { scroll: false });
+  }, [newFlag, surfaceQ, resetWorkspace, router]);
 
-  // ?conversation=<id> → 恢复对话；有关联任务时同步恢复 Canvas
+  // 上下文会话 id 与地址栏不一致时，补上 `conversation`（创建会话、继续对话等）
+  useEffect(() => {
+    if (newFlag) return;
+    if (!conversationId) return;
+    if (searchParams.get("conversation") === conversationId) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("new");
+    params.delete("task");
+    params.set("conversation", conversationId);
+    const qs = params.toString();
+    router.replace(qs ? `/workspace?${qs}` : "/workspace", { scroll: false });
+  }, [conversationId, newFlag, router, searchParams]);
+
+  // ?conversation=<id> → 恢复对话；有关联任务时同步恢复 Canvas（地址栏保留 conversation）
   useEffect(() => {
     if (newFlag || !urlConversation) return;
+    if (conversationId === urlConversation) return;
     let cancelled = false;
     void (async () => {
       const res = await getConversation(urlConversation);
       if (cancelled) return;
-      if (res.ok) {
-        setConversation(res.data.conversation.conversation_id, res.data.messages);
-        if (res.data.conversation.active_task_id) {
-          setTaskId(res.data.conversation.active_task_id);
-        } else {
-          setTaskId(null);
-        }
+      const surface = surfaceFromQuery(surfaceQ);
+      const fallbackPath = surface ? `/workspace?surface=${encodeURIComponent(surface)}` : "/workspace";
+      if (!res.ok) {
+        router.replace(fallbackPath, { scroll: false });
+        return;
       }
-      router.replace("/workspace");
+      setConversation(res.data.conversation.conversation_id, res.data.messages);
+      if (res.data.conversation.active_task_id) {
+        setTaskId(res.data.conversation.active_task_id);
+      } else {
+        setTaskId(null);
+      }
+      const params = new URLSearchParams();
+      params.set("conversation", res.data.conversation.conversation_id);
+      if (surface) params.set("surface", surface);
+      router.replace(`/workspace?${params.toString()}`, { scroll: false });
     })();
     return () => {
       cancelled = true;
     };
-  }, [urlConversation, newFlag, setConversation, setTaskId, router]);
+  }, [urlConversation, newFlag, conversationId, surfaceQ, setConversation, setTaskId, router]);
 
   // ?task=<id> → 一次性加载任务，然后清 URL 参数
   useEffect(() => {
@@ -658,7 +799,7 @@ function WorkspaceUrlSync() {
       );
       if (cancelled) return;
       setTaskId(urlTask, res.ok ? res.data.raw_input ?? null : null);
-      router.replace("/workspace");
+      router.replace("/workspace", { scroll: false });
     })();
     return () => {
       cancelled = true;

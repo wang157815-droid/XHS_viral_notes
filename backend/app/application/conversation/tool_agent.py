@@ -193,17 +193,6 @@ class ConversationToolAgent:
                     )
                 ]
             )
-        if intent.intent == "knowledge_qa":
-            return ConversationToolDecision(
-                calls=[
-                    ConversationToolCall(
-                        name="answer_with_knowledge",
-                        arguments={"question": content, "top_k": 5},
-                        confidence=intent.confidence,
-                        reason="rule fallback knowledge_qa",
-                    )
-                ]
-            )
         if intent.intent == "export":
             return ConversationToolDecision(
                 calls=[

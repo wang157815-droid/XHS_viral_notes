@@ -187,8 +187,10 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     task_handoff JSONB,
     linked_task_id VARCHAR(64),
     debug JSONB,
+    attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS conversation_messages_conv_created_idx
     ON conversation_messages(conversation_id, created_at ASC);
 

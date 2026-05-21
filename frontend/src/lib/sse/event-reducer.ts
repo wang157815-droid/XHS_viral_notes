@@ -26,6 +26,12 @@ export interface TaskStreamState {
   error: { code: string; message: string } | null;
   /** 视频异步支路状态(阶段 4.2): pending / completed / partial(部分失败) / failed */
   videoAsyncState: "idle" | "pending" | "completed" | "partial" | "failed";
+  /** 按 agent_id 累积的流式推理文本 */
+  agentThinking: Record<string, string>;
+  /** 标记某 agent 推理是否结束 */
+  agentThinkingDone: Record<string, boolean>;
+  /** 按 agent_id 分组的结构化日志 */
+  agentLogs: Record<string, TaskLogEntry[]>;
 }
 
 export function initialTaskStreamState(): TaskStreamState {
@@ -38,6 +44,9 @@ export function initialTaskStreamState(): TaskStreamState {
     lastEventAt: null,
     error: null,
     videoAsyncState: "idle",
+    agentThinking: {},
+    agentThinkingDone: {},
+    agentLogs: {},
   };
 }
 
@@ -49,6 +58,9 @@ export function reduceTaskEvent(
     ...state,
     logs: state.logs,
     agentStatus: state.agentStatus,
+    agentThinking: state.agentThinking,
+    agentThinkingDone: state.agentThinkingDone,
+    agentLogs: state.agentLogs,
     lastEventAt: event.timestamp || state.lastEventAt,
   };
 
@@ -60,38 +72,79 @@ export function reduceTaskEvent(
       break;
     }
     case "agent_progress": {
-      const payload = event.payload as { agent_id?: string; message?: string; progress?: number };
+      const payload = event.payload as { agent_id?: string; message?: string; progress?: number; done?: boolean };
       next.progress = typeof payload.progress === "number" ? payload.progress : state.progress;
       const agentId = payload.agent_id ?? "agent";
       const message = payload.message ?? "";
-      next.logs = appendLog(next.logs, {
-        event_id: event.event_id,
-        timestamp: event.timestamp,
-        level: "info",
-        message: `[${agentId}] ${message}`,
-        branch_id: event.branch_id,
-        agent_id: agentId,
-      });
+      const isDone = Boolean(payload.done);
+      // done=true 是内部完成标记，无实际 message，不写入日志
+      if (message) {
+        next.logs = appendLog(next.logs, {
+          event_id: event.event_id,
+          timestamp: event.timestamp,
+          level: "info",
+          message: `[${agentId}] ${message}`,
+          branch_id: event.branch_id,
+          agent_id: agentId,
+        });
+      }
       next.agentStatus = {
         ...state.agentStatus,
         [agentId]: {
           agent_id: agentId,
-          message,
+          // 保留上一条非空 message，避免 done 标记把文字清空
+          message: message || (state.agentStatus[agentId]?.message ?? ""),
           lastAt: event.timestamp,
-          done: state.agentStatus[agentId]?.done ?? false,
+          done: isDone || (state.agentStatus[agentId]?.done ?? false),
         },
       };
+      // 同步标记 thinkingDone，停止思考光标闪烁
+      if (isDone) {
+        next.agentThinkingDone = {
+          ...state.agentThinkingDone,
+          [agentId]: true,
+        };
+      }
       break;
     }
     case "log": {
-      const payload = event.payload as { level?: TaskLogEntry["level"]; message?: string };
-      next.logs = appendLog(next.logs, {
+      const payload = event.payload as { level?: TaskLogEntry["level"]; message?: string; agent_id?: string };
+      const logEntry: TaskLogEntry = {
         event_id: event.event_id,
         timestamp: event.timestamp,
         level: payload.level ?? "info",
         message: payload.message ?? "",
         branch_id: event.branch_id,
-      });
+        agent_id: payload.agent_id,
+      };
+      next.logs = appendLog(next.logs, logEntry);
+      // 同时按 agent_id 分组
+      if (payload.agent_id) {
+        const existing = state.agentLogs[payload.agent_id] ?? [];
+        next.agentLogs = {
+          ...state.agentLogs,
+          [payload.agent_id]: appendLog(existing, logEntry),
+        };
+      }
+      break;
+    }
+    case "agent_thinking_chunk": {
+      const payload = event.payload as { agent_id?: string; chunk?: string };
+      const agentId = payload.agent_id ?? "agent";
+      const chunk = payload.chunk ?? "";
+      next.agentThinking = {
+        ...state.agentThinking,
+        [agentId]: (state.agentThinking[agentId] ?? "") + chunk,
+      };
+      break;
+    }
+    case "agent_thinking_done": {
+      const payload = event.payload as { agent_id?: string };
+      const agentId = payload.agent_id ?? "agent";
+      next.agentThinkingDone = {
+        ...state.agentThinkingDone,
+        [agentId]: true,
+      };
       break;
     }
     case "canvas_schema_updated": {
@@ -113,6 +166,12 @@ export function reduceTaskEvent(
         merged[aid] = { ...entry, done: true };
       }
       next.agentStatus = merged;
+      // 同时标记所有 agent thinking 为 done
+      const thinkingDone: Record<string, boolean> = { ...state.agentThinkingDone };
+      for (const aid of Object.keys(state.agentThinking)) {
+        thinkingDone[aid] = true;
+      }
+      next.agentThinkingDone = thinkingDone;
       break;
     }
     case "canvas_module_updated": {
@@ -142,6 +201,12 @@ export function reduceTaskEvent(
         merged[aid] = { ...entry, done: true };
       }
       next.agentStatus = merged;
+      // 同时标记所有 agent thinking 为 done
+      const thinkingDone: Record<string, boolean> = { ...state.agentThinkingDone };
+      for (const aid of Object.keys(state.agentThinking)) {
+        thinkingDone[aid] = true;
+      }
+      next.agentThinkingDone = thinkingDone;
       // 阶段 4.2: DONE 若带 video_pending=true,视频支路仍在后台
       const videoPending = Boolean(
         (event.payload as { video_pending?: boolean } | undefined)?.video_pending,
@@ -183,6 +248,10 @@ export function reduceTaskEvent(
 }
 
 function appendLog(logs: TaskLogEntry[], entry: TaskLogEntry): TaskLogEntry[] {
+  // 按 event_id 去重：SSE 重连回放 backlog 时同一事件可能被发送两次
+  if (entry.event_id && logs.some((l) => l.event_id === entry.event_id)) {
+    return logs;
+  }
   const next = [...logs, entry];
   if (next.length > 200) {
     return next.slice(-150);

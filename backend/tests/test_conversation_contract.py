@@ -32,6 +32,7 @@ def test_create_get_and_append_messages(conversation_client):
     conversation = create.json()["data"]
     assert conversation["title"] == "4.4 会话"
     assert conversation["metadata"]["recent_keywords"] == ["测试"]
+    assert conversation["metadata"].get("surface") == "insight"
 
     conversation_id = conversation["conversation_id"]
     send = client.post(
@@ -143,3 +144,54 @@ def test_conversation_stream_general_answer(monkeypatch, conversation_client):
     assert response.status_code == 200
     assert '"type": "message_delta"' in body
     assert "你好呀" in body
+
+
+def test_download_conversation_upload_preview(conversation_client, tmp_path, monkeypatch):
+    from backend.app.api.routes import conversations as conversations_route
+
+    client, _ = conversation_client
+    monkeypatch.setattr(conversations_route, "_repo_root", lambda: tmp_path)
+    base = tmp_path / "datas" / "conversation_uploads" / "u1"
+    base.mkdir(parents=True)
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+    (base / "att_x.png").write_bytes(png)
+    sub = "u1/att_x.png"
+    r = client.get(f"/api/v1/conversations/uploads/content?subpath={sub}")
+    assert r.status_code == 200
+    assert r.headers.get("content-type", "").startswith("image/png")
+
+
+def test_download_conversation_upload_rejects_other_user_path(conversation_client, tmp_path, monkeypatch):
+    from backend.app.api.routes import conversations as conversations_route
+
+    client, _ = conversation_client
+    monkeypatch.setattr(conversations_route, "_repo_root", lambda: tmp_path)
+    base = tmp_path / "datas" / "conversation_uploads" / "u2"
+    base.mkdir(parents=True)
+    (base / "secret.png").write_bytes(b"x")
+    r = client.get("/api/v1/conversations/uploads/content?subpath=u2/secret.png")
+    assert r.status_code == 403
+
+
+def test_patch_conversation_title(conversation_client):
+    client, _ = conversation_client
+    cid = client.post("/api/v1/conversations", json={"title": "旧标题"}).json()["data"]["conversation_id"]
+    r = client.patch(f"/api/v1/conversations/{cid}", json={"title": "新标题"})
+    assert r.status_code == 200
+    assert r.json()["data"]["title"] == "新标题"
+
+
+def test_list_conversations_surfaces_filter(conversation_client):
+    client, store = conversation_client
+    a = store.create(owner_user_id="u1", title="A", metadata={"surface": "insight"})
+    b = store.create(owner_user_id="u1", title="B", metadata={"surface": "hotspot"})
+    store.create(owner_user_id="u1", title="C", metadata={"surface": "post_investment"})
+    r = client.get("/api/v1/conversations?surfaces=insight,hotspot&limit=50")
+    assert r.status_code == 200
+    ids = {x["conversation_id"] for x in r.json()["data"]["items"]}
+    assert a.conversation_id in ids
+    assert b.conversation_id in ids
+    assert len(ids) == 2

@@ -129,6 +129,13 @@ class VideoAnalysisAgent(BaseAgent):
             f"视频分析:开始并发标注 {len(picked)} 条视频(concurrency={_CONCURRENCY})",
             progress=40,
         )
+        await self._emit_thinking_chunk(
+            task_id,
+            f"开始批量标注 {len(picked)} 条视频笔记，"
+            f"逐条提取视觉风格、标题钩子、封面类型、开篇方式、产品引出与植入方式六大要素，"
+            f"以及用户痛点关键词与内容方向...\n",
+            is_reasoning=True,
+        )
 
         # ---- 并发同步执行 ----
         system_prompt_base = prompt_registry.load("video_6elements.md")
@@ -136,10 +143,21 @@ class VideoAnalysisAgent(BaseAgent):
         system_prompt = system_prompt_base + "\n\n" + taxonomy_hint
 
         semaphore = asyncio.Semaphore(_CONCURRENCY)
+        done_count = 0
+        total_count = len(picked)
 
         async def _one(note: Dict[str, Any]) -> tuple[str, Optional[Dict[str, Any]]]:
+            nonlocal done_count
             async with semaphore:
-                return await self._annotate_video(task_id, system_prompt, note)
+                result = await self._annotate_video(task_id, system_prompt, note)
+            done_count += 1
+            if done_count % 10 == 0 or done_count == total_count:
+                await self._emit_thinking_chunk(
+                    task_id,
+                    f"已标注 {done_count}/{total_count} 条视频笔记...\n",
+                    is_reasoning=True,
+                )
+            return result
 
         results = await asyncio.gather(
             *[_one(n) for n in picked], return_exceptions=False
@@ -154,6 +172,15 @@ class VideoAnalysisAgent(BaseAgent):
                 success += 1
             else:
                 failed += 1
+
+        rate = int(success / total_count * 100) if total_count else 0
+        await self._emit_thinking_chunk(
+            task_id,
+            f"视频标注完成：{success}/{total_count} 条成功（成功率 {rate}%），"
+            f"已提取六要素分布、用户痛点与内容方向，数据将输入爆文模型聚类。\n",
+            is_reasoning=True,
+        )
+        await self._emit_thinking_done(task_id)
 
         # 不在枚举内的值直接写入 taxonomy(幻觉/自拟兜底)
         await self._feed_pending_types(annotations)

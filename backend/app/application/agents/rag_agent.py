@@ -118,23 +118,23 @@ class RAGAgent(BaseAgent):
             f"【原始查询】{query_text or '(空)'}\n"
             f"【关键词】{', '.join(keywords) if keywords else '(空)'}"
         )
+        _messages = [
+            {"role": "system", "content": rewrite_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        _overrides = {
+            "temperature": 0.2,
+            "max_tokens": 600,
+        }
 
         for attempt in range(1, 3):
             try:
-                response = await self._gateway.chat(
-                    agent_id=self.agent_id,
-                    messages=[
-                        {"role": "system", "content": rewrite_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    task_id=task_id,
-                    overrides={
-                        "temperature": 0.2,
-                        "max_tokens": 300,
-                        "response_format": {"type": "json_object"},
-                    },
+                text = await self.chat_stream_and_emit(
+                    task_id,
+                    _messages,
+                    overrides=_overrides,
                 )
-                text = (response.get("content") or "").strip()
+                text = text.strip()
                 parsed = extract_json_object(text)
                 if parsed:
                     rq = parsed.get("rewritten_queries") or []

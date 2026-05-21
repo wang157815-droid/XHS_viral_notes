@@ -9,7 +9,9 @@
 
 **重要**: `pain_points_top` 与 `seo_aggregation.core_keywords/long_tail` 由后端 deterministic 聚合,**你不需要再输出这两个字段的频次数据**。你只负责输出"内容方向总结 + 差异化建议 + 可选轴名"。
 
-## 输出格式(严格 JSON,不要 markdown 代码块)
+## 输出格式(先写一句分析摘要，再输出 JSON)
+
+先用**一句话**概括你观察到的核心规律（例如："该品类爆文以场景沉浸型为主，竞品集中布局功效差异化"），然后换行输出 JSON（不要 markdown 代码块）：
 
 ```json
 {

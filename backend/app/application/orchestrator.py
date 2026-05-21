@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -122,14 +122,29 @@ class AgentOrchestrator:
             handle.raise_if_cancelled()
 
             # Stage 3: Image ‖ Video (并行 6 要素标注,共享 multimodal_output.annotations)
+            # 读取 InputParser 输出的 pipeline_config 动态裁剪不需要的 Agent
+            parsed_cfg = (
+                (context.get("input_spec") or {}).get("parsed") or {}
+            ).get("pipeline_config") or {}
+            run_video = bool(parsed_cfg.get("run_video_analysis", True))
+            run_rag = bool(parsed_cfg.get("run_rag", True))
+
             multimodal_branches = {
                 "image": lambda: self._run_stage(
                     agent_context, self._image, stage="image_analysis"
                 ),
-                "video": lambda: self._run_stage(
-                    agent_context, self._video, stage="video_analysis"
-                ),
             }
+            if run_video:
+                multimodal_branches["video"] = lambda: self._run_stage(
+                    agent_context, self._video, stage="video_analysis"
+                )
+            else:
+                await task_event_bus.publish_event(
+                    task_id=task_id,
+                    type=TaskEventType.TASK_STATUS,
+                    payload={"status": "running", "stage": "video_analysis", "skipped": True, "reason": "pipeline_config.run_video_analysis=false"},
+                )
+                logger.info("[Orchestrator] task={} stage=video_analysis 已跳过（pipeline_config）", task_id)
             mm_results = await execution_coordinator.run_branches(
                 handle, multimodal_branches
             )
@@ -150,10 +165,18 @@ class AgentOrchestrator:
             handle.raise_if_cancelled()
 
             # Stage 5: Insight ‖ RAG (并行)
-            branches = {
+            branches: Dict[str, Any] = {
                 "insight": lambda: self._run_stage(agent_context, self._insight, stage="insight"),
-                "rag": lambda: self._run_stage(agent_context, self._rag, stage="rag"),
             }
+            if run_rag:
+                branches["rag"] = lambda: self._run_stage(agent_context, self._rag, stage="rag")
+            else:
+                await task_event_bus.publish_event(
+                    task_id=task_id,
+                    type=TaskEventType.TASK_STATUS,
+                    payload={"status": "running", "stage": "rag", "skipped": True, "reason": "pipeline_config.run_rag=false"},
+                )
+                logger.info("[Orchestrator] task={} stage=rag 已跳过（pipeline_config）", task_id)
             branch_results = await execution_coordinator.run_branches(handle, branches)
             for name, result in branch_results.items():
                 if not result.ok:
@@ -246,6 +269,12 @@ class AgentOrchestrator:
                 agent_context.task_id,
                 stage,
                 agent.agent_id,
+            )
+            # 通知前端该 agent 已完成，前端据此将步骤图标切绿、自动收回
+            await task_event_bus.publish_event(
+                task_id=agent_context.task_id,
+                type=TaskEventType.AGENT_PROGRESS,
+                payload={"agent_id": agent.agent_id, "message": "", "done": True},
             )
             ctx = agent_context.task_context
             task_repository.bump_context_version(agent_context.task_id, ctx.context_version)

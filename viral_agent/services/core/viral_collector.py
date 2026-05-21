@@ -700,19 +700,17 @@ class ViralNoteCollector:
                     # 使用handle_note_info处理原始数据，正确提取视频URL等字段
                     try:
                         item = items[0]
-                        # handle_note_info函数期望数据中有url字段，需要先添加
                         item['url'] = note_url
                         processed_data = handle_note_info(item)
                         return processed_data
                     except Exception as e:
                         logger.warning(f"处理笔记数据失败 {note_url}: {e}，返回原始note_card")
-                        # 如果处理失败，返回原始note_card
                         return items[0].get('note_card', {})
                 else:
-                    # items为空，可能是笔记被删除或不存在
-                    logger.debug(f"笔记详情items为空: {note_url}")
+                    # items为空，可能是笔记被删除、xsec_token过期或风控
+                    logger.warning(f"笔记详情items为空: url={note_url}, msg={msg}")
             else:
-                logger.debug(f"获取笔记详情失败: {msg}")
+                logger.warning(f"获取笔记详情失败: success={success}, msg={msg}, url={note_url}")
         else:
             logger.error(f"意外的返回格式: {type(result)}")
 
@@ -778,24 +776,45 @@ class ViralNoteCollector:
                     logger.debug(f"[{dimension_name}] 第 {page} 页无结果，停止")
                     break
 
+                # 诊断：打印第1页第1条 note_url，便于排查 xsec_token 是否缺失
+                if page == 1 and search_results:
+                    first_url = search_results[0].get('note_url', 'NO_URL')
+                    has_token = 'xsec_token=' in first_url and 'xsec_token=&' not in first_url
+                    logger.info(
+                        f"[{dimension_name}] 首条URL样本: "
+                        f"{'有xsec_token' if has_token else '⚠️ 无/空xsec_token'} "
+                        f"| {first_url[:100]}"
+                    )
+
                 # 获取笔记详情
+                page_success = 0
+                page_fail = 0
                 for note_brief in search_results:
                     note_url = note_brief.get('note_url', '')
                     if not note_url:
+                        page_fail += 1
                         continue
 
                     try:
                         note_detail = await self._get_note_detail_async(note_url)
                         if note_detail:
                             notes.append(note_detail)
+                            page_success += 1
                             if len(notes) >= target_per_dimension:
                                 break
+                        else:
+                            page_fail += 1
                     except Exception as e:
                         logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
+                        page_fail += 1
                         continue
 
                     await asyncio.sleep(1)  # 防止请求过快
 
+                logger.info(
+                    f"[{dimension_name}] 第{page}页: 搜索{len(search_results)}条 "
+                    f"→ 详情成功{page_success}条, 失败{page_fail}条, 累计{len(notes)}条"
+                )
                 page += 1
                 await asyncio.sleep(2)  # 页面间隔
 
@@ -1201,7 +1220,7 @@ class ViralNoteCollector:
                         logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
                         continue
 
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1)  # 防止请求过快
 
                 # 如果连续低于阈值，退出分页循环
                 if consecutive_below_threshold >= 10:

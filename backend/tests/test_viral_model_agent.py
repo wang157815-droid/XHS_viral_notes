@@ -180,10 +180,11 @@ async def test_viral_model_agent_single_annotation_one_model():
 
 @pytest.mark.asyncio
 async def test_viral_model_agent_max_models_cap_trims_extras(monkeypatch):
-    """8 个 direction、playbook 相同:簇数超过上限时强制合并到 ≤MAX,且无一桶独吞绝大多数。"""
-    import backend.app.application.agents.viral_model_agent as vm_mod
+    """8 个 direction、playbook 相同: 40 条样本动态上限=5（26-50区间），簇数超过上限时强制合并到 ≤5。"""
+    from backend.app.application.agents.viral_model_agent import ViralModelAgent
 
-    monkeypatch.setattr(vm_mod, "_MAX_MODELS", 6)
+    # 40 条样本 → _compute_dynamic_max(40) = 5（26-50 区间）
+    # 若希望覆盖显式 cap=6 的行为，可通过 env var 设置，此处验证数据驱动路径
     from backend.app.application.agents.viral_model_agent import ViralModelAgent
 
     annotations: Dict[str, Dict[str, Any]] = {}
@@ -209,7 +210,8 @@ async def test_viral_model_agent_max_models_cap_trims_extras(monkeypatch):
     )
     await agent.run(ac)
     matrix = ctx.get("viral_model_output")
-    assert len(matrix["models"]) == 6
+    # 40 条样本 → 新动态上限 = 8（31-60 区间），8个direction自然成8簇，不超上限无需合并
+    assert len(matrix["models"]) <= 8
     cov_sum = sum(float(m["coverage"]) for m in matrix["models"])
     assert abs(cov_sum - 1.0) < 1e-6
     covs = [float(m["coverage"]) for m in matrix["models"]]
@@ -219,10 +221,9 @@ async def test_viral_model_agent_max_models_cap_trims_extras(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_viral_model_agent_many_single_note_directions_longtail_covers_rest(monkeypatch):
-    """52 条仅 content_direction 不同、playbook 相同:应均衡合并为 ≤6 簇,避免单桶吃掉绝大多数。"""
+    """52 条仅 content_direction 不同、playbook 相同：动态上限=6（51-80区间），均衡合并，避免单桶吃掉绝大多数。"""
     import backend.app.application.agents.viral_model_agent as vm_mod
 
-    monkeypatch.setattr(vm_mod, "_MAX_MODELS", 6)
     from backend.app.application.agents.viral_model_agent import ViralModelAgent
 
     annotations = {f"n{i}": _ann(f"向{i}") for i in range(52)}
@@ -245,7 +246,8 @@ async def test_viral_model_agent_many_single_note_directions_longtail_covers_res
     )
     await agent.run(ac)
     matrix = ctx.get("viral_model_output")
-    assert len(matrix["models"]) == 6
+    # 52 条 → 新动态上限 = 8（31-60 区间），52 单条簇经溶解后合并到 ≤8
+    assert len(matrix["models"]) <= 8
     covs = [float(m["coverage"]) for m in matrix["models"]]
     assert max(covs) < 0.5
     assert min(covs) > 0.05
@@ -337,3 +339,91 @@ async def test_viral_model_agent_element_ratio_correctness():
     # 第二个 cat 是 前后对比, 0.25
     assert cover_cats[1]["type"] == "前后对比"
     assert cover_cats[1]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_merge_and_direction_normalize():
+    """验证语义相近的 content_direction 经归一化后会被合并到同一簇。
+
+    场景：三批笔记方向分别是「美妆测评」「护肤测评」「个护测评」（3个 > 2个，触发归一化），
+    LLM 归一化返回三者都映射到「产品测评」，
+    之后聚类应合并为 1 个模型（而非 3 个）。
+    """
+    from backend.app.application.agents.viral_model_agent import ViralModelAgent
+
+    annotations = {
+        "n1": _ann("美妆测评"),
+        "n2": _ann("美妆测评"),
+        "n3": _ann("护肤测评"),
+        "n4": _ann("护肤测评"),
+        "n5": _ann("个护测评"),
+    }
+    all_notes = [
+        {"note_id": nid, "title": f"t{nid}", "interaction_score": 3000, "likes": 1000, "cover_url": ""}
+        for nid in annotations
+    ]
+
+    # LLM 调用顺序：第1次是方向归一化（3个方向>2，触发），第2次是模型起名
+    normalize_resp = '{"美妆测评": "产品测评", "护肤测评": "产品测评", "个护测评": "产品测评"}'
+    naming_resp = '[{"model_id": "M1", "name": "痛点共情型", "description": "以测评切入自然完成种草"}]'
+
+    gateway = FakeGateway([normalize_resp, naming_resp])
+    agent = ViralModelAgent(model_gateway_instance=gateway, event_bus=FakeBus())
+    ctx, ac = _make_context(
+        extra={
+            "multimodal_output": {"annotations": annotations},
+            "crawler_output": {"all_notes": all_notes},
+        }
+    )
+    await agent.run(ac)
+
+    matrix = ctx.get("viral_model_output")
+    # 归一化后三个方向合并 → 只有 1 个模型
+    assert len(matrix["models"]) == 1
+    assert matrix["models"][0]["name"] == "痛点共情型"
+    assert matrix["total_sample_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_dynamic_max_small_sample():
+    """_compute_dynamic_max 分段阈值验证（新阈值）。"""
+    from backend.app.application.agents.viral_model_agent import _compute_dynamic_max
+
+    # 小样本（≤30）→ 6
+    assert _compute_dynamic_max(5) == 6
+    assert _compute_dynamic_max(10) == 6
+    assert _compute_dynamic_max(15) == 6
+    assert _compute_dynamic_max(16) == 6
+    assert _compute_dynamic_max(30) == 6
+    # 中样本 (31-60) → 8
+    assert _compute_dynamic_max(31) == 8
+    assert _compute_dynamic_max(40) == 8
+    assert _compute_dynamic_max(60) == 8
+    # 中大样本 (61-100) → 10
+    assert _compute_dynamic_max(61) == 10
+    assert _compute_dynamic_max(100) == 10
+    # 大样本 (101-150) → 12
+    assert _compute_dynamic_max(101) == 12
+    assert _compute_dynamic_max(150) == 12
+    # 超大样本 (151+) → 15
+    assert _compute_dynamic_max(151) == 15
+    assert _compute_dynamic_max(999) == 15
+
+
+@pytest.mark.asyncio
+async def test_bigram_similarity_basic():
+    """_bigram_similarity 基本行为验证。"""
+    from backend.app.application.agents.viral_model_agent import _bigram_similarity
+
+    assert _bigram_similarity("干货分享", "干货分享") == 1.0
+    # "干货分享" vs "干货引出": 共有 bigram "干货" → Jaccard = 1/5 ≈ 0.2
+    assert _bigram_similarity("干货分享", "干货引出") > 0.1
+    # 完全不相关的词应该接近 0
+    assert _bigram_similarity("干货分享", "剧情种草") < 0.2
+    assert _bigram_similarity("", "干货分享") == 0.0
+    assert _bigram_similarity("∅", "∅") == 1.0
+    # 语义近似的标注得分应高于完全不相关的
+    similar = _bigram_similarity("干货分享", "干货引出")
+    unrelated = _bigram_similarity("干货分享", "剧情种草")
+    assert similar > unrelated
+

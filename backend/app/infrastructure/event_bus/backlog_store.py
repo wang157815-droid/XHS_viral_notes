@@ -43,7 +43,7 @@ class TaskEventBacklogStore(Protocol):
 
 
 class InMemoryRingBuffer:
-    def __init__(self, *, per_task_capacity: int = 500, ttl_seconds: int = 300) -> None:
+    def __init__(self, *, per_task_capacity: int = 1000, ttl_seconds: int = 3600) -> None:
         self._capacity = per_task_capacity
         self._ttl = ttl_seconds
         self._buffers: Dict[str, Deque[tuple[float, TaskEvent]]] = {}
@@ -119,8 +119,8 @@ class RedisStreamBacklog:
     def __init__(
         self,
         *,
-        per_task_capacity: int = 500,
-        ttl_seconds: int = 300,
+        per_task_capacity: int = 1000,
+        ttl_seconds: int = 3600,
     ) -> None:
         self._capacity = per_task_capacity
         self._ttl = ttl_seconds

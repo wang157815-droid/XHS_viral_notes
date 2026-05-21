@@ -159,29 +159,23 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
 
   return (
     <div
-      className={`group/module overflow-hidden rounded-[26px] border bg-white/82 shadow-[0_18px_48px_rgba(26,26,26,0.055)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(26,26,26,0.08)] ${
+      className={`group/module overflow-hidden rounded-[18px] border bg-white/82 shadow-[0_6px_20px_rgba(26,26,26,0.05)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_12px_36px_rgba(26,26,26,0.07)] ${
         module.highlighted ? "border-dew/55 ring-4 ring-dew/10" : "border-black/[0.05]"
       }`}
     >
       <div
-        className="flex cursor-pointer items-center justify-between gap-4 px-5 py-4 transition hover:bg-moss/25"
+        className="flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 transition hover:bg-moss/25"
         onClick={() => setOpen((v) => !v)}
       >
-        <div className="flex min-w-0 items-center gap-3">
-          <div
-            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl text-[14px] font-bold shadow-sm"
-            style={{ background: module.icon.bg, color: module.icon.color }}
-          >
-            {module.icon.character}
-          </div>
+        <div className="flex min-w-0 items-center gap-2.5">
           <div className="min-w-0">
-            <div className="truncate font-serif text-[18px] font-semibold tracking-[-0.03em] text-obsidian">{module.title}</div>
+            <div className="truncate font-serif text-[15px] font-semibold tracking-[-0.03em] text-obsidian">{module.title}</div>
             {module.badges.length ? (
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <div className="mt-1 flex flex-wrap gap-1">
                 {module.badges.map((badge, idx) => (
                   <span
                     key={idx}
-                    className="rounded-full px-2.5 py-1 text-[10px] font-semibold"
+                    className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
                     style={BADGE_STYLE[badge.color]}
                   >
                     {badge.text}
@@ -191,7 +185,7 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
             ) : null}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           {onActionClick
             ? module.actions.map((action) => {
                 const isDelete = action.id === "delete";
@@ -204,7 +198,7 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
                       e.stopPropagation();
                       onActionClick(module, action);
                     }}
-                    className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold transition ${
+                    className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition ${
                       isDelete
                         ? "border-[#E8CFC8] bg-white/65 text-[#9A5558] hover:bg-[#FFF5F3]"
                         : "border-black/[0.06] bg-white/65 text-obsidian/42 hover:bg-moss hover:text-obsidian"
@@ -215,20 +209,20 @@ export function ModuleCard({ module, busy, onActionClick, paragraphEnv }: Module
                 );
               })
             : null}
-          <span className={`ml-1 text-[16px] text-obsidian/25 transition ${open ? "rotate-90" : ""}`}>
+          <span className={`ml-0.5 text-[14px] text-obsidian/25 transition ${open ? "rotate-90" : ""}`}>
             ▸
           </span>
         </div>
       </div>
 
       {!open && module.summary ? (
-        <div className="px-5 pb-4 pl-[76px] text-[12px] leading-6 text-obsidian/42">
+        <div className="px-4 pb-2.5 pl-[60px] text-[11px] leading-5 text-obsidian/42">
           {module.summary}
         </div>
       ) : null}
 
       {open ? (
-        <div className="border-t border-black/[0.04] px-5 pb-5 pt-4 text-[13px] leading-[1.9] text-obsidian/72">
+        <div className="border-t border-black/[0.04] px-4 pb-4 pt-3 text-[12px] leading-[1.75] text-obsidian/72">
           {module.sections.map((section) => (
             <SectionRenderer key={section.id} section={section} module={module} env={paragraphEnv} />
           ))}
@@ -572,15 +566,15 @@ function ParagraphFeedbackMini({
 
 function TagRowView({ section }: { section: TagRowSection }) {
   return (
-    <div className="mt-[12px]">
-      <p className="mb-[6px]">
+    <div className="mt-[8px]">
+      <p className="mb-[4px]">
         <strong>{section.label}</strong>
       </p>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1">
         {section.tags.map((tag) => (
           <span
             key={tag}
-            className="rounded-full border border-dew/35 bg-dew/10 px-3 py-1 text-[11px] font-medium text-obsidian/55"
+            className="rounded-full border border-dew/35 bg-dew/10 px-2.5 py-0.5 text-[10px] font-medium text-obsidian/55"
           >
             {tag}
           </span>
@@ -595,7 +589,7 @@ function CaseCardView({ section }: { section: CaseCardSection }) {
   if (deleted) return null;
 
   return (
-    <div className="relative mt-2 rounded-2xl border border-black/[0.05] bg-white/70 px-4 py-3 shadow-sm">
+    <div className="relative mt-1.5 rounded-xl border border-black/[0.05] bg-white/70 px-3 py-2 shadow-sm">
       <button
         type="button"
         title="删除此案例"
@@ -605,20 +599,20 @@ function CaseCardView({ section }: { section: CaseCardSection }) {
             setDeleted(true);
           }
         }}
-        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full border border-black/[0.06] bg-white text-[12px] text-obsidian/32 transition hover:border-[#9A5558] hover:bg-[#FFF5F3] hover:text-[#9A5558]"
+        className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border border-black/[0.06] bg-white text-[11px] text-obsidian/32 transition hover:border-[#9A5558] hover:bg-[#FFF5F3] hover:text-[#9A5558]"
       >
         ✗
       </button>
-      <div className="pr-8 text-[12px] font-semibold leading-tight text-obsidian">{section.title}</div>
+      <div className="pr-7 text-[12px] font-semibold leading-tight text-obsidian">{section.title}</div>
       {section.meta.length ? (
-        <div className="mt-1 flex gap-2.5 text-[10px] text-obsidian/32">
+        <div className="mt-0.5 flex gap-2 text-[10px] text-obsidian/32">
           {section.meta.map((m) => (
             <span key={m}>{m}</span>
           ))}
         </div>
       ) : null}
       {section.description ? (
-        <div className="mt-2 text-[11px] leading-5 text-obsidian/52">{section.description}</div>
+        <div className="mt-1.5 text-[11px] leading-5 text-obsidian/52">{section.description}</div>
       ) : null}
     </div>
   );
@@ -818,20 +812,20 @@ function ViralMatrixView({
   }
 
   return (
-    <div className="mt-2 space-y-3">
-      <div className="text-[11px] text-obsidian/42">
+    <div className="mt-1.5 space-y-2">
+      <div className="text-[10px] text-obsidian/42">
         总样本 {section.totalSampleCount} 条 · 统计轴
         <span className="ml-1 rounded-full bg-obsidian/[0.06] px-2 py-0.5 text-obsidian/55">
           {section.statsAxisLabel}
         </span>
         {section.taxonomyVersion ? (
-          <span className="ml-2 text-obsidian/25">taxonomy v{section.taxonomyVersion}</span>
+          <span className="ml-1.5 text-obsidian/25">taxonomy v{section.taxonomyVersion}</span>
         ) : null}
       </div>
 
       {section.models.map((model, idx) => (
         <ViralModelCard
-          key={model.model_id || `m-${idx}`}
+          key={model.model_id ? `${model.model_id}-${idx}` : `m-${idx}`}
           model={model}
           module={module}
           env={env}
@@ -862,18 +856,18 @@ function ViralModelCard({
 
   return (
     <div
-      className="overflow-hidden rounded-2xl border border-black/[0.05] bg-white/72 shadow-sm"
+      className="overflow-hidden rounded-[14px] border border-black/[0.05] bg-white/72 shadow-sm"
       data-paragraph-id={model.paragraph_id ?? undefined}
     >
       <div
-        className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 transition hover:bg-moss/20"
+        className="flex cursor-pointer items-center justify-between gap-2.5 px-3.5 py-2 transition hover:bg-moss/20"
         onClick={() => setOpen((v) => !v)}
       >
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="rounded-full bg-dew/18 px-2.5 py-1 text-[11px] font-bold text-[#6F9095]">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="rounded-full bg-dew/18 px-2 py-0.5 text-[10px] font-bold text-[#6F9095]">
             {model.model_id || "M?"}
           </span>
-          <span className="text-[13px] font-semibold text-obsidian">{model.name || "(未命名)"}</span>
+          <span className="text-[12px] font-semibold text-obsidian">{model.name || "(未命名)"}</span>
           <span className="text-[10px] text-obsidian/34">
             coverage {coveragePct}% · 均互动 {Math.trunc(model.avg_interaction).toLocaleString("zh-CN")}
           </span>
@@ -881,15 +875,15 @@ function ViralModelCard({
             <ParagraphFeedbackMini paragraphId={model.paragraph_id} module={module} env={env} />
           ) : null}
         </div>
-        <span className={`text-[14px] text-obsidian/25 transition ${open ? "rotate-90" : ""}`}>▸</span>
+        <span className={`text-[13px] text-obsidian/25 transition ${open ? "rotate-90" : ""}`}>▸</span>
       </div>
 
       {model.description ? (
-        <div className="px-4 pb-3 text-[11px] leading-5 text-obsidian/48">{model.description}</div>
+        <div className="px-3.5 pb-2 text-[11px] leading-[1.6] text-obsidian/48">{model.description}</div>
       ) : null}
 
       {open ? (
-        <div className="border-t border-black/[0.04] px-4 py-3">
+        <div className="border-t border-black/[0.04] px-3.5 py-2.5">
           {ELEMENT_ORDER.map((code) => {
             const cats = model.elements[code] ?? [];
             if (!cats.length) return null;
@@ -919,11 +913,11 @@ function ElementRow({
 }) {
   const label = ELEMENT_LABEL_MAP[code] ?? code;
   return (
-    <div className="mt-2.5 flex gap-3 first:mt-0">
-      <div className="w-[68px] flex-shrink-0 pt-[4px] text-[11px] font-semibold text-obsidian/55">
+    <div className="mt-1.5 flex gap-2.5 first:mt-0">
+      <div className="w-[60px] flex-shrink-0 pt-[3px] text-[10px] font-semibold text-obsidian/55">
         {label}
       </div>
-      <div className="flex flex-1 flex-col gap-1.5">
+      <div className="flex flex-1 flex-col gap-1">
         {categories.map((cat, idx) => (
           <CategoryBar
             key={cat.paragraph_id ?? `${code}-${idx}`}
@@ -950,11 +944,11 @@ function CategoryBar({
 
   return (
     <div
-      className="rounded-xl border border-black/[0.045] bg-fog/32 px-3 py-2"
+      className="rounded-[10px] border border-black/[0.045] bg-fog/32 px-2.5 py-1.5"
       data-paragraph-id={category.paragraph_id ?? undefined}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] text-obsidian/68">{category.type || "(未分类)"}</span>
+        <span className="text-[11px] text-obsidian/68">{category.type || "(未分类)"}</span>
         <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-obsidian/42">
           <span>
             {ratioPct}% · {category.count} 条
@@ -964,21 +958,21 @@ function CategoryBar({
           ) : null}
         </span>
       </div>
-      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-obsidian/[0.06]">
+      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-obsidian/[0.06]">
         <div
           className="h-full rounded-full bg-dew"
           style={{ width: `${ratioPct}%` }}
         />
       </div>
       {category.examples.length ? (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {category.examples.slice(0, 3).map((ex) => (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {category.examples.slice(0, 3).map((ex, exIdx) => (
             <div
-              key={ex.note_id || ex.cover_url}
+              key={`${exIdx}-${ex.note_id || ex.cover_url}`}
               title={ex.title}
               className="flex items-center gap-1"
             >
-              <CoverThumb url={ex.cover_url} size={40} alt={ex.title} />
+              <CoverThumb url={ex.cover_url} size={32} alt={ex.title} />
             </div>
           ))}
         </div>
@@ -994,16 +988,16 @@ function UnusedDirectionsPanel({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#F1E3B6] bg-[#FFF8E6]/70">
+    <div className="overflow-hidden rounded-[14px] border border-[#F1E3B6] bg-[#FFF8E6]/70">
       <div
-        className="flex cursor-pointer items-center justify-between px-4 py-3 text-[11px] font-semibold text-[#8B6914] transition hover:bg-[#FFF8E6]"
+        className="flex cursor-pointer items-center justify-between px-3.5 py-2 text-[10px] font-semibold text-[#8B6914] transition hover:bg-[#FFF8E6]"
         onClick={() => setOpen((v) => !v)}
       >
         <span>不做的方向(互动量高但链路差 · {directions.length} 条)</span>
-        <span className={`text-[14px] text-[#8B6914]/45 transition ${open ? "rotate-90" : ""}`}>▸</span>
+        <span className={`text-[13px] text-[#8B6914]/45 transition ${open ? "rotate-90" : ""}`}>▸</span>
       </div>
       {open ? (
-        <ul className="space-y-1 px-4 pb-3 text-[11px] text-obsidian/58">
+        <ul className="space-y-0.5 px-3.5 pb-2.5 text-[11px] text-obsidian/58">
           {directions.map((d, idx) => (
             <li key={`${d.direction}-${idx}`}>
               <span className="font-semibold">{d.direction}</span>

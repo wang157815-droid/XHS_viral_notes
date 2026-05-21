@@ -1,4 +1,12 @@
-import { API_BASE, apiDelete, apiGet, apiPost, generateIdempotencyKey } from "@/lib/api-client";
+import {
+  API_BASE,
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  apiUpload,
+  generateIdempotencyKey,
+} from "@/lib/api-client";
 import { getAuthToken } from "@/lib/auth-storage";
 import type {
   ChatMessage,
@@ -9,12 +17,36 @@ import type {
   SendConversationMessageResponse,
 } from "@/lib/contracts";
 
-export async function createConversation(title?: string) {
+export async function createConversation(title?: string, metadata?: Record<string, unknown>) {
   return apiPost<Conversation>(
     "/conversations",
-    { title, metadata: {} },
+    { title, metadata: metadata ?? {} },
     { withAuth: true },
   );
+}
+
+export async function patchConversationTitle(conversationId: string, title: string) {
+  return apiPatch<Conversation>(`/conversations/${encodeURIComponent(conversationId)}`, { title }, { withAuth: true });
+}
+
+export type ConversationUploadResult = {
+  file_id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_subpath: string;
+  /** 后端上传时预解析的文档元数据（PDF/文本） */
+  parsed?: {
+    word_count?: number;
+    pages?: number;
+    format?: string;
+  } | null;
+};
+
+export async function uploadConversationFile(file: File) {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiUpload<ConversationUploadResult>("/conversations/uploads", fd, { withAuth: true });
 }
 
 export async function getConversation(conversationId: string) {
@@ -36,11 +68,14 @@ export async function listConversations(input: {
   includeArchived?: boolean;
   keyword?: string;
   limit?: number;
+  /** 逗号分隔：insight,hotspot,post_investment */
+  surfaces?: string;
 } = {}) {
   const params = new URLSearchParams();
   if (input.includeAll) params.set("include_all", "true");
   if (input.includeArchived) params.set("include_archived", "true");
   if (input.keyword?.trim()) params.set("keyword", input.keyword.trim());
+  if (input.surfaces?.trim()) params.set("surfaces", input.surfaces.trim());
   params.set("limit", String(input.limit ?? 100));
   return apiGet<{ items: ConversationSummary[]; include_all_effective: boolean }>(
     `/conversations?${params.toString()}`,
@@ -79,6 +114,8 @@ export async function sendConversationMessage(input: {
   advancedConfig?: Record<string, unknown>;
   activeTaskId?: string | null;
   clientMessageId?: string;
+  attachments?: Array<Record<string, unknown>>;
+  knowledgeRefs?: Array<{ doc_id: string; title?: string }>;
 }) {
   const clientMessageId = input.clientMessageId ?? generateIdempotencyKey();
   return apiPost<SendConversationMessageResponse>(
@@ -90,6 +127,8 @@ export async function sendConversationMessage(input: {
       advanced_config: input.advancedConfig ?? {},
       active_task_id: input.activeTaskId ?? null,
       client_message_id: clientMessageId,
+      attachments: input.attachments ?? [],
+      knowledge_refs: input.knowledgeRefs ?? [],
     },
     { withAuth: true },
   );
@@ -104,6 +143,8 @@ export async function sendConversationMessageStream(
     advancedConfig?: Record<string, unknown>;
     activeTaskId?: string | null;
     clientMessageId?: string;
+    attachments?: Array<Record<string, unknown>>;
+    knowledgeRefs?: Array<{ doc_id: string; title?: string }>;
   },
   onEvent: (event: ConversationStreamEvent) => void,
 ) {
@@ -128,6 +169,8 @@ export async function sendConversationMessageStream(
         advanced_config: input.advancedConfig ?? {},
         active_task_id: input.activeTaskId ?? null,
         client_message_id: clientMessageId,
+        attachments: input.attachments ?? [],
+        knowledge_refs: input.knowledgeRefs ?? [],
       }),
     },
   );

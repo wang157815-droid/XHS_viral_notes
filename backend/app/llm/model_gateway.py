@@ -343,6 +343,10 @@ class ModelGateway:
                 )
                 choice = response.choices[0]
                 content = (choice.message.content or "").strip() if choice.message else ""
+                # 注意：对于 DeepSeek-v4-pro 等思考型模型，reasoning_content 是思考过程，
+                # content 才是正式输出（JSON）。不应将 reasoning_content 作为 content 兜底，
+                # 否则会把思考文字当作 LLM 输出返回，导致 JSON 解析失败。
+                # 若 content 为空，保持空字符串，上层调用方应重试或跳过。
                 usage = {
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
                     "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
@@ -520,15 +524,34 @@ class ModelGateway:
                 timeout=timeout,
                 **{k: v for k, v in params.items() if v is not None},
             )
+            in_reasoning = False  # 是否正在输出 reasoning_content（思考链）
             while True:
                 chunk = await asyncio.to_thread(self._next_stream_chunk, stream)
                 if chunk is None:
                     break
                 choice = chunk.choices[0] if getattr(chunk, "choices", None) else None
                 delta_obj = getattr(choice, "delta", None) if choice else None
-                delta = getattr(delta_obj, "content", None) if delta_obj else None
-                if delta:
-                    yield str(delta)
+
+                # DeepSeek thinking 模式：reasoning_content 与 content 是独立字段
+                reasoning_delta = getattr(delta_obj, "reasoning_content", None) if delta_obj else None
+                content_delta = getattr(delta_obj, "content", None) if delta_obj else None
+
+                if reasoning_delta:
+                    # 第一个 reasoning chunk：先 yield 开标签
+                    if not in_reasoning:
+                        yield "<think>"
+                        in_reasoning = True
+                    yield str(reasoning_delta)
+                elif content_delta:
+                    # 从 reasoning 切换到 content：先关闭 think 标签
+                    if in_reasoning:
+                        yield "</think>"
+                        in_reasoning = False
+                    yield str(content_delta)
+
+            # 流结束时若仍在 reasoning 状态，补上关闭标签
+            if in_reasoning:
+                yield "</think>"
         except Exception as exc:
             code, message = self._classify_error(exc)
             raise ModelInvocationError(

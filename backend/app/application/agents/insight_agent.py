@@ -37,9 +37,10 @@ InsightAgent: 简化为一次 LLM 调用(阶段 4.3pre.3 重构)。
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...domain.task_context import TaskContextWriter
 from ...llm.model_gateway import ModelInvocationError
@@ -99,11 +100,17 @@ class InsightAgent(BaseAgent):
         stats_axis_label = self._resolve_stats_axis_label(
             llm_result, input_spec, default=_DEFAULT_STATS_AXIS_LABEL
         )
+
+        # ---- LLM 第二次调用: 为每条痛点生成本质定义 + 核心诉求阐释 ----
+        if pain_top:
+            await self._run_llm_pain_insight(task_id, pain_top, stats_axis_label)
+
         output: Dict[str, Any] = {
             "content_direction": self._build_content_direction(
                 llm_result, viral_matrix
             ),
             # 画布 mod-pain-points.items 直接消费:已带 count 频次
+            # essence_definition / core_appeal 由 _run_llm_pain_insight 回填(可选)
             "pain_points_top": pain_top,
             "seo_aggregation": {
                 "core_keywords": core_keywords,
@@ -264,22 +271,22 @@ class InsightAgent(BaseAgent):
         )
         system_prompt = prompt_registry.load("insight_summary.md")
 
+        _messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        _overrides = {
+            "temperature": 0.4,
+            "max_tokens": 1000,
+        }
         for attempt in range(2):
             try:
-                response = await self._gateway.chat(
-                    agent_id=self.agent_id,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    task_id=task_id,
-                    overrides={
-                        "temperature": 0.4,
-                        "max_tokens": 600,
-                        "response_format": {"type": "json_object"},
-                    },
+                text = await self.chat_stream_and_emit(
+                    task_id,
+                    _messages,
+                    overrides=_overrides,
                 )
-                text = (response.get("content") or "").strip()
+                text = text.strip()
                 parsed = extract_json_object(text)
                 if parsed:
                     return parsed
@@ -357,6 +364,78 @@ class InsightAgent(BaseAgent):
             return llm_axis.strip()
         return default
 
+    async def _run_llm_pain_insight(
+        self,
+        task_id: str,
+        pain_top: List[Dict[str, Any]],
+        stats_axis_label: str,
+    ) -> None:
+        """为每条痛点标签生成「本质定义」和「核心诉求阐释」，原地回填到 pain_top。
+
+        失败时静默降级——pain_top 保持原有 {keyword, count} 结构，Excel J/K 列留空。
+        """
+        system_prompt = prompt_registry.load("pain_point_insight.md")
+
+        label_lines = [
+            f"- {item['keyword']} ({item.get('count', 0)}次)"
+            for item in pain_top
+            if item.get("keyword")
+        ]
+        user_content = (
+            f"轴名：{stats_axis_label}\n"
+            "标签列表：\n"
+            + "\n".join(label_lines)
+            + "\n\n请先写一句整体观察，再输出 JSON 数组，不要 markdown 代码块。"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        try:
+            text = await asyncio.wait_for(
+                self.chat_stream_and_emit(
+                    task_id,
+                    messages,
+                    overrides={"temperature": 0.3, "max_tokens": 2000, "timeout": 120},
+                ),
+                timeout=90,
+            )
+        except (asyncio.TimeoutError, ModelInvocationError) as exc:
+            await self.emit_log(
+                task_id, "warn", f"痛点洞察 LLM 超时/降级({type(exc).__name__})，跳过"
+            )
+            return
+
+        text = text.strip()
+        parsed = _extract_pain_insight_array(text)
+        if not parsed:
+            await self.emit_log(task_id, "warn", "痛点洞察 JSON 解析失败，跳过")
+            return
+
+        # 按 keyword 匹配回填
+        by_keyword = {item["keyword"]: item for item in pain_top if item.get("keyword")}
+        enriched_count = 0
+        for entry in parsed:
+            if not isinstance(entry, dict):
+                continue
+            kw = entry.get("keyword") or ""
+            if kw not in by_keyword:
+                continue
+            esdef = str(entry.get("essence_definition") or "").strip()
+            appeal = str(entry.get("core_appeal") or "").strip()
+            if esdef:
+                by_keyword[kw]["essence_definition"] = esdef[:120]
+            if appeal:
+                by_keyword[kw]["core_appeal"] = appeal[:160]
+            if esdef or appeal:
+                enriched_count += 1
+
+        await self.emit_log(
+            task_id, "info", f"痛点洞察回填完成: {enriched_count}/{len(pain_top)} 条"
+        )
+
 
 # ----------------------------------------------------------------------
 # 私有工具函数
@@ -415,3 +494,20 @@ def _extract_notes(source_entry: Any) -> List[Dict[str, Any]]:
 
 # 向后兼容导出(prompt 从 4.3pre.2 起就已经是 insight_summary.md)
 PROMPT_TEMPLATE = "[deprecated] 使用 insight_summary.md"
+
+
+def _extract_pain_insight_array(text: str) -> Optional[List[Any]]:
+    """从 LLM 输出中提取痛点洞察 JSON 数组（容忍前置摘要文字）。"""
+    if not text:
+        return None
+    # 找到第一个 '[' 开始尝试解析
+    for start in range(len(text)):
+        if text[start] != "[":
+            continue
+        try:
+            result, _ = json.JSONDecoder().raw_decode(text, start)
+            if isinstance(result, list):
+                return result
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None

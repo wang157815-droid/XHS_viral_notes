@@ -65,30 +65,18 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="grid min-h-screen grid-cols-1 bg-[radial-gradient(circle_at_16%_16%,rgba(185,206,209,0.3),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.82),rgba(247,247,245,0.96))] text-obsidian lg:grid-cols-[minmax(320px,0.55fr)_minmax(680px,0.95fr)]">
-      <section className="hidden items-center justify-center border-r border-black/[0.05] bg-[radial-gradient(circle_at_48%_30%,rgba(232,240,232,0.74),transparent_36%),linear-gradient(145deg,rgba(255,255,255,0.72),rgba(185,206,209,0.22))] p-8 lg:flex">
-        <div className="max-w-md text-center">
-          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] border border-black/[0.06] bg-obsidian text-2xl font-bold text-papyrus shadow-[0_18px_48px_rgba(26,26,26,0.18)]">
-            R
-          </div>
-          <h1 className="font-serif text-4xl font-semibold tracking-[-0.04em]">RedMuse</h1>
-          <p className="mt-4 text-sm leading-7 text-obsidian/45">
-            智能分析小红书爆款笔记
-            <br />
-            一句话生成专属爆文创作模型
-          </p>
-        </div>
+    <div className="grid h-screen grid-cols-1 overflow-hidden bg-[radial-gradient(ellipse_at_75%_50%,rgba(185,215,205,0.45),transparent_55%),linear-gradient(to_right,rgba(255,255,255,1)_0%,rgba(248,251,249,0.97)_100%)] text-obsidian lg:grid-cols-[3fr_2fr]">
+      <section className="hidden items-center justify-center p-12 lg:flex">
+        <img
+          src="/login-banner.png"
+          alt="RedMuse"
+          className="max-h-[70vh] w-auto max-w-full object-contain"
+        />
       </section>
 
-      <section className="flex items-center justify-center px-8 py-10">
-        <div className="w-full max-w-md rounded-[30px] border border-black/[0.05] bg-white/78 p-8 shadow-[0_24px_70px_rgba(26,26,26,0.08)] backdrop-blur-xl">
-          <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.24em] text-obsidian/28">Account Access</div>
+      <section className="flex items-center justify-start pl-8 pr-12 py-10">
+        <div className="w-full max-w-[420px] rounded-[30px] border border-black/[0.05] bg-white/78 p-8 shadow-[0_24px_70px_rgba(26,26,26,0.08)] backdrop-blur-xl">
           <h2 className="font-serif text-[30px] font-semibold tracking-[-0.04em]">欢迎使用 RedMuse</h2>
-          <p className="mt-2 text-sm leading-6 text-obsidian/45">
-            使用 RedMuse 账号登录系统。
-            <br />
-            小红书数据源授权请在登录后到「设置 → 数据源授权」完成。
-          </p>
 
           <form className="mt-6 space-y-4" onSubmit={handleCredentialsSubmit}>
             <div>
@@ -118,15 +106,7 @@ export default function LoginPage() {
 
             {credError ? (
               <p className="rounded-2xl border border-[#E8CFC8] bg-[#FFF5F3] px-3 py-2 text-xs text-[#9A5558]">{credError}</p>
-            ) : (
-              <p className="text-xs leading-5 text-obsidian/34">
-                首次部署如未创建账号，请管理员通过环境变量
-                <code className="mx-1 rounded-full bg-fog px-2 py-0.5 text-[11px] text-obsidian/55">
-                  REDMUSE_BOOTSTRAP_ADMIN_PASSWORD
-                </code>
-                引导首个 admin。
-              </p>
-            )}
+            ) : null}
 
             <button
               type="submit"

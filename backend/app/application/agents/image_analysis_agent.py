@@ -97,16 +97,34 @@ class ImageAnalysisAgent(BaseAgent):
             f"图文分析:开始并发标注 {len(top_notes)} 条图文(concurrency={_CONCURRENCY})",
             progress=35,
         )
+        await self._emit_thinking_chunk(
+            task_id,
+            f"开始批量标注 {len(top_notes)} 条图文笔记，"
+            f"逐条提取视觉风格、标题钩子、封面类型、开篇方式、产品引出与植入方式六大要素，"
+            f"以及用户痛点关键词与内容方向...\n",
+            is_reasoning=True,
+        )
 
         system_prompt_base = prompt_registry.load("image_6elements.md")
         taxonomy_hint = await self._build_taxonomy_hint()
         system_prompt = system_prompt_base + "\n\n" + taxonomy_hint
 
         semaphore = asyncio.Semaphore(_CONCURRENCY)
+        done_count = 0
+        total_count = len(top_notes)
 
         async def _one(note: Dict[str, Any]) -> tuple[str, Optional[Dict[str, Any]]]:
+            nonlocal done_count
             async with semaphore:
-                return await self._annotate_image(task_id, system_prompt, note)
+                result = await self._annotate_image(task_id, system_prompt, note)
+            done_count += 1
+            if done_count % 10 == 0 or done_count == total_count:
+                await self._emit_thinking_chunk(
+                    task_id,
+                    f"已标注 {done_count}/{total_count} 条图文笔记...\n",
+                    is_reasoning=True,
+                )
+            return result
 
         results = await asyncio.gather(*[_one(n) for n in top_notes], return_exceptions=False)
 
@@ -119,6 +137,15 @@ class ImageAnalysisAgent(BaseAgent):
                 success += 1
             else:
                 failed += 1
+
+        rate = int(success / total_count * 100) if total_count else 0
+        await self._emit_thinking_chunk(
+            task_id,
+            f"图文标注完成：{success}/{total_count} 条成功（成功率 {rate}%），"
+            f"已提取六要素分布、用户痛点与内容方向，数据将输入爆文模型聚类。\n",
+            is_reasoning=True,
+        )
+        await self._emit_thinking_done(task_id)
 
         # 把不在枚举内的自拟类型直接注册进 taxonomy(与 VideoAgent 同样策略)
         await self._feed_pending_types(annotations)

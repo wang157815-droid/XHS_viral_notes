@@ -465,14 +465,31 @@ def _as_note_list(entry: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _extract_axis_noun(stats_axis_label: str) -> str:
+    """从轴名提取最后2字类型词，用于 J 列表头。
+
+    示例: "选香痛点" → "痛点", "皮肤问题" → "问题",
+         "高频痛点 / 议程" → "痛点", "喂养议程" → "议程"
+    """
+    label = (stats_axis_label or "").split("/")[0].split("／")[0].strip()
+    noun = label[-2:] if len(label) >= 2 else label
+    return noun if noun else "痛点"
+
+
 def _write_viral_top_summary_tables(
     ws,
     *,
     viral_matrix: Dict[str, Any],
     semantic: Dict[str, Any],
     header_row: int = 1,
+    include_insight_cols: bool = False,
 ) -> Tuple[int, int]:
-    """与 Sheet1 顶部一致:左表 B-E + 右表 H-I + unused 的 F 列标记。
+    """与 Sheet1 顶部一致:左表 B-E + 右表 H-I(-J-K) + unused 的 F 列标记。
+
+    H: stats_axis_label（关键词）
+    I: 出现次数
+    J: {axis_noun}本质定义（仅 include_insight_cols=True 时写入，即 Sheet1）
+    K: 核心诉求阐释（同上）
 
     Returns:
         (row, pain_row):与现有 Sheet1 相同语义 — 左/右各自「下一空行」下标。
@@ -485,6 +502,7 @@ def _write_viral_top_summary_tables(
         semantic.get("stats_axis_label") or _DEFAULT_STATS_AXIS_LABEL
     ).strip() or _DEFAULT_STATS_AXIS_LABEL
     pain_items = semantic.get("pain_points_top") or []
+    axis_noun = _extract_axis_noun(stats_axis_label)
 
     hr = header_row
     safe_set_cell_value(
@@ -511,6 +529,15 @@ def _write_viral_top_summary_tables(
         ws, f"I{hr}", "出现次数",
         font=_HEADER_FONT, fill=_HEADER_FILL, alignment=_HEADER_ALIGN,
     )
+    if include_insight_cols:
+        safe_set_cell_value(
+            ws, f"J{hr}", f"{axis_noun}本质定义",
+            font=_HEADER_FONT, fill=_HEADER_FILL, alignment=_HEADER_ALIGN,
+        )
+        safe_set_cell_value(
+            ws, f"K{hr}", "核心诉求阐释",
+            font=_HEADER_FONT, fill=_HEADER_FILL, alignment=_HEADER_ALIGN,
+        )
 
     row = hr + 1
     divisor = total_sample if total_sample > 0 else 1
@@ -560,6 +587,23 @@ def _write_viral_top_summary_tables(
             continue
         safe_set_cell_value(ws, f"H{pain_row}", keyword, alignment=_DATA_ALIGN)
         safe_set_cell_value(ws, f"I{pain_row}", count, alignment=_CENTER_ALIGN)
+        if include_insight_cols:
+            # J 列: 本质定义（essence_definition，可选，旧数据留空）
+            essence = str(item.get("essence_definition") or "") if isinstance(item, dict) else ""
+            if essence:
+                safe_set_cell_value(
+                    ws, f"J{pain_row}", essence,
+                    alignment=Alignment(horizontal="left", vertical="center", wrap_text=True),
+                )
+            # K 列: 核心诉求阐释（core_appeal，可选，旧数据留空）
+            appeal = str(item.get("core_appeal") or "") if isinstance(item, dict) else ""
+            if appeal:
+                safe_set_cell_value(
+                    ws, f"K{pain_row}", appeal,
+                    alignment=Alignment(horizontal="left", vertical="center", wrap_text=True),
+                )
+            if essence or appeal:
+                ws.row_dimensions[pain_row].height = 40
         pain_row += 1
 
     return row, pain_row
@@ -579,7 +623,8 @@ def _build_sheet1_summary(
     右表 H-I: {stats_axis_label} / 出现次数
     """
     row, pain_row = _write_viral_top_summary_tables(
-        ws, viral_matrix=viral_matrix, semantic=semantic, header_row=1
+        ws, viral_matrix=viral_matrix, semantic=semantic, header_row=1,
+        include_insight_cols=True,
     )
     ws.row_dimensions[1].height = 24
 
@@ -601,6 +646,18 @@ def _build_sheet1_summary(
     _s1_element_fill = PatternFill(
         start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
     )
+    # 样式: 模型定义行(米灰底)
+    _s1_defn_label_font = Font(bold=True, size=10, color="5A5550")
+    _s1_defn_label_fill = PatternFill(
+        start_color="EBEBDA", end_color="EBEBDA", fill_type="solid"
+    )
+    _s1_defn_text_fill = PatternFill(
+        start_color="EBEBDA", end_color="EBEBDA", fill_type="solid"
+    )
+    _s1_defn_text_font = Font(size=10, color="2C4770")
+    _s1_defn_align = Alignment(
+        horizontal="left", vertical="center", wrap_text=True
+    )
 
     # 预计算全局痛点关键词集合(模型痛点必须为此集合的子集)
     global_pain_set = set()
@@ -617,6 +674,7 @@ def _build_sheet1_summary(
         model_id = str(model.get("model_id") or f"M{idx}")
         name = str(model.get("name") or "")
         model_label = f"爆文模型{idx} {name}"
+        definition = str(model.get("definition") or "")
 
         # ---- 聚合该模型的痛点(全局痛点的子集,按模型笔记重新计数) ----
         model_pain_counter: Dict[str, int] = {}
@@ -669,10 +727,31 @@ def _build_sheet1_summary(
         )
         ws.row_dimensions[cur].height = 22
         cur += 1
+        # 右侧痛点从 header 下一行开始，不受左侧定义行偏移影响
+        pain_write_row = cur
+
+        # ---- 模型定义行(属加种差法): B=标签, C-D 合并=定义文本 ----
+        if definition:
+            safe_set_cell_value(
+                ws, f"B{cur}", "模型定义",
+                font=_s1_defn_label_font, fill=_s1_defn_label_fill,
+                alignment=_CENTER_ALIGN,
+            )
+            safe_write_merged_cell(
+                ws,
+                row=cur,
+                col=3,
+                value=definition,
+                merge_cols=2,
+                font=_s1_defn_text_font,
+                fill=_s1_defn_text_fill,
+                alignment=_s1_defn_align,
+            )
+            ws.row_dimensions[cur].height = 55
+            cur += 1
 
         # ---- 逐要素输出 ----
         elements = model.get("elements") or {}
-        pain_write_row = cur  # 痛点从模型第一数据行开始写
         for code, label in _ELEMENT_ORDER:
             cats = elements.get(code) or []
             if not cats:
@@ -725,6 +804,8 @@ def _build_sheet1_summary(
     ws.column_dimensions["G"].width = 3
     ws.column_dimensions["H"].width = 22
     ws.column_dimensions["I"].width = 12
+    ws.column_dimensions["J"].width = 45
+    ws.column_dimensions["K"].width = 50
 
 
 # ==================================================================

@@ -48,6 +48,8 @@ class AgentModelPolicy:
             ("CanvasRenderAgent", "text", "text_default"),
             ("ParagraphRefinementAgent", "text", "text_default"),
             ("ConversationQAAgent", "text", "text_default"),
+            ("ConversationQAAgent", "multimodal", "multimodal_default"),
+            ("ConversationTitleAgent", "text", "text_default"),
             ("ConversationToolAgent", "text", "text_default"),
             ("ConversationIntentRouter", "text", "text_default"),
             ("KnowledgeQAAgent", "text", "text_default"),

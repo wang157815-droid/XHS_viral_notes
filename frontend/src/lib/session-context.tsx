@@ -26,7 +26,7 @@ export interface SessionState {
   ready: boolean;
   user: AuthUser | null;
   cookieHealth: CookieHealth | null;
-  refreshCookie: (force?: boolean) => Promise<void>;
+  refreshCookie: (force?: boolean) => Promise<boolean>;
   refreshMe: () => Promise<void>;
   can: (action: PermissionAction) => boolean;
   logout: () => Promise<void>;
@@ -51,12 +51,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const timerRef = useRef<number | null>(null);
 
-  const refreshCookie = useCallback(async (force: boolean = false) => {
-    const path = force
-      ? "/settings/cookie-health?force=true"
-      : "/settings/cookie-health";
-    const res = await apiGet<CookieHealth>(path, { withAuth: true });
-    if (res.ok) setCookieHealth(res.data);
+  const refreshCookie = useCallback(async (force: boolean = false): Promise<boolean> => {
+    const path = force ? "/settings/cookie-health?force=true" : "/settings/cookie-health";
+    try {
+      const res = await apiGet<CookieHealth>(path, { withAuth: true });
+      if (res.ok && res.data && typeof (res.data as CookieHealth).status === "string") {
+        setCookieHealth(res.data);
+        return true;
+      }
+      const msg = res.ok === false ? res.error.message : "Cookie 状态返回异常";
+      setCookieHealth((prev) => ({
+        status: "unknown",
+        saved_days: prev?.saved_days ?? 0,
+        last_checked_at: new Date().toISOString(),
+        message: msg,
+      }));
+      return false;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setCookieHealth((prev) => ({
+        status: "unknown",
+        saved_days: prev?.saved_days ?? 0,
+        last_checked_at: new Date().toISOString(),
+        message: `校验请求失败：${msg}`,
+      }));
+      return false;
+    }
   }, []);
 
   const refreshMe = useCallback(async () => {

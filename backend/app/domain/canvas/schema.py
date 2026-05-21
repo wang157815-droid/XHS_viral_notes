@@ -15,6 +15,8 @@ from ..module_status import ModuleStatus
 
 
 CommandType = Literal[
+    "regen_sheet2_narrative",
+    "rename_models",
     "regenerate",
     "regenerate_cascade",
     "delete",

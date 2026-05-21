@@ -37,7 +37,9 @@ export type ModuleActionId =
   | "regenerate_cascade"
   | "delete"
   | "restore"
-  | "expand_all";
+  | "expand_all"
+  | "regen_sheet2_narrative"
+  | "rename_models";
 
 export interface PrototypeAction {
   id: ModuleActionId;
@@ -210,11 +212,7 @@ export const DEFAULT_AGENT_STEPS: AgentStep[] = ORCHESTRATOR_STEPS.map((s) => ({
   status: "pending",
 }));
 
-export const SUGGESTION_TAGS: string[] = [
-  "分析「抗老精华」的爆款模型矩阵,重点看封面与切入点要素",
-  "研究「防脱精华」的内容方向分布和高频痛点",
-  "对比「PMPM」和「林清轩」的爆文模型差异",
-];
+export const SUGGESTION_TAGS: string[] = ["防脱精华", "鲜奶巧克力", "卡西欧电子琴"];
 
 // ---------------------------------------------------------------
 // DEMO_CANVAS: 未发起任务时 workspace 的静态预览(抗老精华)

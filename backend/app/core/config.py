@@ -16,6 +16,7 @@ class Settings(BaseModel):
     api_prefix: str = "/api/v1"
     conversation_os_enabled: bool = _env_bool("CONVERSATION_OS_ENABLED", True)
     conversation_knowledge_qa_enabled: bool = _env_bool("CONVERSATION_KNOWLEDGE_QA_ENABLED", True)
+    serp_cache_days: int = int(os.getenv("SERP_CACHE_DAYS", "90"))
 
 
 settings = Settings()

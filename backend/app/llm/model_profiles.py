@@ -44,8 +44,8 @@ class ModelProfileRegistry:
                 model_name=text_model,
                 modality="text",
                 temperature=0.6,
-                max_tokens=4096,
-                timeout_seconds=int(os.getenv("REQUEST_TIMEOUT", "60")),
+                max_tokens=8192,
+                timeout_seconds=int(os.getenv("REQUEST_TIMEOUT", "300")),
                 max_retries=int(os.getenv("MAX_RETRIES", "2")),
             )
         )

@@ -10,8 +10,8 @@ uvicorn --reload 模式会在子进程中创建 SelectorEventLoop，导致 Playw
 3. 手动实现文件监控 + 进程重启，替代 uvicorn --reload
 
 用法：
-    python backend/run.py              # 开发模式（自动重启）
-    python backend/run.py --no-reload  # 生产模式
+    python backend/run.py              # 默认模式（不自动重启，手动重启）
+    python backend/run.py --reload     # 开发模式（文件变更自动重启）
 """
 import asyncio
 import os
@@ -27,7 +27,8 @@ def main():
     parser = argparse.ArgumentParser(description="RedMuse Backend Server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8100)
-    parser.add_argument("--no-reload", action="store_true", help="禁用自动重载")
+    parser.add_argument("--no-reload", action="store_true", help="禁用自动重载", default=True)
+    parser.add_argument("--reload", action="store_true", help="启用自动重载（开发模式）")
     args = parser.parse_args()
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -37,7 +38,7 @@ def main():
 
     import uvicorn
 
-    if args.no_reload:
+    if args.no_reload and not args.reload:
         uvicorn.run(
             "backend.app.main:app",
             host=args.host,

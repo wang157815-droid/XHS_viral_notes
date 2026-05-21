@@ -79,10 +79,20 @@ def _apply_competitor_policy(
     """根据竞品来源决定最终的 competitor 列表。
 
     优先级:
+    0. pipeline_config.skip_competitor=True → 强制清空竞品，标记 competitor_source="user_skip"
     1. API 字段竞品词（competitor_keywords / advanced_config）→ 只用 API 词，忽略 LLM
     2. LLM 判断 competitor_source="user_explicit" → 只保留 LLM 提取的用户原文竞品词
     3. LLM 判断 competitor_source="llm_inferred" → 保留 LLM 推断的竞品词
     """
+    # 优先检查用户是否明确拒绝竞品
+    pc = parsed.get("pipeline_config") or {}
+    if pc.get("skip_competitor") or parsed.get("competitor_source") == "user_skip":
+        dims = parsed.setdefault("dimensions", {})
+        dims["competitor"] = []
+        parsed["competitor_source"] = "user_skip"
+        parsed.setdefault("dimensions", {})["brand"] = [str(x) for x in (dims.get("brand") or [])]
+        parsed.setdefault("dimensions", {})["industry"] = [str(x) for x in (dims.get("industry") or [])]
+        return parsed
     dims = parsed.get("dimensions") or {}
     brand = [str(x) for x in (dims.get("brand") or [])]
     industry = [str(x) for x in (dims.get("industry") or [])]
@@ -137,6 +147,10 @@ class InputParserAgent(BaseAgent):
             "confidence": 0.5,
             "competitor_source": "api" if api_competitors else "llm_inferred",
             "serp_expanded_keyword": "",
+            "pipeline_config": {
+                "run_video_analysis": True,
+                "run_rag": True,
+            },
         }
 
         if raw_input or hint_keywords:
@@ -177,6 +191,9 @@ class InputParserAgent(BaseAgent):
 
         parsed = _apply_competitor_policy(parsed, api_competitors)
 
+        # 根据用户输入自动推断 pipeline_config
+        _infer_pipeline_config(parsed, raw_input)
+
         # 清理 serp_expanded_keyword：去除空值，限制长度
         serp_kw_raw = str(parsed.get("serp_expanded_keyword") or "").strip()
         serp_kw = serp_kw_raw
@@ -211,22 +228,21 @@ class InputParserAgent(BaseAgent):
     ) -> Dict[str, Any] | None:
         """调用模型并尝试解析 JSON，失败最多再 retry 1 次。"""
         last_text = ""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        overrides = {
+            "temperature": 0.2,
+            "max_tokens": 800,
+        }
         for attempt in range(1, max_attempts + 1):
             try:
-                response = await self._gateway.chat(
-                    agent_id=self.agent_id,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    task_id=task_id,
-                    overrides={
-                        "temperature": 0.2,
-                        "max_tokens": 400,
-                        "response_format": {"type": "json_object"},
-                    },
+                last_text = await self.chat_stream_and_emit(
+                    task_id,
+                    messages,
+                    overrides=overrides,
                 )
-                last_text = (response.get("content") or "").strip()
                 parsed = extract_json_object(last_text)
                 if parsed:
                     return parsed
@@ -260,6 +276,16 @@ def _merge_parsed(base: Dict[str, Any], extracted: Dict[str, Any]) -> Dict[str, 
             "competitor": [str(x) for x in (dims.get("competitor") or [])],
             "industry": [str(x) for x in (dims.get("industry") or [])],
         }
+
+    # 防御性过滤：keywords 不得包含竞品词（LLM 偶尔会把竞品词混入 keywords）
+    competitor_set = {c.strip().lower() for c in (out.get("dimensions") or {}).get("competitor") or []}
+    if competitor_set:
+        filtered_kw = [k for k in (out.get("keywords") or []) if k.strip().lower() not in competitor_set]
+        if filtered_kw:
+            out["keywords"] = filtered_kw
+        elif out.get("keywords"):
+            # 全被过滤了说明 LLM 把主词也放竞品了，保留第一个
+            out["keywords"] = out["keywords"][:1]
     adjustments = extracted.get("adjustments")
     if isinstance(adjustments, list):
         out["adjustments"] = [str(x) for x in adjustments][:10]
@@ -274,4 +300,46 @@ def _merge_parsed(base: Dict[str, Any], extracted: Dict[str, Any]) -> Dict[str, 
     serp = extracted.get("serp_expanded_keyword")
     if serp is not None:
         out["serp_expanded_keyword"] = str(serp).strip()
+    # 传递 pipeline_config（若 LLM 返回了合法的布尔值则采用，否则保留默认 True）
+    pc = extracted.get("pipeline_config")
+    if isinstance(pc, dict):
+        pc_out = dict(out.get("pipeline_config") or {"run_video_analysis": True, "run_rag": True, "skip_competitor": False})
+        if isinstance(pc.get("run_video_analysis"), bool):
+            pc_out["run_video_analysis"] = pc["run_video_analysis"]
+        if isinstance(pc.get("run_rag"), bool):
+            pc_out["run_rag"] = pc["run_rag"]
+        if isinstance(pc.get("skip_competitor"), bool):
+            pc_out["skip_competitor"] = pc["skip_competitor"]
+        out["pipeline_config"] = pc_out
     return out
+
+
+_IMAGE_ONLY_PATTERNS = (
+    "仅图文", "只要图文", "不要视频", "不分析视频", "图片笔记", "图文笔记",
+    "image only", "no video",
+)
+
+
+def _infer_pipeline_config(parsed: Dict[str, Any], raw_input: str) -> None:
+    """根据用户原始输入关键词自动推断 pipeline_config。
+
+    - 用户明确说"仅图文/不要视频"→ run_video_analysis=False
+    - 用户明确说"不要竞品/不对比竞品"→ skip_competitor=True
+    - 其余情况保持默认 True（由下游 Orchestrator 决定是否实际运行）
+    """
+    pc = parsed.setdefault("pipeline_config", {"run_video_analysis": True, "run_rag": True, "skip_competitor": False})
+    lower = raw_input.lower()
+    if any(pat in lower for pat in _IMAGE_ONLY_PATTERNS):
+        pc["run_video_analysis"] = False
+    # 检测"不需要竞品"意图
+    _NO_COMPETITOR_PATTERNS = (
+        "不需要竞品", "不要竞品", "不对比竞品", "无需竞品", "跳过竞品",
+        "不需要对比", "不要对比", "只分析本品", "只看本品", "不分析竞品",
+        "不用竞品", "不含竞品", "不包含竞品", "不需要竞争对手", "不要竞争对手",
+    )
+    if any(pat in lower for pat in _NO_COMPETITOR_PATTERNS):
+        pc["skip_competitor"] = True
+        # 同时清空竞品词，避免已推断的竞品词残留
+        dims = parsed.setdefault("dimensions", {})
+        dims["competitor"] = []
+        parsed["competitor_source"] = "user_skip"

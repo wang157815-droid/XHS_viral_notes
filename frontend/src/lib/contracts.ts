@@ -28,7 +28,9 @@ export type TaskEventType =
   | "canvas_schema_updated"
   | "error"
   | "done"
-  | "task_video_done";
+  | "task_video_done"
+  | "agent_thinking_chunk"
+  | "agent_thinking_done";
 
 export interface TaskEvent<P = Record<string, unknown>> {
   event_id: string;
@@ -53,7 +55,40 @@ export type ConversationIntent =
   | "xhs_analysis"
   | "refine_canvas"
   | "export"
+  | "web_research"
   | "unknown";
+
+export type ConversationSurface = "insight" | "hotspot" | "post_investment";
+
+/** 与 POST /conversations/uploads 返回字段一致，供发送消息时 attachments 引用 */
+export interface ConversationAttachmentPayload {
+  file_id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_subpath: string;
+}
+
+export interface KnowledgeRefPayload {
+  doc_id: string;
+  title?: string;
+}
+
+/** 对话发起采集任务时的高级参数（与后端 advanced_config 对齐的 UI 子集） */
+export interface AdvancedConfig {
+  note_type: string;
+  time_range: string;
+  sample_count: string;
+  viral_ratio: string;
+}
+
+/** 与 ChatPanel / 编排默认采集参数一致 */
+export const DEFAULT_ADVANCED: AdvancedConfig = {
+  note_type: "不限",
+  time_range: "不限",
+  sample_count: "100",
+  viral_ratio: "前50%",
+};
 
 export interface Conversation {
   conversation_id: string;
@@ -64,6 +99,7 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   metadata: {
+    surface?: ConversationSurface;
     recent_keywords?: string[];
     user_preferences?: Record<string, unknown>;
     [key: string]: unknown;
@@ -127,6 +163,7 @@ export interface ChatMessage {
   task_handoff: TaskHandoff | null;
   linked_task_id?: string | null;
   debug?: Record<string, unknown> | null;
+  attachments?: Array<Record<string, unknown>>;
   created_at: string;
 }
 
@@ -157,12 +194,16 @@ export type ConversationStreamEvent =
       intent?: IntentClassification;
     }
   | { type: "message_error"; message_id: string; code: string; message: string }
+  | { type: "thinking_start"; message_id: string }
+  | { type: "thinking_delta"; message_id: string; delta: string }
+  | { type: "thinking_done"; message_id: string; think: string; duration_ms: number }
   | {
       type: "assistant_message";
       assistant_message: ChatMessage;
       conversation?: Conversation | null;
       intent?: IntentClassification;
-    };
+    }
+  | { type: "conversation_updated"; conversation: Conversation };
 
 export type HistoryTimelineItem =
   | {
@@ -223,7 +264,7 @@ export interface CanvasTheme {
 export interface CanvasModuleAction {
   id: string;
   label: string;
-  command: "regenerate" | "regenerate_cascade" | "delete" | "restore" | "deep_dive" | "export";
+  command: "regen_sheet2_narrative" | "rename_models" | "regenerate" | "regenerate_cascade" | "delete" | "restore" | "deep_dive" | "export";
 }
 
 /** 与后端 `CanvasModule.content.feedback_map` 对齐（阶段 4.3） */

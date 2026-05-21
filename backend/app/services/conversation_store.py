@@ -12,6 +12,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..domain.conversation import ChatMessage, Conversation, new_id, utc_now_iso
+from ..domain.conversation_surfaces import matches_surfaces, normalize_metadata_for_write
 from ..infrastructure.db.engine import get_business_db_session
 
 try:
@@ -44,7 +45,7 @@ class ConversationStore:
             title=(title or "新对话").strip() or "新对话",
             created_at=now,
             updated_at=now,
-            metadata=metadata or {},
+            metadata=normalize_metadata_for_write(metadata),
         )
         with self._lock:
             self._write(conversation, [])
@@ -72,8 +73,8 @@ class ConversationStore:
         include_all: bool = False,
         include_archived: bool = False,
         keyword: Optional[str] = None,
+        surfaces: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """返回会话摘要列表，避免历史中心加载每条完整消息正文。"""
         kw = (keyword or "").strip().lower()
         summaries: List[Dict[str, Any]] = []
         with self._lock:
@@ -92,6 +93,8 @@ class ConversationStore:
 
                 messages = [ChatMessage.from_dict(item) for item in raw.get("messages") or []]
                 summary = self._build_summary(conversation, messages)
+                if not matches_surfaces(conversation.metadata, surfaces):
+                    continue
                 if kw and kw not in self._summary_search_text(summary).lower():
                     continue
                 summaries.append(summary)
@@ -154,6 +157,7 @@ class ConversationStore:
         self,
         conversation_id: str,
         *,
+        title: Optional[str] = None,
         active_task_id: Optional[str] = None,
         summary: Optional[str] = None,
         metadata_patch: Optional[Dict[str, Any]] = None,
@@ -164,12 +168,17 @@ class ConversationStore:
                 raise KeyError(f"Conversation not found: {conversation_id}")
             conversation = Conversation.from_dict(data.get("conversation") or {})
             messages = [ChatMessage.from_dict(item) for item in data.get("messages") or []]
+            if title is not None:
+                t = title.strip()
+                if t:
+                    conversation.title = t[:512]
             if active_task_id is not None:
                 conversation.active_task_id = active_task_id
             if summary is not None:
                 conversation.summary = summary
             if metadata_patch:
                 conversation.metadata.update(metadata_patch)
+                conversation.metadata = normalize_metadata_for_write(conversation.metadata)
             conversation.updated_at = utc_now_iso()
             self._write(conversation, messages)
             return conversation
@@ -267,7 +276,7 @@ class SqlAlchemyConversationStore(ConversationStore):
             title=(title or "新对话").strip() or "新对话",
             created_at=now,
             updated_at=now,
-            metadata=metadata or {},
+            metadata=normalize_metadata_for_write(metadata),
         )
         with get_business_db_session() as session:
             session.execute(
@@ -309,6 +318,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         include_all: bool = False,
         include_archived: bool = False,
         keyword: Optional[str] = None,
+        surfaces: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         where = []
         params: Dict[str, Any] = {"limit": limit}
@@ -318,6 +328,13 @@ class SqlAlchemyConversationStore(ConversationStore):
         if not include_archived:
             where.append("COALESCE((c.metadata ->> 'archived')::boolean, false) = false")
             where.append("COALESCE((c.metadata ->> 'deleted')::boolean, false) = false")
+        if surfaces:
+            placeholders = ",".join([f":sf{i}" for i in range(len(surfaces))])
+            for i, s in enumerate(surfaces):
+                params[f"sf{i}"] = s
+            where.append(
+                f"COALESCE(NULLIF(trim(c.metadata->> 'surface'), ''), 'insight') IN ({placeholders})"
+            )
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         with get_business_db_session() as session:
             rows = session.execute(
@@ -395,12 +412,12 @@ class SqlAlchemyConversationStore(ConversationStore):
                     INSERT INTO conversation_messages(
                         message_id, conversation_id, role, content, intent, intent_confidence,
                         clarification_needed, clarification_question, citations, task_handoff,
-                        linked_task_id, debug, created_at
+                        linked_task_id, debug, attachments, created_at
                     ) VALUES (
                         :message_id, :conversation_id, :role, :content, :intent, :intent_confidence,
                         :clarification_needed, :clarification_question, CAST(:citations AS jsonb),
                         CAST(:task_handoff AS jsonb), :linked_task_id, CAST(:debug AS jsonb),
-                        CAST(:created_at AS timestamptz)
+                        CAST(:attachments AS jsonb), CAST(:created_at AS timestamptz)
                     )
                     """
                 ),
@@ -416,6 +433,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         self,
         conversation_id: str,
         *,
+        title: Optional[str] = None,
         active_task_id: Optional[str] = None,
         summary: Optional[str] = None,
         metadata_patch: Optional[Dict[str, Any]] = None,
@@ -423,18 +441,24 @@ class SqlAlchemyConversationStore(ConversationStore):
         conversation = self.get(conversation_id)
         if not conversation:
             raise KeyError(f"Conversation not found: {conversation_id}")
+        if title is not None:
+            t = title.strip()
+            if t:
+                conversation.title = t[:512]
         if active_task_id is not None:
             conversation.active_task_id = active_task_id
         if summary is not None:
             conversation.summary = summary
         if metadata_patch:
             conversation.metadata.update(metadata_patch)
+            conversation.metadata = normalize_metadata_for_write(conversation.metadata)
         conversation.updated_at = utc_now_iso()
         with get_business_db_session() as session:
             session.execute(
                 text(
                     """
                     UPDATE conversations SET
+                        title = :title,
                         active_task_id = :active_task_id,
                         summary = :summary,
                         metadata = CAST(:metadata AS jsonb),
@@ -467,6 +491,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         data["citations"] = data.get("citations") or []
         data["debug"] = data.get("debug")
         data["task_handoff"] = data.get("task_handoff")
+        data["attachments"] = data.get("attachments") if data.get("attachments") is not None else []
         return ChatMessage.from_dict(data)
 
     @staticmethod
@@ -499,6 +524,7 @@ class SqlAlchemyConversationStore(ConversationStore):
             else None,
             "linked_task_id": message.linked_task_id,
             "debug": json.dumps(message.debug, ensure_ascii=False) if message.debug is not None else None,
+            "attachments": json.dumps(list(message.attachments or []), ensure_ascii=False),
             "created_at": message.created_at,
         }
 

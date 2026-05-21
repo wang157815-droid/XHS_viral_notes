@@ -45,11 +45,15 @@ from .base import AgentContext, AgentResult, BaseAgent
 
 
 _DIMENSIONS = ("industry", "competitor", "brand")
-_PER_GROUP_TIMEOUT = int(os.getenv("CRAWLER_GROUP_TIMEOUT", "300"))
+_PER_GROUP_TIMEOUT = int(os.getenv("CRAWLER_GROUP_TIMEOUT", "3600"))
 # 每组（共享同一组关键词的维度）的目标笔记数。
 # 小红书搜索 API 每页 20 条，内部按三种 sort 维度分配（点赞 / 评论 / 收藏），
 # 所以 target=45 表示每个 sort 大约 15 条，基本是一页左右且不浪费。
 # 若要更多可调到 100+，但耗时会线性上升（每页 20-40s，100 条约 2-3 分钟）。
+# 注意：_PER_GROUP_TIMEOUT 仅作极端防挂起保护网，正常采集不会触发：
+#   - 默认 45 条：约 1-2 分钟内完成
+#   - 500 条（前端最大）：约 30-40 分钟
+#   - 设为 3600s(1h) 确保任意合理配置都能采集完毕，不在中途斩断数据
 _DEFAULT_TARGET_PER_GROUP = int(os.getenv("CRAWLER_TARGET_PER_GROUP", "45"))
 _VIRAL_RATIO = float(os.getenv("CRAWLER_VIRAL_RATIO", "0.5"))
 _MIN_SAMPLE = int(os.getenv("CRAWLER_MIN_SAMPLE", "5"))
@@ -492,6 +496,13 @@ class CrawlerAgent(BaseAgent):
 
         active_dims = [d for d in _DIMENSIONS if dims_keywords[d]]
 
+        # 若用户明确声明不需要竞品，从 active_dims 中移除 competitor 维度
+        pipeline_cfg = (parsed.get("pipeline_config") or {})
+        if pipeline_cfg.get("skip_competitor") or str(parsed.get("competitor_source") or "") == "user_skip":
+            active_dims = [d for d in active_dims if d != "competitor"]
+            dims_keywords["competitor"] = []
+            logger.info("[Crawler] skip_competitor=True，已跳过竞品维度爬取")
+
         # 解析前端高级配置，用户 UI 调整优先于 env 默认值
         advanced_config = input_spec.get("advanced_config") or {}
         runtime_cfg = _parse_advanced_config(advanced_config)
@@ -646,31 +657,6 @@ class CrawlerAgent(BaseAgent):
             if cache_missed_by_dim.get(dim)
         }
 
-        crawl_kw_override: Optional[Dict[str, List[str]]] = None
-        if False:
-            crawl_kw_override = {k: list(v) for k, v in dims_keywords.items()}
-            if main_missed:
-                for dim in _dims_sharing_kw_group(dims_keywords, active_dims, "industry"):
-                    crawl_kw_override[dim] = list(main_missed)
-            elif main_res:
-                # 显式命中且无 miss，说明该侧 100% 命中缓存，不再实时爬取
-                for dim in _dims_sharing_kw_group(dims_keywords, active_dims, "industry"):
-                    if dim in dims_limit:
-                        dims_limit.remove(dim)
-                    if dim in crawl_kw_override:
-                        del crawl_kw_override[dim]
-                        
-            if comp_missed:
-                for dim in _dims_sharing_kw_group(dims_keywords, active_dims, "competitor"):
-                    crawl_kw_override[dim] = list(comp_missed)
-            elif comp_res:
-                # 显式命中且无 miss，说明该侧 100% 命中缓存，不再实时爬取
-                for dim in _dims_sharing_kw_group(dims_keywords, active_dims, "competitor"):
-                    if dim in dims_limit:
-                        dims_limit.remove(dim)
-                    if dim in crawl_kw_override:
-                        del crawl_kw_override[dim]
-
         crawl_kw_override = None
         if any(cache_missed_by_dim.get(dim) for dim in active_dims):
             crawl_kw_override = {k: list(v) for k, v in dims_keywords.items()}
@@ -694,25 +680,6 @@ class CrawlerAgent(BaseAgent):
                 dims_limit=dims_limit,
                 keywords_by_dim_override=crawl_kw_override,
             )
-
-        if False:
-            for dim, prior in prior_main_samples.items():
-                if not prior:
-                    continue
-                post = samples_by_dim.get(dim) or []
-                combined = _dedupe_notes_by_note_id(prior + post)
-                samples_by_dim[dim] = _copy_notes_for_dimension(
-                    combined, dim, active_dims
-                )
-        if False:
-            for dim, prior in prior_comp_samples.items():
-                if not prior:
-                    continue
-                post = samples_by_dim.get(dim) or []
-                combined = _dedupe_notes_by_note_id(prior + post)
-                samples_by_dim[dim] = _copy_notes_for_dimension(
-                    combined, dim, active_dims
-                )
 
         for dim, prior in prior_cached_samples.items():
             if not prior:
@@ -963,17 +930,17 @@ class CrawlerAgent(BaseAgent):
         task_id: str,
         serp_keyword: str,
     ) -> List[Dict[str, Any]]:
-        """查询 xhs_notes 数据库；不限时间窗口，>= 1 条即返回。"""
+        """查询 xhs_notes 数据库；使用可配置的时间窗口（默认 90 天）。"""
         try:
+            from ...core.config import settings
             from ...infrastructure.storage.notes_vector_store import (
                 get_notes_vector_store,
             )
             store = get_notes_vector_store()
-            # recent_days=36500 近似视为不限制时间窗口。
             rows = await store.search_notes(
                 keywords=[serp_keyword],
                 top_k=100,
-                recent_days=36500,
+                recent_days=settings.serp_cache_days,
             )
             if rows:
                 logger.info(
@@ -983,6 +950,50 @@ class CrawlerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"[SERP] DB 查询异常，降级为实时爬取: {exc}")
         return []
+
+    async def _react_keyword_retry(self, task_id: str, keywords: List[str]) -> List[str]:
+        """[ReAct] 关键词采集结果为 0 时，调 LLM 生成 1-2 个同义词重试一次。
+
+        仅在 L1/L2 缓存未命中且真实采集结果为 0 时触发；每组最多重试 1 次。
+        """
+        try:
+            kw_str = "、".join(keywords[:3])
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一个小红书关键词助手。"
+                        "请为以下关键词生成 1-2 个在小红书上更容易搜到内容的同义词或相关词，"
+                        "直接输出词，多个词用逗号分隔，不要解释。"
+                    ),
+                },
+                {"role": "user", "content": f"关键词：{kw_str}"},
+            ]
+            response = await asyncio.wait_for(
+                self._gateway.chat(
+                    "CrawlerAgent",
+                    messages,
+                    modality="text",
+                    task_id=task_id,
+                    overrides={"temperature": 0.3, "max_tokens": 60},
+                ),
+                timeout=15,
+            )
+            text = str(response.get("content") or "").strip()
+            if not text:
+                return []
+            synonyms = [s.strip() for s in re.split(r"[,，、\s]+", text) if s.strip()]
+            orig_set = {k.lower() for k in keywords}
+            filtered = [s for s in synonyms if s.lower() not in orig_set][:2]
+            if filtered:
+                await self.emit_log(
+                    task_id, "info",
+                    f"[ReAct] LLM 生成同义词: {filtered}（原词: {kw_str}）",
+                )
+            return filtered
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[ReAct] 关键词扩展失败，跳过重试: {}", exc)
+            return []
 
     async def _write_back_serp_db(
         self,
@@ -1030,7 +1041,13 @@ class CrawlerAgent(BaseAgent):
         3. 每组独立超时，单组失败不影响其它组。
         4. 采集参数全部来自 runtime_cfg（前端高级配置），不再读取硬编码 env。
         """
-        per_group_target = max(5, int(runtime_cfg["target_count"]))
+        # 用户设定的是期望进入分析的数量（分析目标），
+        # 而 viral_collector 内部会按 viral_ratio 截取前 N%，
+        # 所以采集目标需要按 1/viral_ratio 放大，保证过滤后仍能接近用户期望量。
+        # 例：用户设 200、viral_ratio=0.5 → 需采集 400，过滤后约剩 200。
+        _vr = max(0.05, float(runtime_cfg.get("viral_ratio", _VIRAL_RATIO)))
+        user_analysis_target = max(5, int(runtime_cfg["target_count"]))
+        per_group_target = max(user_analysis_target, int(user_analysis_target / _vr))
         eff_kw: Dict[str, List[str]] = (
             keywords_by_dim_override
             if keywords_by_dim_override is not None
@@ -1059,7 +1076,8 @@ class CrawlerAgent(BaseAgent):
         await self.emit_log(
             task_id,
             "info",
-            f"关键词分组（共 {len(keyword_groups)} 组）：{' | '.join(group_desc)}",
+            f"关键词分组（共 {len(keyword_groups)} 组）：{' | '.join(group_desc)}"
+            f" · 采集目标 {per_group_target} 条/组（分析目标 {user_analysis_target}，爆款比例 {int(_vr*100)}%）",
         )
 
         # 逐组串行采集
@@ -1085,6 +1103,28 @@ class CrawlerAgent(BaseAgent):
                         "可能原因：小红书软反爬、cookie 降权、关键词过冷门，或网络异常。"
                         "建议：先在浏览器手动验证关键词，或重新扫码刷新 cookie。",
                     )
+                    # [ReAct] 关键词 0 结果时自动尝试同义词重试一次
+                    retry_kws = await self._react_keyword_retry(task_id, kws)
+                    if retry_kws:
+                        try:
+                            retry_notes = await asyncio.wait_for(
+                                _collect_one_dimension(cookies_str, retry_kws, per_group_target, runtime_cfg),
+                                timeout=_PER_GROUP_TIMEOUT,
+                            )
+                            if retry_notes:
+                                notes = retry_notes
+                                kws = retry_kws
+                                await self.emit_log(
+                                    task_id, "info",
+                                    f"[ReAct] 同义词重试成功: {retry_kws} → {len(notes)} 条",
+                                )
+                            else:
+                                await self.emit_log(
+                                    task_id, "warn",
+                                    f"[ReAct] 同义词重试仍为 0 条: {retry_kws}，放弃重试",
+                                )
+                        except Exception as _retry_exc:  # noqa: BLE001
+                            await self.emit_log(task_id, "debug", f"[ReAct] 重试采集异常: {_retry_exc}")
                 # 同一批 notes 分配给共享这组 keywords 的所有维度。
                 for dim in dim_list:
                     normalized = [_normalize_note(n, dim, kws[0]) for n in notes]
@@ -2250,8 +2290,14 @@ def _build_four_source_view(
         sources["top_interaction"].append(note)
 
     if not sources["top_interaction"]:
-        sorted_all = sorted(all_notes, key=_interaction_sort_key, reverse=True)
-        for note in sorted_all[:_TOP_INTERACTION_N]:
+        # brand 维度为空，优先从 industry(category_top) 中按互动排序取 top N，
+        # 避免与 all_notes 全量重叠（all_notes 包含 category_top 所有笔记）
+        industry_pool: List[Dict[str, Any]] = []
+        for note in samples_by_dim.get("industry") or []:
+            nid = note.get("note_id") or f"_noid_{note.get('title', '')[:16]}"
+            industry_pool.append(by_id.get(nid, note))
+        fallback_pool = sorted(industry_pool, key=_interaction_sort_key, reverse=True) if industry_pool else sorted(all_notes, key=_interaction_sort_key, reverse=True)
+        for note in fallback_pool[:_TOP_INTERACTION_N]:
             if "top_interaction" not in note["sources_hit"]:
                 note["sources_hit"].append("top_interaction")
             sources["top_interaction"].append(note)

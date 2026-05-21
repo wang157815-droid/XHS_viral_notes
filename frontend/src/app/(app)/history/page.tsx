@@ -260,7 +260,14 @@ export default function HistoryPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${taskId}.${format === "excel" ? "xlsx" : "json"}`;
+      // 从响应头解析服务端生成的文件名，解析不到则降级
+      const cd = res.headers.get("Content-Disposition") ?? "";
+      const nameMatch = cd.match(/filename\*=UTF-8''([^;]+)/i)
+        ?? cd.match(/filename="([^"]+)"/i);
+      const filename = nameMatch
+        ? decodeURIComponent(nameMatch[1])
+        : `${taskId}.${format === "excel" ? "xlsx" : "json"}`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();

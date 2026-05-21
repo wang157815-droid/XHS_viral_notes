@@ -27,9 +27,9 @@
   --color-moss: var(--redmuse-moss);
   --color-dew: var(--redmuse-dew);
   --color-fog: var(--redmuse-fog);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-serif: Georgia, "Times New Roman", "Songti SC", serif;
+  --font-sans: var(--font-inter), "Helvetica Neue", "PingFang SC", ui-sans-serif, system-ui;
+  --font-serif: var(--font-playfair), "Georgia", "Source Han Serif SC", serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
   --radius-xl: 32px;
   --radius-2xl: 48px;
 }
@@ -38,12 +38,12 @@
   body {
     @apply bg-papyrus text-obsidian antialiased;
     font-family:
-      var(--font-geist-sans),
+      var(--font-inter),
+      "Helvetica Neue",
+      "PingFang SC",
       -apple-system,
       BlinkMacSystemFont,
-      "PingFang SC",
       "Microsoft YaHei",
-      "Helvetica Neue",
       sans-serif;
   }
 
@@ -53,7 +53,7 @@
   h4,
   h5,
   h6 {
-    @apply font-serif font-semibold tracking-tight text-obsidian;
+    @apply font-serif font-light tracking-tight text-obsidian;
   }
 }
 
@@ -73,6 +73,90 @@
 
   .sidebar-gradient {
     background: linear-gradient(180deg, rgb(232 240 232 / 0.55) 0%, var(--redmuse-papyrus) 100%);
+  }
+
+  /* 与 RED-MUSE- 侧栏滚动条视觉一致（webkit） */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(26, 26, 26, 0.12);
+    border-radius: 999px;
+  }
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(26, 26, 26, 0.12) transparent;
+  }
+
+  /** 隐藏滚动条但保留滚动（设置页等短内容区避免常驻竖条） */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /** hover 时才显示滚动条（侧边栏历史区） */
+  .hover-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .hover-scrollbar::-webkit-scrollbar {
+    width: 0;
+  }
+  .hover-scrollbar:hover,
+  .hover-scrollbar:focus-within {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(26, 26, 26, 0.12) transparent;
+  }
+  .hover-scrollbar:hover::-webkit-scrollbar,
+  .hover-scrollbar:focus-within::-webkit-scrollbar {
+    width: 5px;
+  }
+  .hover-scrollbar:hover::-webkit-scrollbar-track,
+  .hover-scrollbar:focus-within::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .hover-scrollbar:hover::-webkit-scrollbar-thumb,
+  .hover-scrollbar:focus-within::-webkit-scrollbar-thumb {
+    background: rgba(26, 26, 26, 0.12);
+    border-radius: 999px;
+  }
+
+  /** 加号菜单「高级配置」右侧浮层：轻微滑入 + 显现 */
+  .adv-flyout-panel {
+    transform-origin: left center;
+    animation: adv-flyout-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes adv-flyout-in {
+  from {
+    opacity: 0;
+    transform: translate3d(-10px, 0, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adv-flyout-panel {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }
 

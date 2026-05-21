@@ -316,7 +316,7 @@ def _build_viral_model_matrix(
         default_expanded=True,
         summary=summary,
         content=content,
-        actions=_actions(["regenerate", "regenerate_cascade", "export"]),
+            actions=_actions(["regen_sheet2_narrative", "rename_models", "regenerate", "regenerate_cascade", "export"]),
         depends_on=list(dep),
     )
 
@@ -679,7 +679,9 @@ class CanvasRenderAgent(BaseAgent):
         await self.emit_progress(task_id, "画布渲染:整合模块(含三源样本)", progress=90)
 
         raw_input = (input_spec.get("raw_input") or "").strip()
-        title = f"爆文洞察与框架 · {raw_input[:24] or task_id}"
+        # 标题只显示本品词（brand 维度第一个词，或 keywords 第一个词，兜底用 raw_input 前20字）
+        brand_kws = (input_spec.get("dimensions") or {}).get("brand") or input_spec.get("keywords") or []
+        title = str(brand_kws[0]).strip() if brand_kws else (raw_input[:20] or task_id)
 
         sample_count = int(crawler.get("sample_count") or 0)
         keywords = crawler.get("keywords") or []

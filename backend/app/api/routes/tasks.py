@@ -18,11 +18,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from ...application.auth import resolve_task_record
@@ -36,6 +39,7 @@ from ...application.task_service import task_service
 from ...core.responses import ok
 from ...core.security import RoleLevel, get_current_user, role_allows
 from ...domain.canvas import CanvasSchema
+from ...domain.canvas.schema import CanvasModuleAction
 from ...domain.error_codes import ErrorCode, build_error
 from ...domain.events import TaskEventType
 from ...domain.module_status import ModuleStatus, module_status_machine
@@ -344,6 +348,20 @@ async def retry_task(
 async def get_canvas(task_id: str, current_user: dict = Depends(get_current_user)):
     resolve_task_record(task_id, current_user, action="read_canvas")
     canvas = task_service.get_canvas(task_id)
+    # 动态补齐 mod-viral-model-matrix 的 regen_sheet2_narrative / rename_models action（兼容旧任务）
+    mod = canvas.find_module("mod-viral-model-matrix")
+    if mod is not None:
+        existing_ids = {a.id for a in mod.actions}
+        if "regen_sheet2_narrative" not in existing_ids:
+            mod.actions.insert(0, CanvasModuleAction(
+                id="regen_sheet2_narrative", label="重新写分类叙事", command="regen_sheet2_narrative"
+            ))
+        if "rename_models" not in existing_ids:
+            # rename_models 排在 regen_sheet2_narrative 之后
+            idx = next((i for i, a in enumerate(mod.actions) if a.id == "regen_sheet2_narrative"), -1)
+            mod.actions.insert(idx + 1, CanvasModuleAction(
+                id="rename_models", label="重新起名", command="rename_models"
+            ))
     return ok(canvas.to_dict())
 
 
@@ -355,6 +373,7 @@ class RegenerateRequest(BaseModel):
     cascade: bool = False
     paragraph_id: Optional[str] = None
     feedback_hint: str = ""
+    action_hint: str = ""  # 特殊操作标识，如 "rename_models"
 
 
 def _assert_module_transition(module, target: ModuleStatus, *, module_id: str) -> None:
@@ -453,6 +472,7 @@ async def regenerate_module(
             instruction=payload.instruction,
             feedback_hint=payload.feedback_hint,
             cascade=payload.cascade,
+            action_hint=payload.action_hint,
         )
     )
     return body
@@ -834,11 +854,53 @@ async def export_excel(task_id: str, current_user: dict = Depends(get_current_us
 
     import io
 
-    filename = f"{record.task_id}.xlsx"
+    # 日期：取任务创建时间，格式 YYYY.MM.DD（UTC+8）
+    try:
+        dt = datetime.fromisoformat(record.created_at.replace("Z", "+00:00")).astimezone(
+            timezone(timedelta(hours=8))
+        )
+        date_str = dt.strftime("%Y.%m.%d")
+    except Exception:
+        date_str = datetime.now().strftime("%Y.%m.%d")
+
+    # 主题词：从 TaskContext input_spec.parsed.keywords 读（InputParserAgent 解析结果）
+    input_spec_ctx = ctx.get("input_spec") or {}
+    parsed_ctx = input_spec_ctx.get("parsed") or {}
+    kw_list = list(parsed_ctx.get("keywords") or [])
+    if not kw_list:
+        # fallback: brand 维度
+        kw_list = list((parsed_ctx.get("dimensions") or {}).get("brand") or [])
+    if not kw_list:
+        kw_list = list(record.keywords or [])
+    subject = kw_list[0] if kw_list else record.task_id
+
+    logger.info(
+        f"[export_excel] task={task_id} | "
+        f"record.keywords={record.keywords!r} | "
+        f"input_spec_ctx.keys={list(input_spec_ctx.keys())!r} | "
+        f"parsed_ctx.keys={list(parsed_ctx.keys())!r} | "
+        f"parsed_ctx.keywords={parsed_ctx.get('keywords')!r} | "
+        f"parsed_ctx.dimensions.brand={((parsed_ctx.get('dimensions') or {}).get('brand'))!r} | "
+        f"kw_list={kw_list!r} | subject={subject!r}"
+    )
+
+    # 去除文件名非法字符（Windows 禁用字符 + 斜杠等）
+    subject = re.sub(r'[\\/:*?"<>|]', "", subject).strip() or record.task_id
+
+    filename = f"{date_str}-{subject}-爆文洞察.xlsx"
+    logger.info(f"[export_excel] 最终文件名: {filename!r}")
+
+    # Content-Disposition：
+    # - filename= 只允许 ASCII，替换非 ASCII 为下划线（兼容旧客户端）
+    # - filename*= RFC 5987 UTF-8 编码，现代浏览器优先使用
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", filename)
+    encoded_name = quote(filename, safe="")
+    cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": cd},
     )
 
 

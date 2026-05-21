@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>动态步骤思考面板 · 原型 v2</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f0efed;
+    --text-primary: #1a1a1a;
+    --text-secondary: rgba(26,26,26,0.5);
+    --text-tertiary: rgba(26,26,26,0.32);
+    --accent: #18b06a;
+    --mono-bg: #f7f6f4;
+    --mono-border: rgba(0,0,0,0.07);
+    --step-hover: rgba(0,0,0,0.03);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", sans-serif;
+    background: var(--bg);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 48px 24px 120px;
+    gap: 48px;
+  }
+
+  /* ── Two demo columns ── */
+  .cols { display: flex; gap: 48px; align-items: flex-start; max-width: 960px; width: 100%; }
+  .col  { flex: 1; display: flex; flex-direction: column; gap: 0; }
+  .col-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--text-tertiary);
+    margin-bottom: 20px; padding: 0 2px;
+  }
+
+  /* ── Top summary row ("已完成，用时 8 秒") ── */
+  .task-summary {
+    display: flex; align-items: center; gap: 7px;
+    padding: 0 2px 16px;
+    cursor: pointer; user-select: none;
+  }
+  .task-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+  }
+  .task-dot.running { animation: pulse 1.2s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity:.45; transform:scale(.8); } to { opacity:1; transform:scale(1.2); } }
+  .task-dot.done { animation: none; }
+  .task-summary-text { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+  .task-summary-chevron {
+    width: 14px; height: 14px; color: var(--text-tertiary);
+    transition: transform .2s;
+  }
+  .task-summary-chevron.open { transform: rotate(180deg); }
+
+  /* ── Step rows ── */
+  .steps { display: flex; flex-direction: column; gap: 0; }
+
+  .step { }
+
+  /* Header row: icon + label + arrow */
+  .step-header {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 4px;
+    cursor: pointer; user-select: none;
+    border-radius: 6px;
+    transition: background .15s;
+  }
+  .step-header:hover { background: var(--step-hover); }
+
+  .step-icon {
+    width: 18px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+  }
+  .step-icon svg { width: 14px; height: 14px; }
+  /* Running: replace icon with pulse dot */
+  .step-icon.running-icon {
+    position: relative;
+  }
+  .step-icon.running-icon::after {
+    content: '';
+    position: absolute;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: icon-pulse 1.3s ease-in-out infinite alternate;
+  }
+  @keyframes icon-pulse { from { opacity:.4; transform:scale(.7); } to { opacity:1; transform:scale(1); } }
+
+  .step-name {
+    font-size: 13px; font-weight: 500;
+    color: var(--text-primary); flex: 1;
+    line-height: 1;
+  }
+  .step-chevron {
+    width: 13px; height: 13px;
+    color: var(--text-tertiary); flex-shrink: 0;
+    transition: transform .2s;
+  }
+  /* When details open, rotate chevron */
+  details[open] > .step-header .step-chevron { transform: rotate(180deg); }
+  /* Pending: chevron points right instead */
+  .step-chevron.pending { transform: rotate(-90deg) !important; }
+
+  /* Thinking content box */
+  .step-thinking {
+    margin: 2px 0 10px 27px; /* indent to align with text */
+    background: var(--mono-bg);
+    border: 1px solid var(--mono-border);
+    border-radius: 8px;
+    padding: 11px 14px;
+  }
+  .thinking-text {
+    font-family: "Cascadia Code", "Fira Code", ui-monospace,
+                 "SF Mono", "Consolas", "Menlo", monospace;
+    font-size: 12px; line-height: 1.75;
+    color: rgba(26,26,26,0.68);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .thinking-cursor {
+    display: inline-block; width: 1.5px; height: 13px;
+    background: var(--accent); border-radius: 1px;
+    margin-left: 1px; vertical-align: text-bottom;
+    animation: blink 1.1s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* Logs (secondary collapse inside thinking area) */
+  .step-logs {
+    margin: 2px 0 10px 27px;
+  }
+  .logs-toggle {
+    display: flex; align-items: center; gap: 5px;
+    cursor: pointer; user-select: none;
+    font-size: 10.5px; color: var(--text-tertiary);
+    padding: 3px 0;
+  }
+  .logs-toggle::-webkit-details-marker { display: none; }
+  .logs-toggle::marker { display: none; }
+  .logs-chevron { width: 10px; height: 10px; transition: transform .18s; }
+  details[open] .logs-chevron { transform: rotate(90deg); }
+  .logs-body {
+    margin-top: 4px;
+    background: var(--mono-bg);
+    border: 1px solid var(--mono-border);
+    border-radius: 7px;
+    padding: 8px 12px;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .log-row { display: flex; gap: 6px; align-items: baseline; font-size: 10.5px; line-height: 1.55; }
+  .lvl {
+    font-size: 9px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase; flex-shrink: 0;
+    padding: 1px 4px; border-radius: 3px;
+  }
+  .lvl.info  { color: rgba(26,26,26,.42); background: rgba(0,0,0,.05); }
+  .lvl.warn  { color: #c07a10; background: rgba(192,122,16,.1); }
+  .log-text  { color: var(--text-secondary); flex:1; }
+
+  /* Spacer between steps */
+  .step-gap { height: 4px; }
+
+  /* Note box */
+  .note {
+    margin-top: 22px;
+    background: rgba(255,250,235,0.8);
+    border: 1px solid rgba(200,150,30,.2);
+    border-radius: 8px;
+    padding: 10px 13px;
+    font-size: 10.5px; color: #7a5a10; line-height: 1.65;
+  }
+  .note b { color: #5c420a; }
+  .note code {
+    font-family: ui-monospace, monospace; font-size: 9.5px;
+    background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+<div class="cols">
+
+  <!-- ═══════════════════════════════════════
+       Column 1 · Running state
+       ═══════════════════════════════════════ -->
+  <div class="col">
+    <div class="col-label">状态 A · 执行中</div>
+
+    <!-- Top summary -->
+    <div class="task-summary">
+      <div class="task-dot running"></div>
+      <span class="task-summary-text">正在分析，已用 <span id="elapsed">42</span>s</span>
+    </div>
+
+    <div class="steps">
+
+      <!-- Step 1: done, collapsed -->
+      <details class="step">
+        <summary class="step-header">
+          <span class="step-icon">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2a6 6 0 100 12A6 6 0 008 2z"/><path d="M8 5v3l2 2"/></svg>
+          </span>
+          <span class="step-name">意图解析</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <div class="step-thinking">
+          <div class="thinking-text">解析创作请求「防脱精华」。识别核心领域：头皮护理 / 防脱发产品。检测功效诉求词：防脱、精华、育发。判断竞品关键词范围：育发精华、生发液、防脱洗发水、头皮养护。内容方向预估偏向产品测评型与成分科普型。构建采集规格与 pipeline 参数...</div>
+        </div>
+        <details class="step-logs">
+          <summary class="logs-toggle">
+            <svg class="logs-chevron" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6"><polyline points="3,2 7,5 3,8"/></svg>
+            执行日志 · 3 条
+          </summary>
+          <div class="logs-body">
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">输入解析：识别关键词与调整需求 (progress=5)</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">关键词提取：["防脱精华","头皮护理","育发"] · 竞品词 6 个</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">pipeline_config: run_video=true, run_rag=true</span></div>
+          </div>
+        </details>
+      </details>
+      <div class="step-gap"></div>
+
+      <!-- Step 2: done, collapsed (crawler - no thinking) -->
+      <details class="step">
+        <summary class="step-header">
+          <span class="step-icon">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="5" r="2.5"/><circle cx="5" cy="11" r="2.5"/><line x1="8.8" y1="6.8" x2="7.2" y2="9.2"/></svg>
+          </span>
+          <span class="step-name">小红书采集</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <details class="step-logs">
+          <summary class="logs-toggle" style="padding: 6px 0 3px;">
+            <svg class="logs-chevron" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6"><polyline points="3,2 7,5 3,8"/></svg>
+            执行日志 · 4 条
+          </summary>
+          <div class="logs-body">
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">开始采集：4 个维度 · 目标 100 条 · 爆款比例 50%</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">[行业池] 点赞 25 条，评论 22 条，收藏 21 条</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">[竞品池] 竞品品牌笔记 19 条</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">合并去重：有效笔记 87 条，互动中位数 3,420</span></div>
+          </div>
+        </details>
+      </details>
+      <div class="step-gap"></div>
+
+      <!-- Step 3: done, collapsed -->
+      <details class="step">
+        <summary class="step-header">
+          <span class="step-icon">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="9" rx="1.5"/><line x1="5" y1="7" x2="11" y2="7"/><line x1="5" y1="10" x2="9" y2="10"/></svg>
+          </span>
+          <span class="step-name">图文分析</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <div class="step-thinking">
+          <div class="thinking-text">对 87 条笔记进行 6 要素多模态标注。识别封面视觉风格：实拍产品型（43%）、生活场景型（31%）、成分信息型（26%）。标题钩子类型分布：痛点共鸣型占比最高（38%），其次是效果展示型（29%）...</div>
+        </div>
+      </details>
+      <div class="step-gap"></div>
+
+      <!-- Step 4: RUNNING, expanded with streaming -->
+      <details class="step" open>
+        <summary class="step-header">
+          <span class="step-icon running-icon"></span>
+          <span class="step-name">爆文模型</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <div class="step-thinking">
+          <div class="thinking-text" id="stream-text">分析 87 条笔记的内容特征分布。
+
+初步识别 9 种 playbook 签名方向。
+
+主方向统计：
+- 场景沉浸型（使用场景+情感代入）: 34 条，占比 39%
+- 成分科普型（专业背书+功效解释）: 21 条，占比 24%
+- 对比测评型（前后对比+真实反馈）: 14 条，占比 16%
+- 达人种草型（KOL 视角+生活场景）:  8 条，占比  9%
+
+注意到「场景沉浸型」内部存在明显分化</div><span class="thinking-cursor" id="cursor-a"></span>
+        </div>
+        <details class="step-logs" open>
+          <summary class="logs-toggle">
+            <svg class="logs-chevron" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6"><polyline points="3,2 7,5 3,8"/></svg>
+            执行日志 · <span id="log-count">5</span> 条
+          </summary>
+          <div class="logs-body" id="log-body">
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">playbook 聚类 → 9 个模型 (动态上限 9，原始 direction 7 个)</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">Step2.5 适配优化：检查 87 条笔记，移动 6 条 → 当前 9 个模型</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">Step2.6 质量审查：合并 2 冗余模型 → 7 个</span></div>
+            <div class="log-row"><span class="lvl warn">warn</span><span class="log-text">检测到过大模型：场景沉浸型 (34/87=39%)，评估拆分</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">Step2.7 笔记适配度审查启动：7 个模型，87 条笔记</span></div>
+          </div>
+        </details>
+      </details>
+      <div class="step-gap"></div>
+
+      <!-- Step 5: pending (not yet started) -->
+      <div class="step">
+        <div class="step-header" style="cursor:default; opacity:.45;">
+          <span class="step-icon">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.8 3.6L14 6.3l-3 2.9.7 4.1L8 11.3l-3.7 1.9.7-4.1-3-2.9 4.2-.7z"/></svg>
+          </span>
+          <span class="step-name">洞察提炼</span>
+          <svg class="step-chevron pending" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </div>
+      </div>
+
+    </div><!-- /steps -->
+
+    <div class="note" style="margin-top:20px">
+      <b>动态出现：</b>「洞察提炼」等后续步骤在对应 Agent 收到第一条
+      <code>AGENT_THINKING_CHUNK</code> 事件前不渲染（此处灰显仅供对比）。
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       Column 2 · Completed state
+       ═══════════════════════════════════════ -->
+  <div class="col">
+    <div class="col-label">状态 B · 已完成</div>
+
+    <div class="task-summary">
+      <div class="task-dot done"></div>
+      <span class="task-summary-text">已完成，用时 1m 14s</span>
+      <svg class="task-summary-chevron open" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+    </div>
+
+    <div class="steps">
+
+      <!-- All done steps -->
+      <details class="step">
+        <summary class="step-header">
+          <span class="step-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2a6 6 0 100 12A6 6 0 008 2z"/><path d="M8 5v3l2 2"/></svg></span>
+          <span class="step-name">意图解析</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <div class="step-thinking">
+          <div class="thinking-text">解析创作请求「防脱精华」。识别核心领域：头皮护理 / 防脱发产品。检测功效诉求词：防脱、精华、育发。判断竞品关键词范围：育发精华、生发液、防脱洗发水、头皮养护。内容方向预估偏向产品测评型与成分科普型。构建采集规格与 pipeline 参数确认完毕。</div>
+        </div>
+      </details>
+      <div class="step-gap"></div>
+
+      <details class="step">
+        <summary class="step-header">
+          <span class="step-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="5" r="2.5"/><circle cx="5" cy="11" r="2.5"/><line x1="8.8" y1="6.8" x2="7.2" y2="9.2"/></svg></span>
+          <span class="step-name">数据检索</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <details class="step-logs" style="margin-top:6px">
+          <summary class="logs-toggle">
+            <svg class="logs-chevron" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6"><polyline points="3,2 7,5 3,8"/></svg>
+            执行日志 · 4 条
+          </summary>
+          <div class="logs-body">
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">开始采集：4 个维度 · 目标 100 条 · 爆款比例 50%</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">[行业池] 点赞 25 条，评论 22 条，收藏 21 条</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">[竞品池] 竞品品牌笔记 19 条</span></div>
+            <div class="log-row"><span class="lvl info">info</span><span class="log-text">合并去重：有效笔记 87 条</span></div>
+          </div>
+        </details>
+      </details>
+      <div class="step-gap"></div>
+
+      <details class="step" open>
+        <summary class="step-header">
+          <span class="step-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.8 3.6L14 6.3l-3 2.9.7 4.1L8 11.3l-3.7 1.9.7-4.1-3-2.9 4.2-.7z"/></svg></span>
+          <span class="step-name">洞察提炼</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <div class="step-thinking">
+          <div class="thinking-text">基于 87 条爆款笔记与 7 个爆文模型提炼洞察。
+
+用户核心痛点：脱发焦虑、成分不透明、效果不确定。
+高互动笔记普遍采用「问题代入→产品呈现→效果验证」三段式结构。
+
+SEO 核心词：防脱精华、头皮护理、生发精华
+长尾机会词：熬夜脱发、产后脱发、男士防脱
+
+策略建议：优先布局「问题导向+成分背书」复合型内容，情感共鸣型植入具体使用场景可显著提升收藏率。</div>
+        </div>
+      </details>
+      <div class="step-gap"></div>
+
+      <details class="step">
+        <summary class="step-header">
+          <span class="step-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="9" rx="1.5"/><line x1="5" y1="7" x2="11" y2="7"/><line x1="5" y1="10" x2="9" y2="10"/></svg></span>
+          <span class="step-name">结构编排</span>
+          <svg class="step-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,4 6,8 10,4"/></svg>
+        </summary>
+        <div class="step-thinking">
+          <div class="thinking-text">组织 9 个 Canvas 模块，渲染爆文模型矩阵、痛点分布、SEO 地图与创作策略。画布写入完毕，模块状态均为 READY。</div>
+        </div>
+      </details>
+
+    </div><!-- /steps -->
+
+    <div class="note" style="margin-top:20px">
+      <b>完成后：</b>所有步骤默认折叠，点击任意步骤查看思考过程。无外层卡片包裹，无进度条。
+    </div>
+  </div>
+
+</div><!-- /cols -->
+
+<script>
+// ── Streaming simulation for running step ────────────────────────────────────
+const el    = document.getElementById('stream-text');
+const cur   = document.getElementById('cursor-a');
+const logBd = document.getElementById('log-body');
+const logCt = document.getElementById('log-count');
+
+const chunks = [
+  "——\n  - 18条：侧重产品使用过程（涂抹、按摩、发质变化记录）",
+  "\n  - 16条：侧重情感叙事弧线（焦虑 → 尝试 → 改变）",
+  "\n\nhook_type 差异显著。判断应拆分为独立子模型。",
+  "\n\n「成分科普型」中检测到 3 条含对比词（vs./PK/前后对比），",
+  "\n与「对比测评型」特征更一致，建议归并。",
+  "\n\n最终方案：9 → 7 个模型（合并 2 + 拆分 1 + 移动 3条）..."
+];
+
+let ci = 0, di = 0;
+
+function tick() {
+  if (ci >= chunks.length) {
+    cur.style.opacity = '0'; cur.style.animation = 'none';
+    addLog('info', 'Step2.7 完成：移动 3 条，拆分 1 个模型 → 最终 7 个模型');
+    return;
+  }
+  const s = chunks[ci];
+  if (di < s.length) { el.textContent += s[di++]; setTimeout(tick, 16 + Math.random() * 18); }
+  else { ci++; di = 0; setTimeout(tick, 100 + Math.random() * 200); }
+}
+
+let added = 0;
+function addLog(lvl, msg) {
+  const d = document.createElement('div');
+  d.className = 'log-row';
+  d.innerHTML = `<span class="lvl ${lvl}">${lvl}</span><span class="log-text">${msg}</span>`;
+  logBd.appendChild(d);
+  logCt.textContent = String(5 + (++added));
+}
+
+setTimeout(tick, 1000);
+setTimeout(() => addLog('info', 'Step2.7: 识别过大模型「场景沉浸型」(34条>39%)，进入拆分评估'), 2800);
+setTimeout(() => addLog('info', 'Step2.7: 移动 3 条对比词笔记 → 对比测评型'), 5400);
+
+// ── Elapsed timer ─────────────────────────────────────────────────────────────
+let s = 42;
+setInterval(() => {
+  s++;
+  const m = Math.floor(s/60), r = s%60;
+  document.getElementById('elapsed').textContent = m > 0 ? `${m}m ${r}s` : `${s}s`;
+}, 1000);
+</script>
+</body>
+</html>

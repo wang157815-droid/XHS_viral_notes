@@ -63,3 +63,15 @@ export function roleLabel(role?: string | null): string {
       return "只读成员";
   }
 }
+
+/** 三角色英文展示名（与后端 role 对齐：admin / analyst / viewer） */
+export function roleLabelEn(role?: string | null): string {
+  switch (normalizeRole(role)) {
+    case "admin":
+      return "Admin";
+    case "analyst":
+      return "Analyst";
+    case "viewer":
+      return "Viewer";
+  }
+}

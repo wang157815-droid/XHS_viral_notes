@@ -42,6 +42,7 @@ class ConversationToolExecutionContext:
     store: ConversationStore
     knowledge_qa: KnowledgeQAService
     status_events: List[Dict[str, Any]] = field(default_factory=list)
+    restrict_knowledge_doc_ids: Optional[List[str]] = None
 
 
 class ConversationToolExecutor:
@@ -165,7 +166,7 @@ class ConversationToolExecutor:
         )
         message = self._assistant(
             ctx,
-            "已创建小红书爆文分析任务，右侧 Canvas 会随着多 Agent 流程逐步生成。",
+            "",
             linked_task_id=result.record.task_id,
             debug={
                 "tool_name": call.name,
@@ -285,6 +286,7 @@ class ConversationToolExecutor:
             intent=intent,
             conversation_summary=ctx.store.get(ctx.conversation_id).summary if ctx.store.get(ctx.conversation_id) else "",
             current_user=ctx.current_user,
+            restrict_doc_ids=ctx.restrict_knowledge_doc_ids,
         )
         message = self._assistant(ctx, answer, debug={"tool_name": call.name, **debug})
         message.citations = citations

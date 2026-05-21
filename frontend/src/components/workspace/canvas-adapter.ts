@@ -69,6 +69,8 @@ const STATUS_BADGE: Record<string, PrototypeBadge | null> = {
 };
 
 const ACTION_LABEL: Record<string, string> = {
+  regen_sheet2_narrative: "重新写分类叙事",
+  rename_models: "重新起名",
   regenerate: "重新生成",
   regenerate_cascade: "级联重生",
   delete: "删除",

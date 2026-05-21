@@ -20,6 +20,7 @@ class FakeRag:
         min_score=0.0,
         owner_user_id=None,
         include_all=True,
+        restrict_doc_ids=None,
     ):
         self.calls.append(
             {

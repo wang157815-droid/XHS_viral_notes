@@ -133,6 +133,7 @@ class RAGService:
         min_score: float = 0.0,
         owner_user_id: Optional[str] = None,
         include_all: bool = True,
+        doc_ids: Optional[List[str]] = None,
     ) -> List[DocumentSearchResult]:
         """
         语义搜索知识库
@@ -163,6 +164,14 @@ class RAGService:
             if not include_all:
                 join_clause = "JOIN knowledge_documents d ON d.doc_id = c.doc_id"
                 owner_clause = "AND d.owner_user_id = :owner_user_id"
+            doc_clause = ""
+            if doc_ids:
+                cleaned = [str(d).strip() for d in doc_ids if str(d).strip()]
+                if cleaned:
+                    ph = ",".join([f":doc_{i}" for i in range(len(cleaned))])
+                    for i, d in enumerate(cleaned):
+                        params[f"doc_{i}"] = d
+                    doc_clause = f"AND c.doc_id IN ({ph})"
 
             with get_business_db_session() as session:
                 rows = session.execute(
@@ -176,6 +185,7 @@ class RAGService:
                           AND c.embedding_model = :embedding_model
                           {domain_clause}
                           {owner_clause}
+                          {doc_clause}
                         ORDER BY c.embedding <=> CAST(:embedding AS vector)
                         LIMIT :top_k
                         """

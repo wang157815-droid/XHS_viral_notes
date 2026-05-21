@@ -13,8 +13,68 @@ import {
 import { apiGet } from "@/lib/api-client";
 import type { CanvasModule, CanvasSchema, ChatMessage } from "@/lib/contracts";
 import type { SseClientStatus } from "@/lib/sse/event-source-client";
-import type { TaskStreamState } from "@/lib/sse/event-reducer";
+import { type TaskStreamState } from "@/lib/sse/event-reducer";
 import { useTaskStream } from "@/lib/sse/use-task-stream";
+
+// ── sessionStorage 快照 ────────────────────────────────────────────────────────
+const STREAM_SNAP_KEY = (id: string) => `redmuse:stream:${id}`;
+
+type StreamSnapshot = Pick<
+  TaskStreamState,
+  | "status"
+  | "progress"
+  | "agentStatus"
+  | "agentThinkingDone"
+  | "agentLogs"
+  | "lastEventAt"
+  | "error"
+  | "videoAsyncState"
+>;
+
+function loadSnapshot(taskId: string): StreamSnapshot | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = sessionStorage.getItem(STREAM_SNAP_KEY(taskId));
+    if (!raw) return null;
+    const snap = JSON.parse(raw) as StreamSnapshot;
+    // 去重 agentLogs：旧快照可能在 SSE 重连时积累了重复 event_id 条目
+    if (snap.agentLogs) {
+      const deduped: typeof snap.agentLogs = {};
+      for (const [aid, logs] of Object.entries(snap.agentLogs)) {
+        const seen = new Set<string>();
+        deduped[aid] = (logs as Array<{ event_id?: string }>).filter((l) => {
+          if (!l.event_id) return true;
+          if (seen.has(l.event_id)) return false;
+          seen.add(l.event_id);
+          return true;
+        }) as typeof logs;
+      }
+      snap.agentLogs = deduped;
+    }
+    return snap;
+  } catch {
+    return null;
+  }
+}
+
+function saveSnapshot(taskId: string, state: TaskStreamState): void {
+  try {
+    if (typeof window === "undefined") return;
+    const snap: StreamSnapshot = {
+      status: state.status,
+      progress: state.progress,
+      agentStatus: state.agentStatus,
+      agentThinkingDone: state.agentThinkingDone,
+      agentLogs: state.agentLogs,
+      lastEventAt: state.lastEventAt,
+      error: state.error,
+      videoAsyncState: state.videoAsyncState,
+    };
+    sessionStorage.setItem(STREAM_SNAP_KEY(taskId), JSON.stringify(snap));
+  } catch {
+    // sessionStorage 不可用或已满，忽略
+  }
+}
 
 export interface WorkspaceContextValue {
   // 状态
@@ -74,6 +134,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [canvasCollapsed, setCanvasCollapsedState] = useState<boolean>(true);
   const [busyModuleIds, setBusyModuleIds] = useState<Set<string>>(new Set());
   const [fallbackCanvas, setFallbackCanvas] = useState<CanvasSchema | null>(null);
+  // REST 侧获取的真实任务状态（用于纠正 SSE backlog 清空后的 "running" 幽灵状态）
+  const [verifiedTaskStatus, setVerifiedTaskStatus] = useState<string | null>(null);
 
   const {
     state: streamState,
@@ -82,11 +144,115 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     reconnect,
   } = useTaskStream(taskId);
 
+  // taskId 变化时重置 REST 验证状态
+  useEffect(() => {
+    setVerifiedTaskStatus(null);
+  }, [taskId]);
+
+  // ── sessionStorage 快照：taskId 变化时尝试加载 ─────────────────────────────
+  const [restoredSnapshot, setRestoredSnapshot] = useState<StreamSnapshot | null>(null);
+
+  useEffect(() => {
+    if (!taskId) {
+      setRestoredSnapshot(null);
+      return;
+    }
+    setRestoredSnapshot(loadSnapshot(taskId));
+  }, [taskId]);
+
+  // ── sessionStorage 快照：有步骤数据时随时保存（不限于任务终止） ──────────────
+  // 这样执行中途刷新也能恢复已完成的步骤，终止态后保存完整记录
+  useEffect(() => {
+    if (!taskId) return;
+    // 只有 agentStatus 有数据时才有意义保存（避免保存空快照）
+    if (Object.keys(streamState.agentStatus).length === 0) return;
+    saveSnapshot(taskId, streamState);
+  }, [
+    taskId,
+    streamState.status,
+    streamState.agentStatus,
+    streamState.agentLogs,
+    streamState.agentThinkingDone,
+    streamState.lastEventAt,
+    streamState.error,
+    streamState.videoAsyncState,
+    streamState.progress,
+  ]);
+
+  /**
+   * effectiveStreamState：
+   * 始终将 sessionStorage 快照作为基线，再把 SSE 实时流的数据合并覆盖其上。
+   *
+   * 这样解决 SSE backlog 溢出问题：
+   * - 长任务产生大量 AGENT_THINKING_CHUNK，backlog 1000 条被挤满，早期步骤事件丢失
+   * - 刷新后 SSE 只回放后半段，导致早期步骤从界面消失
+   * - 有了合并逻辑，快照提供早期步骤 base，实时流提供最新状态，两者互补
+   */
+  const effectiveStreamState = useMemo<TaskStreamState>(() => {
+    const snapHasData =
+      restoredSnapshot &&
+      Object.keys(restoredSnapshot.agentStatus ?? {}).length > 0;
+
+    // 没有快照时：若有 REST 验证状态且流状态未知，用验证状态修正
+    if (!snapHasData) {
+      if (verifiedTaskStatus && streamState.status === "unknown") {
+        return { ...streamState, status: verifiedTaskStatus };
+      }
+      return streamState;
+    }
+
+    // 合并：快照为基线，实时流数据覆盖（实时流更新时优先）
+    const mergedAgentStatus = {
+      ...(restoredSnapshot!.agentStatus ?? {}),
+      ...streamState.agentStatus,
+    };
+
+    // 日志：实时流有条目时覆盖，否则保留快照
+    const mergedAgentLogs: Record<string, import("@/lib/sse/event-reducer").TaskLogEntry[]> = {
+      ...(restoredSnapshot!.agentLogs ?? {}),
+    };
+    for (const [aid, logs] of Object.entries(streamState.agentLogs)) {
+      if (logs.length > 0) mergedAgentLogs[aid] = logs;
+    }
+
+    const mergedAgentThinkingDone = {
+      ...(restoredSnapshot!.agentThinkingDone ?? {}),
+      ...streamState.agentThinkingDone,
+    };
+
+    const liveHasStatus = streamState.status !== "unknown";
+    const liveHasProgress = streamState.progress > 0;
+
+    // 优先级：SSE 实时状态 > REST 验证状态 > 快照状态
+    // verifiedTaskStatus 在 refreshCanvas 时从 REST 获取，解决 backlog 重置后"永远运行中"问题
+    const resolvedStatus =
+      liveHasStatus
+        ? streamState.status
+        : (verifiedTaskStatus ?? restoredSnapshot!.status);
+
+    return {
+      status: resolvedStatus,
+      progress: liveHasProgress ? streamState.progress : restoredSnapshot!.progress,
+      canvas: streamState.canvas,           // canvas 由 REST 单独加载
+      logs: streamState.logs,               // 日志不持久化
+      agentStatus: mergedAgentStatus,
+      lastEventAt: streamState.lastEventAt ?? restoredSnapshot!.lastEventAt,
+      error: streamState.error ?? restoredSnapshot!.error,
+      videoAsyncState:
+        streamState.videoAsyncState !== "idle"
+          ? streamState.videoAsyncState
+          : (restoredSnapshot!.videoAsyncState ?? "idle"),
+      agentThinking: streamState.agentThinking,  // 不持久化（太大）
+      agentThinkingDone: mergedAgentThinkingDone,
+      agentLogs: mergedAgentLogs,
+    };
+  }, [streamState, restoredSnapshot, verifiedTaskStatus]);
+
   // 任务已完成但 SSE 画布仍空（例如 canvas 事件被截断）：再拉一次完整 canvas 覆盖兜底。
   useEffect(() => {
     if (!taskId) return;
-    if (streamState.status !== "completed") return;
-    const modules = streamState.canvas?.modules;
+    if (effectiveStreamState.status !== "completed") return;
+    const modules = effectiveStreamState.canvas?.modules;
     if (Array.isArray(modules) && modules.length > 0) return;
 
     let cancelled = false;
@@ -104,9 +270,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [taskId, streamState.status, streamState.canvas]);
+  }, [taskId, effectiveStreamState.status, effectiveStreamState.canvas]);
 
-  // 兜底拉取一次 canvas：taskId 变化且 SSE 还没推 canvas_schema_updated 时
+  // 兜底拉取一次 canvas + 任务状态：taskId 变化且 SSE 还没推事件时
   useEffect(() => {
     if (!taskId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -115,12 +281,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
     const pull = async () => {
-      const res = await apiGet<CanvasSchema>(
-        `/tasks/${encodeURIComponent(taskId)}/canvas`,
-        { withAuth: true },
-      );
-      if (!cancelled && res.ok && res.data.task_id === taskId) {
-        setFallbackCanvas(res.data);
+      const [canvasRes, taskRes] = await Promise.all([
+        apiGet<CanvasSchema>(`/tasks/${encodeURIComponent(taskId)}/canvas`, { withAuth: true }),
+        apiGet<{ task_id: string; status: string }>(`/tasks/${encodeURIComponent(taskId)}`, { withAuth: true }),
+      ]);
+      if (cancelled) return;
+      if (taskRes.ok && taskRes.data.task_id === taskId) {
+        setVerifiedTaskStatus(taskRes.data.status);
+      }
+      if (canvasRes.ok && canvasRes.data.task_id === taskId) {
+        setFallbackCanvas(canvasRes.data);
       }
     };
     void pull();
@@ -212,22 +382,27 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const patchCanvasModule = useCallback(
     (module: CanvasModule) => {
       setFallbackCanvas((prev) => {
-        const base = prev ?? streamState.canvas;
+        const base = prev ?? effectiveStreamState.canvas;
         if (base && base.task_id !== taskId) return prev;
         return base ? applyModulePatch(base, module) : prev;
       });
     },
-    [streamState.canvas, taskId],
+    [effectiveStreamState.canvas, taskId],
   );
 
   const refreshCanvas = useCallback(async () => {
     if (!taskId) return null;
-    const res = await apiGet<CanvasSchema>(`/tasks/${encodeURIComponent(taskId)}/canvas`, {
-      withAuth: true,
-    });
-    if (res.ok && res.data.task_id === taskId) {
-      setFallbackCanvas(res.data);
-      return res.data;
+    // 并发拉取 canvas + 任务状态（任务状态用于纠正 SSE backlog 清空后的幽灵 "running"）
+    const [canvasRes, taskRes] = await Promise.all([
+      apiGet<CanvasSchema>(`/tasks/${encodeURIComponent(taskId)}/canvas`, { withAuth: true }),
+      apiGet<{ task_id: string; status: string }>(`/tasks/${encodeURIComponent(taskId)}`, { withAuth: true }),
+    ]);
+    if (taskRes.ok && taskRes.data.task_id === taskId) {
+      setVerifiedTaskStatus(taskRes.data.status);
+    }
+    if (canvasRes.ok && canvasRes.data.task_id === taskId) {
+      setFallbackCanvas(canvasRes.data);
+      return canvasRes.data;
     }
     return null;
   }, [taskId]);
@@ -241,7 +416,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       canvasCollapsed,
       busyModuleIds,
       fallbackCanvas,
-      streamState,
+      streamState: effectiveStreamState,
       connectionStatus,
       streamError,
       startTask,
@@ -266,7 +441,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       canvasCollapsed,
       busyModuleIds,
       fallbackCanvas,
-      streamState,
+      effectiveStreamState,
       connectionStatus,
       streamError,
       startTask,

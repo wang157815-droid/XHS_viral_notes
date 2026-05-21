@@ -18,6 +18,7 @@ ConversationIntent = Literal[
     "xhs_analysis",
     "refine_canvas",
     "export",
+    "web_research",
     "unknown",
 ]
 
@@ -147,6 +148,7 @@ class ChatMessage:
     task_handoff: Optional[TaskHandoff] = None
     linked_task_id: Optional[str] = None
     debug: Optional[Dict[str, Any]] = None
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -163,11 +165,16 @@ class ChatMessage:
             "task_handoff": self.task_handoff.to_dict() if self.task_handoff else None,
             "linked_task_id": self.linked_task_id,
             "debug": self.debug,
+            "attachments": list(self.attachments or []),
             "created_at": self.created_at,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ChatMessage":
+        raw_att = data.get("attachments")
+        attachments: List[Dict[str, Any]] = []
+        if isinstance(raw_att, list):
+            attachments = [a for a in raw_att if isinstance(a, dict)]
         return cls(
             message_id=str(data.get("message_id") or new_id("msg")),
             conversation_id=str(data.get("conversation_id") or ""),
@@ -181,6 +188,7 @@ class ChatMessage:
             task_handoff=TaskHandoff.from_dict(data.get("task_handoff")),
             linked_task_id=data.get("linked_task_id"),
             debug=data.get("debug"),
+            attachments=attachments,
             created_at=str(data.get("created_at") or utc_now_iso()),
         )
 

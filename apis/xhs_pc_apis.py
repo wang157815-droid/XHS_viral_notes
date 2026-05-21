@@ -381,21 +381,15 @@ class XHS_Apis():
             api = f"/api/sns/web/v1/feed"
             data = {
                 "source_note_id": note_id,
-                "image_formats": [
-                    "jpg",
-                    "webp",
-                    "avif"
-                ],
-                "extra": {
-                    "need_body_topic": "1"
-                },
+                "image_formats": ["jpg", "webp", "avif"],
+                "extra": {"need_body_topic": "1"},
                 "xsec_source": query_params.get('xsec_source', ['pc_search'])[0],
                 "xsec_token": query_params.get('xsec_token', [''])[0]
             }
             headers, cookies, data = generate_request_params(cookies_str, api, data)
             response = requests.post(self.base_url + api, headers=headers, data=data, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success, msg = res_json.get("success"), res_json.get("msg")
         except Exception as e:
             success = False
             msg = str(e)

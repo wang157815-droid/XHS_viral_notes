@@ -120,6 +120,7 @@ class ViralModel:
     model_id: str                    # "M1", "M2", ...
     name: str                        # "单品推荐"
     description: str = ""            # 简短描述(LLM 产出,便于用户理解)
+    definition: str = ""             # 属加种差法正式定义(LLM 产出,用于 Sheet1 模型定义行)
     coverage: float = 0.0            # 该模型占全部爆款样本的比例 0.0-1.0
     avg_interaction: int = 0         # 该模型下爆款的平均互动量
     sample_note_ids: List[str] = field(default_factory=list)  # 归到这个模型的 note ids
@@ -140,9 +141,43 @@ class ViralModel:
                 for code, cats in self.elements.items()
             },
         }
+        if self.definition:
+            data["definition"] = self.definition
         if self.paragraph_id:
             data["paragraph_id"] = self.paragraph_id
         return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ViralModel":
+        """从 to_dict() 输出重建 ViralModel 对象（轻量重建，用于更新操作）。"""
+        elements: Dict[ElementCode, List[ElementCategory]] = {}
+        for code_str, cats_raw in (data.get("elements") or {}).items():
+            try:
+                code = ElementCode(code_str)
+            except ValueError:
+                continue
+            cats = []
+            for c in (cats_raw or []):
+                if not isinstance(c, dict):
+                    continue
+                cats.append(ElementCategory(
+                    type=str(c.get("type") or ""),
+                    ratio=float(c.get("ratio") or 0),
+                    count=int(c.get("count") or 0),
+                    paragraph_id=c.get("paragraph_id"),
+                ))
+            elements[code] = cats
+        return cls(
+            model_id=str(data.get("model_id") or ""),
+            name=str(data.get("name") or ""),
+            description=str(data.get("description") or ""),
+            definition=str(data.get("definition") or ""),
+            coverage=float(data.get("coverage") or 0),
+            avg_interaction=int(data.get("avg_interaction") or 0),
+            sample_note_ids=list(data.get("sample_note_ids") or []),
+            elements=elements,
+            paragraph_id=data.get("paragraph_id"),
+        )
 
 
 @dataclass

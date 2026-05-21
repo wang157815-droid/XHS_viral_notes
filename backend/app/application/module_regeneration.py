@@ -129,6 +129,31 @@ def _merge_feedback(into_content: Dict[str, Any], feedback_map: Dict[str, Any]) 
     return content
 
 
+async def _emit_agent_done(task_id: str, agent_id: str) -> None:
+    """重生成路径下：发出 agent 完成事件，让前端 Timeline 对应步骤变绿。"""
+    await task_event_bus.publish_event(
+        task_id=task_id,
+        type=TaskEventType.AGENT_PROGRESS,
+        payload={"agent_id": agent_id, "message": "", "done": True},
+    )
+
+
+async def _emit_task_status_sync(task_id: str) -> None:
+    """重生成结束后：广播当前任务状态，让前端修正 isTerminal 标志（避免步骤一直显示旋转）。"""
+    try:
+        record = task_repository.get(task_id)
+        if record is None:
+            return
+        status_val = record.status.value if hasattr(record.status, "value") else str(record.status)
+        await task_event_bus.publish_event(
+            task_id=task_id,
+            type=TaskEventType.TASK_STATUS,
+            payload={"status": status_val},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[module_regeneration] 同步任务状态失败 task_id={}: {}", task_id, exc)
+
+
 async def _emit_full_module(task_id: str, module_id: str) -> None:
     canvas = task_service.get_canvas(task_id)
     mod = canvas.find_module(module_id)
@@ -343,13 +368,13 @@ async def run_module_regeneration(
     instruction: str,
     feedback_hint: str,
     cascade: bool,
+    action_hint: str = "",
 ) -> None:
     _ = cascade  # 级联 stale 已在 API 同步完成；执行器内专注内容刷新
     try:
         canvas = task_service.get_canvas(task_id)
         fb_saved = _save_feedback_snapshots(canvas)
         feedback_fn = _feedback_resolver(fb_saved)
-
         ctx = task_context_store.require(task_id)
         handle = TaskExecutionHandle(task_id=task_id)
         agent_ctx = AgentContext(task_id=task_id, task_context=ctx, handle=handle)
@@ -377,6 +402,7 @@ async def run_module_regeneration(
                 instruction,
                 hint_text,
                 feedback_fn,
+                action_hint=action_hint,
             )
             return
 
@@ -430,6 +456,10 @@ async def run_module_regeneration(
         except Exception:
             logger.exception("[module_regeneration] 降级写回失败 task={}", task_id)
         await _emit_error(task_id, f"模块重生失败: {exc}")
+    finally:
+        # 无论成功还是失败，重广播一次当前任务状态，
+        # 保证前端 isTerminal 标志能正确恢复（解决后端重启后 backlog 清空导致步骤永远旋转的问题）
+        await _emit_task_status_sync(task_id)
 
 
 def _write_viral_matrix(ctx: Any, vm: Dict[str, Any]) -> None:
@@ -452,6 +482,72 @@ def _write_semantic(ctx: Any, semantic: Dict[str, Any]) -> None:
     _bump_repo_ctx(ctx.task_id, ctx)
 
 
+async def _regen_sheet2_narrative_only(
+    task_id: str,
+    agent_ctx: AgentContext,
+    vm: Dict[str, Any],
+    ctx: Any,
+    feedback_fn: Callable[[str], Dict[str, Any]],
+) -> None:
+    """只重跑 Sheet2NarrativeAgent，不重建聚类、不重命名。"""
+    models_raw = vm.get("models") or []
+    if not models_raw:
+        await _emit_full_module(task_id, "mod-viral-model-matrix")
+        return
+
+    await Sheet2NarrativeAgent().run(agent_ctx)
+    await _emit_agent_done(task_id, "Sheet2NarrativeAgent")
+    _push_matrix_module(task_id, ctx, feedback_fn("mod-viral-model-matrix"))
+    await _emit_full_module(task_id, "mod-viral-model-matrix")
+
+
+async def _regen_viral_model_names(
+    task_id: str,
+    agent_ctx: AgentContext,
+    vm: Dict[str, Any],
+    ctx: Any,
+    feedback_fn: Callable[[str], Dict[str, Any]],
+) -> None:
+    """只重跑 LLM 命名步骤，不重建聚类。将新 name/definition 写回 viral_model_output。"""
+    from ..domain.viral_model import ViralModel as DomainViralModel
+
+    models_raw = vm.get("models") or []
+    if not models_raw:
+        await _emit_full_module(task_id, "mod-viral-model-matrix")
+        return
+
+    models = [
+        DomainViralModel.from_dict(m)
+        for m in models_raw
+        if isinstance(m, dict) and m.get("model_id")
+    ]
+    if not models:
+        await _emit_full_module(task_id, "mod-viral-model-matrix")
+        return
+
+    await ViralModelAgent()._llm_name_models(task_id, models)
+    await _emit_agent_done(task_id, "ViralModelAgent")
+
+    # 将更新后的 name / definition 合并回原始 dict（保留其余字段不变）
+    by_id = {m.model_id: m for m in models}
+    updated = []
+    for raw in models_raw:
+        if not isinstance(raw, dict):
+            updated.append(raw)
+            continue
+        mid = str(raw.get("model_id") or "")
+        m = by_id.get(mid)
+        if m:
+            updated.append({**raw, "name": m.name, "definition": m.definition})
+        else:
+            updated.append(raw)
+
+    vm["models"] = updated
+    _write_viral_matrix(ctx, vm)
+    _push_matrix_module(task_id, ctx, feedback_fn("mod-viral-model-matrix"))
+    await _emit_full_module(task_id, "mod-viral-model-matrix")
+
+
 async def _regen_viral_matrix(
     task_id: str,
     agent_ctx: AgentContext,
@@ -460,11 +556,22 @@ async def _regen_viral_matrix(
     instruction: str,
     hint_text: str,
     feedback_fn: Callable[[str], Dict[str, Any]],
+    action_hint: str = "",
 ) -> None:
     ctx = agent_ctx.task_context
     vm = ctx.get("viral_model_output")
     if not isinstance(vm, dict):
         vm = {}
+
+    # 仅重新命名：不重建聚类，只重跑 LLM 命名步骤
+    if action_hint == "rename_models":
+        await _regen_viral_model_names(task_id, agent_ctx, vm, ctx, feedback_fn)
+        return
+
+    # 仅重写分类叙事：不重建聚类、不重命名，只重跑 Sheet2NarrativeAgent
+    if action_hint == "regen_sheet2_narrative":
+        await _regen_sheet2_narrative_only(task_id, agent_ctx, vm, ctx, feedback_fn)
+        return
 
     if route.scope == ParagraphScope.MATRIX_CATEGORY and paragraph_id:
         try:
@@ -484,6 +591,7 @@ async def _regen_viral_matrix(
                 vm2 = _apply_matrix_category(vm, route, delta)
             _write_viral_matrix(ctx, vm2)
             await Sheet2NarrativeAgent().run(agent_ctx)
+            await _emit_agent_done(task_id, "Sheet2NarrativeAgent")
             _push_matrix_module(task_id, ctx, feedback_fn("mod-viral-model-matrix"))
             await _emit_full_module(task_id, "mod-viral-model-matrix")
             return
@@ -511,6 +619,7 @@ async def _regen_viral_matrix(
             vm2 = _apply_matrix_model(vm, route, delta)
             _write_viral_matrix(ctx, vm2)
             await Sheet2NarrativeAgent().run(agent_ctx)
+            await _emit_agent_done(task_id, "Sheet2NarrativeAgent")
             _push_matrix_module(task_id, ctx, feedback_fn("mod-viral-model-matrix"))
             await _emit_full_module(task_id, "mod-viral-model-matrix")
             return
@@ -522,7 +631,9 @@ async def _regen_viral_matrix(
 
     # 整模块重生
     await ViralModelAgent().run(agent_ctx)
+    await _emit_agent_done(task_id, "ViralModelAgent")
     await Sheet2NarrativeAgent().run(agent_ctx)
+    await _emit_agent_done(task_id, "Sheet2NarrativeAgent")
     _push_matrix_module(task_id, ctx, feedback_fn("mod-viral-model-matrix"))
     await _emit_full_module(task_id, "mod-viral-model-matrix")
 
@@ -638,6 +749,7 @@ async def _regen_insight_modules(
                 logger.warning("[module_regeneration] SEO 条目 LLM 失败,降级整表: {}", exc)
 
     await InsightAgent().run(agent_ctx)
+    await _emit_agent_done(task_id, "InsightAgent")
     _push_insight_canvas(task_id, ctx, feedback_fn)
     await _emit_full_module(task_id, "mod-pain-points")
     await _emit_full_module(task_id, "mod-seo-insights")

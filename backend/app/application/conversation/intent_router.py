@@ -12,7 +12,6 @@ from ...domain.conversation import IntentClassification
 
 
 _XHS_KEYWORDS = ("小红书", "爆文", "爆款", "采集", "搜索", "爬取", "生成模型", "爆文模型", "模型矩阵")
-_KNOWLEDGE_KEYWORDS = ("知识库", "文档", "资料", "规则", "SOP", "合规", "案例", "手册", "规范")
 _EXPORT_KEYWORDS = ("导出", "excel", "Excel", "xlsx", "json", "JSON")
 _REFINE_KEYWORDS = (
     "修改",
@@ -118,15 +117,6 @@ class IntentRouter:
                 reason="命中小红书/爆文任务类关键词",
                 extracted_keywords=extracted_keywords,
                 competitor_keywords=extracted_competitors,
-            )
-
-        if self._contains_any(text, _KNOWLEDGE_KEYWORDS):
-            return IntentClassification(
-                intent="knowledge_qa",
-                confidence=0.8,
-                reason="命中知识库/文档/规则类关键词",
-                extracted_keywords=hint_keywords or self.extract_keywords(text),
-                should_retrieve_knowledge=True,
             )
 
         if len(text) <= 4 and not recent_messages and not conversation_summary:
