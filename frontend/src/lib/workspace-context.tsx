@@ -225,10 +225,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
     // 优先级：SSE 实时状态 > REST 验证状态 > 快照状态
     // verifiedTaskStatus 在 refreshCanvas 时从 REST 获取，解决 backlog 重置后"永远运行中"问题
-    const resolvedStatus =
+    const resolvedStatus = (
       liveHasStatus
         ? streamState.status
-        : (verifiedTaskStatus ?? restoredSnapshot!.status);
+        : (verifiedTaskStatus ?? restoredSnapshot!.status)
+    ) as TaskStreamState["status"];
 
     return {
       status: resolvedStatus,
