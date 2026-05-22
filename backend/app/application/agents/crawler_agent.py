@@ -2434,7 +2434,7 @@ def _resolve_cookies_str(owner_user_id: str) -> str:
     2. :class:`XhsCredentialStore` 中按 RedMuse ``user_id`` 命中的记录
     3. 兼容旧 XHS user_id（identity_store 反查 username）
     4. ``ALLOW_ADMIN_COOKIE_FALLBACK=true`` 时回退 admin
-    5. ``COOKIES`` / ``COOKIE`` 环境变量
+    5. ``COOKIES`` / ``COOKIE`` 环境变量（仅非 u_* 用户可用）
 
     返回结构化结果只保留 cookie 字符串，调用方维持原签名不变。
     """
@@ -2443,5 +2443,12 @@ def _resolve_cookies_str(owner_user_id: str) -> str:
     resolved = get_credential_resolver().resolve(owner_user_id)
     if resolved.found:
         return resolved.cookies_str
+
+    # u_* 用户未绑定 XHS 账号时，抛出明确错误，禁止使用空 cookie 继续爬取
+    if owner_user_id and owner_user_id.startswith("u_"):
+        raise RuntimeError(
+            f"用户 {owner_user_id} 尚未绑定小红书账号，无法执行数据采集任务。"
+            "请到「设置 → 数据源授权」完成小红书账号绑定后再试。"
+        )
 
     return ""

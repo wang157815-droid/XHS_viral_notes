@@ -138,10 +138,25 @@ class XhsCredentialResolver:
                     cookies_path="datas/users/admin/cookies.json",
                 )
 
-        # 5. 环境变量兜底（兼容旧 viral_app）
+        # 5. 环境变量兜底（仅允许在无任何 RedMuse 用户绑定的单机/遗留部署中使用）
+        # 多用户系统下，u_* 用户若走到这里说明未绑定 XHS 账号，不能共用 .env cookie
+        if owner and _looks_like_redmuse_user_id(owner):
+            logger.warning(
+                "[xhs_auth] ❌ 用户 %s 未绑定 XHS 账号，拒绝使用全局 .env COOKIES 兜底，"
+                "请到「设置 → 数据源授权」绑定小红书账号。",
+                owner,
+            )
+            return ResolvedCookie(cookies_str="", source="not_found")
+
         for key in ("COOKIES", "COOKIE"):
             v = (os.getenv(key) or "").strip()
             if v and "xxx" not in v.lower():
+                logger.warning(
+                    "[xhs_auth] ⚠️ 使用全局 .env %s 兜底（owner=%s），"
+                    "多用户场景下会导致 XHS 账号共享，建议每位用户单独绑定账号。",
+                    key,
+                    owner or "unknown",
+                )
                 return ResolvedCookie(cookies_str=v, source="env_compat")
 
         return ResolvedCookie(cookies_str="", source="not_found")
