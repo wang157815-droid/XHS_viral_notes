@@ -104,6 +104,8 @@ class IntentClassification:
     should_retrieve_knowledge: bool = False
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
+    slots: Dict[str, Any] = field(default_factory=dict)
+    missing_fields: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -116,6 +118,8 @@ class IntentClassification:
             "should_retrieve_knowledge": self.should_retrieve_knowledge,
             "clarification_needed": self.clarification_needed,
             "clarification_question": self.clarification_question,
+            "slots": self.slots,
+            "missing_fields": self.missing_fields,
         }
 
     @classmethod
@@ -131,6 +135,8 @@ class IntentClassification:
             should_retrieve_knowledge=bool(data.get("should_retrieve_knowledge")),
             clarification_needed=bool(data.get("clarification_needed")),
             clarification_question=data.get("clarification_question"),
+            slots=dict(data.get("slots") or {}),
+            missing_fields=[str(f) for f in data.get("missing_fields") or []],
         )
 
 

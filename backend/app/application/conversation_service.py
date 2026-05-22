@@ -30,6 +30,7 @@ from ..services.web_search_client import fetch_web_context
 from .module_regeneration import run_module_regeneration
 from .orchestration import get_orchestration_engine
 from .task_service import task_service
+from .conversation.intent_classifier import IntentClassifier, intent_classifier
 from .conversation.intent_router import IntentRouter, intent_router
 from .conversation.knowledge_qa_service import KnowledgeQAService
 from .conversation.tool_agent import ConversationToolAgent, conversation_tool_agent
@@ -46,12 +47,14 @@ class ConversationService:
         *,
         store: Optional[ConversationStore] = None,
         router: Optional[IntentRouter] = None,
+        classifier: Optional[IntentClassifier] = None,
         knowledge_qa: Optional[KnowledgeQAService] = None,
         tool_agent: Optional[ConversationToolAgent] = None,
         tool_executor: Optional[ConversationToolExecutor] = None,
     ) -> None:
         self.store = store or get_conversation_store()
         self.router = router or intent_router
+        self.classifier = classifier or intent_classifier
         self.knowledge_qa = knowledge_qa or KnowledgeQAService()
         self.tool_agent = tool_agent or conversation_tool_agent
         self.tool_executor = tool_executor or ConversationToolExecutor(
@@ -333,12 +336,12 @@ class ConversationService:
         recent_messages = [message.to_dict() for message in self.store.list_messages(conversation_id, limit=10)]
         active_task = active_task_id or conversation.active_task_id
         restrict_docs = self._doc_ids_from_refs(knowledge_refs)
-        intent = self.router.classify(
-            content=classify_content,
-            conversation_summary=conversation.summary,
+        intent = await self._classify_intent(
+            classify_content=classify_content,
+            conversation=conversation,
             recent_messages=recent_messages,
-            active_task_id=active_task,
-            hint_keywords=keywords,
+            active_task=active_task,
+            keywords=keywords,
             competitor_keywords=competitor_keywords,
         )
 
@@ -413,12 +416,12 @@ class ConversationService:
         recent_messages = [message.to_dict() for message in self.store.list_messages(conversation_id, limit=10)]
         active_task = active_task_id or conversation.active_task_id
         restrict_docs = self._doc_ids_from_refs(knowledge_refs)
-        intent = self.router.classify(
-            content=classify_content,
-            conversation_summary=conversation.summary,
+        intent = await self._classify_intent(
+            classify_content=classify_content,
+            conversation=conversation,
             recent_messages=recent_messages,
-            active_task_id=active_task,
-            hint_keywords=keywords,
+            active_task=active_task,
+            keywords=keywords,
             competitor_keywords=competitor_keywords,
         )
         if intent.clarification_needed:
@@ -1444,6 +1447,51 @@ class ConversationService:
                 )
         except Exception as exc:
             logger.warning("[auto-title] ✗ 未预期错误: {}", exc)
+
+
+    async def _classify_intent(
+        self,
+        *,
+        classify_content: str,
+        conversation: Any,
+        recent_messages: List[Dict[str, Any]],
+        active_task: Optional[str],
+        keywords: Optional[List[str]],
+        competitor_keywords: Optional[List[str]],
+    ) -> IntentClassification:
+        """两级意图分类：规则快速路径（≥0.90 直接返回）→ LLM 结构化分类（升级路径）。"""
+        intent = self.router.classify(
+            content=classify_content,
+            conversation_summary=conversation.summary,
+            recent_messages=recent_messages,
+            active_task_id=active_task,
+            hint_keywords=keywords,
+            competitor_keywords=competitor_keywords,
+        )
+        logger.info(
+            "[intent] 规则层: intent={} confidence={:.2f} reason={}",
+            intent.intent, intent.confidence, intent.reason,
+        )
+        if intent.confidence >= 0.90:
+            return intent
+
+        # 置信度不足，升级到 LLM 分类器
+        canvas_modules = self._canvas_modules_for_context(active_task)
+        task_status = self._task_status_for_context(active_task)
+        llm_intent = await self.classifier.classify(
+            content=classify_content,
+            active_task_id=active_task,
+            task_status=task_status,
+            recent_messages=recent_messages,
+            canvas_modules=canvas_modules,
+            hint_keywords=keywords,
+            competitor_keywords=competitor_keywords,
+        )
+        logger.info(
+            "[intent] LLM层: intent={} confidence={:.2f} reason={}",
+            llm_intent.intent, llm_intent.confidence, llm_intent.reason,
+        )
+        return llm_intent
 
 
 conversation_service = ConversationService()
