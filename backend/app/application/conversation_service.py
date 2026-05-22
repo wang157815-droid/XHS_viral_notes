@@ -218,7 +218,14 @@ class ConversationService:
         *,
         vision_parts: Optional[List[Dict[str, Any]]] = None,
         doc_hints: Optional[str] = None,
+        conversation_summary: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        summary_block = ""
+        if conversation_summary and conversation_summary.strip():
+            summary_block = (
+                f"\n\n## 对话历史摘要（早期上文）\n{conversation_summary.strip()}\n"
+                "（以上为历史摘要，以下是最近的对话记录）"
+            )
         system = {
             "role": "system",
             "content": (
@@ -255,8 +262,7 @@ class ConversationService:
                 "- 使用合法 Markdown：分点用 `- `，步骤用 `1. `，"
                 "代码/路径/字段名用反引号，标题只用 `##` 或 `###`，不滥用表格。\n"
                 "- 不要输出 HTML。\n"
-                "- **绝对不要假装已经执行了采集、生成或导出操作**——如果用户需要执行任务，"
-                "引导他们重新发一条明确的任务指令。"
+                + summary_block
             ),
         }
         chat_messages: List[Dict[str, Any]] = [system]
@@ -519,6 +525,22 @@ class ConversationService:
         )
         yield {"type": "status", "status": "tool_started", "tool": call.name}
         assistant_message = await self.tool_executor.execute(call, ctx)
+
+        # 风险/竞品确认路径：tool_executor 检测到需要确认，返回流式标记
+        debug_info = assistant_message.debug or {}
+        if debug_info.get("tool_status") in ("risk_confirmation_needed", "confirmation_needed"):
+            async for event in self._stream_confirmation_question(
+                conversation_id=conversation_id,
+                intent=intent,
+                risk_issues=debug_info.get("risk_issues") or [],
+                keywords=debug_info.get("risk_keywords") or [],
+                needs_risk=bool(debug_info.get("needs_risk", debug_info.get("tool_status") == "risk_confirmation_needed")),
+                needs_competitor=bool(debug_info.get("needs_competitor", False)),
+                current_user=current_user,
+            ):
+                yield event
+            return
+
         self.store.append_message(conversation_id, assistant_message)
         self._maybe_update_summary(conversation_id)
         asyncio.create_task(self._auto_title_if_needed(conversation_id))
@@ -773,6 +795,128 @@ class ConversationService:
             else:
                 yield event
 
+    async def _stream_confirmation_question(
+        self,
+        conversation_id: str,
+        intent: "IntentClassification",
+        risk_issues: List[str],
+        keywords: List[str],
+        needs_risk: bool,
+        needs_competitor: bool,
+        current_user: Dict[str, Any],
+    ) -> "AsyncIterator[Dict[str, Any]]":
+        """流式生成风险提示 + 竞品确认问句（合并为一条消息）。"""
+        user_name = (
+            current_user.get("username")
+            or current_user.get("display_name")
+            or "你"
+        )
+
+        # 根据需要确认的内容动态构建 system_prompt
+        confirm_items: List[str] = []
+        if needs_risk:
+            issues_text = "；".join(risk_issues)
+            confirm_items.append(
+                f"配置风险：{issues_text}（推荐：笔记类型不限、互动量 1000+、样本量 100、时间范围半年内）"
+            )
+        if needs_competitor:
+            confirm_items.append(
+                "竞品策略：用户未提及竞品，需确认是希望我自动推荐竞品进行对比分析，还是本次跳过竞品分析"
+            )
+
+        confirm_text = "\n".join(f"- {item}" for item in confirm_items)
+
+        system_prompt = (
+            "你是 RedMuse 爆文分析助手。用户刚才发起了一个爆文分析任务，"
+            "在正式开始前有以下事项需要向用户确认：\n\n"
+            f"{confirm_text}\n\n"
+            "要求：\n"
+            "1. 以用户的名字开头，语气自然亲切\n"
+            "2. 针对每个待确认事项分别说明，清晰但简洁\n"
+            "3. 对于配置风险：说明潜在影响，给出推荐配置，问是否继续或调整\n"
+            "4. 对于竞品策略：问用户希望我自动推荐竞品，还是只分析本品不做竞品对比\n"
+            "5. 不要提及平台风控、数据源限制等技术原因\n"
+            "6. 回复简洁自然，控制在 200 字以内"
+        )
+        user_prompt = (
+            f"用户名：{user_name}\n"
+            f"用户分析关键词：{', '.join(keywords) if keywords else '未指定'}\n\n"
+            "请生成确认问句："
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        content_parts: List[str] = []
+        message_id: Optional[str] = None
+
+        async for event in self._stream_think_filter(
+            model_gateway.chat_stream(
+                "ConversationQAAgent",
+                messages,
+                modality="text",
+                overrides={"max_tokens": 300, "temperature": 0.5},
+            )
+        ):
+            etype = event.get("type")
+            if etype == "message_start":
+                message_id = str(event.get("message_id") or new_id("msg"))
+                yield event
+                continue
+            if etype in ("thinking_start", "thinking_delta", "thinking_done"):
+                yield event
+                continue
+            if etype == "message_delta":
+                content_parts.append(str(event.get("delta") or ""))
+                yield event
+                continue
+            if etype == "message_error":
+                yield event
+                return
+            if etype == "message_done":
+                content = str(event.get("content") or "".join(content_parts)).strip()
+                if not content:
+                    parts: List[str] = []
+                    if needs_risk:
+                        parts.append(
+                            f"{user_name}，你配置的参数达到我的极限啦，分析质量会受到严重影响。"
+                            f"高风险项：{'；'.join(risk_issues)}。"
+                            f"推荐：笔记类型不限、互动量 1000+、样本量 100、时间范围半年内。"
+                        )
+                    if needs_competitor:
+                        parts.append(
+                            "另外，你没有提到竞品词——需要我自动推荐竞品进行对比分析，还是这次只分析本品？"
+                        )
+                    content = "\n\n".join(parts) + "\n\n你要继续还是调整一下？"
+                assistant = ChatMessage(
+                    message_id=message_id or str(event.get("message_id") or new_id("msg")),
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=content,
+                    intent=intent.intent,
+                    intent_confidence=intent.confidence,
+                    debug={
+                        "intent_reason": intent.reason,
+                        "tool_name": "ask_clarification",
+                        "tool_status": "clarification_required",
+                        "risk_issues": risk_issues,
+                        "needs_competitor": needs_competitor,
+                        "streamed": True,
+                    },
+                )
+                self.store.append_message(conversation_id, assistant)
+                self._maybe_update_summary(conversation_id)
+                refreshed = self.store.get(conversation_id)
+                yield {
+                    **event,
+                    "message_id": assistant.message_id,
+                    "content": assistant.content,
+                    "assistant_message": assistant.to_dict(),
+                    "conversation": refreshed.to_dict() if refreshed else None,
+                    "intent": intent.to_dict(),
+                }
+                return
+
     async def _stream_general_answer(
         self,
         conversation_id: str,
@@ -791,8 +935,11 @@ class ConversationService:
         att_list: List[Dict[str, Any]] = raw_att if isinstance(raw_att, list) else []
         vision_parts = self._vision_parts_from_attachments(owner_user_id, att_list)
         doc_hints = self._attachment_hints(att_list, owner_user_id)
+        conv_obj = self.store.get(conversation_id)
+        conv_summary = (conv_obj.summary or "") if conv_obj else ""
         messages = self._build_general_qa_messages(
-            recent_messages, vision_parts=vision_parts or None, doc_hints=doc_hints or None
+            recent_messages, vision_parts=vision_parts or None, doc_hints=doc_hints or None,
+            conversation_summary=conv_summary or None,
         )
         modality = "multimodal" if vision_parts else "text"
         content_parts: List[str] = []
@@ -1241,9 +1388,11 @@ class ConversationService:
             "viral_ratio",
             "min_sample_count",
         }
-        if selected and selected.name != "answer_general":
-            return selected
+        CONFIRMATION_FIELDS = {"risk_confirmation", "competitor_confirmation"}
+
         if pending_tool == "regenerate_canvas_module":
+            if selected and selected.name != "answer_general":
+                return selected
             target_modules = self.router.extract_target_modules(content)
             if target_modules:
                 return ConversationToolCall(
@@ -1252,7 +1401,31 @@ class ConversationService:
                     confidence=0.74,
                     reason="filled pending regenerate_canvas_module",
                 )
+
         if pending_tool == "start_xhs_analysis":
+            # ① 风险/竞品确认等待：必须优先处理，不能被 selected 绕过
+            #    pending_args 里已有 risk_acknowledged=True / competitor_acknowledged=True
+            if missing_fields and missing_fields.issubset(CONFIRMATION_FIELDS):
+                skip_signals = (
+                    "不需要竞品", "跳过竞品", "不分析竞品", "不要竞品",
+                    "只分析本品", "只看本品", "不用竞品", "略过竞品",
+                )
+                wants_skip_competitor = any(sig in content for sig in skip_signals)
+                resolved_args = {**pending_args, "confirm_new_task": True}
+                if wants_skip_competitor:
+                    resolved_args["skip_competitor"] = True
+                return ConversationToolCall(
+                    name="start_xhs_analysis",
+                    arguments=resolved_args,
+                    confidence=0.78,
+                    reason="user confirmed pending risk/competitor question",
+                )
+
+            # ② 其余情况：若 selected 是一个非 general 的明确工具调用则优先
+            if selected and selected.name != "answer_general":
+                return selected
+
+            # ③ 仅高级配置字段缺失：关键词已知，直接恢复
             if missing_fields and missing_fields.issubset(advanced_only_fields):
                 keywords = pending_args.get("keywords")
                 if isinstance(keywords, list) and keywords:
@@ -1262,6 +1435,8 @@ class ConversationService:
                         confidence=0.76,
                         reason="ignored pending advanced_config-only fields",
                     )
+
+            # ④ 用户补充了关键词
             keywords = self.router.extract_keywords(content)
             if keywords:
                 return ConversationToolCall(
@@ -1270,6 +1445,10 @@ class ConversationService:
                     confidence=0.74,
                     reason="filled pending start_xhs_analysis",
                 )
+
+        # 无法解析 pending，走正常 selected 路径
+        if selected and selected.name != "answer_general":
+            return selected
         return selected
 
     async def _general_qa(
@@ -1288,8 +1467,11 @@ class ConversationService:
         att_list: List[Dict[str, Any]] = raw_att if isinstance(raw_att, list) else []
         vision_parts = self._vision_parts_from_attachments(owner_user_id, att_list)
         doc_hints = self._attachment_hints(att_list, owner_user_id)
+        conv_obj = self.store.get(conversation_id)
+        conv_summary = (conv_obj.summary or "") if conv_obj else ""
         messages = self._build_general_qa_messages(
-            recent_messages, vision_parts=vision_parts or None, doc_hints=doc_hints or None
+            recent_messages, vision_parts=vision_parts or None, doc_hints=doc_hints or None,
+            conversation_summary=conv_summary or None,
         )
         modality = "multimodal" if vision_parts else "text"
         try:
@@ -1360,16 +1542,64 @@ class ConversationService:
         )
 
     def _maybe_update_summary(self, conversation_id: str) -> None:
+        """每 4 条新消息（超过 8 条后）触发一次 LLM 滚动摘要，异步执行不阻塞主流程。"""
         result = self.store.get_with_messages(conversation_id)
         if not result:
             return
         conversation, messages = result
-        if len(messages) <= 10:
+        if len(messages) < 6:
             return
-        user_messages = [message.content for message in messages if message.role == "user"]
-        summary = "；".join(user_messages[-5:])[:500]
-        if summary and summary != conversation.summary:
-            self.store.update_conversation(conversation_id, summary=summary)
+        # 每 4 条触发一次（消息数模 4 == 0），避免每条都触发
+        if len(messages) % 4 != 0:
+            return
+        asyncio.create_task(self._generate_summary(conversation_id, messages))
+
+    async def _generate_summary(self, conversation_id: str, messages: List[Any]) -> None:
+        """调用 LLM 生成对话摘要，压缩早期对话信息，防止长对话失忆。"""
+        try:
+            # 取最近 12 条消息做摘要输入，格式化为对话文本
+            recent = messages[-12:]
+            lines: List[str] = []
+            for m in recent:
+                role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else "")
+                content_text = getattr(m, "content", None) or (m.get("content") if isinstance(m, dict) else "")
+                if role in ("user", "assistant") and content_text:
+                    tag = "用户" if role == "user" else "助手"
+                    lines.append(f"[{tag}] {str(content_text)[:200]}")
+            if not lines:
+                return
+            conversation = self.store.get(conversation_id)
+            existing_summary = (conversation.summary or "") if conversation else ""
+            prior_context = f"\n\n已有摘要（上文）：{existing_summary}" if existing_summary else ""
+            system_prompt = (
+                "你是一个对话摘要助手。请将以下对话压缩为一段简洁的中文摘要，"
+                "重点保留：用户分析的关键词/品牌、配置参数、已确认的决策、当前任务状态。"
+                "摘要不超过 200 字，不需要分析，直接输出摘要文本。"
+            )
+            user_prompt = (
+                f"对话记录：\n{''.join(lines)}"
+                f"{prior_context}\n\n"
+                "请输出新的摘要（包含上文已有信息 + 当前对话更新）："
+            )
+            result = await model_gateway.chat(
+                "ConversationTitleAgent",
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                modality="text",
+                overrides={
+                    "max_tokens": 300,
+                    "temperature": 0.2,
+                    "extra_body": {"enable_thinking": False, "thinking": {"type": "disabled"}},
+                },
+            )
+            summary = str(result.get("content") or "").strip()
+            if summary:
+                self.store.update_conversation(conversation_id, summary=summary)
+                logger.info("[summary] conv={} 摘要已更新 ({} 字)", conversation_id, len(summary))
+        except Exception as exc:
+            logger.warning("[summary] LLM 摘要生成失败: {}", exc)
 
     async def _auto_title_if_needed(self, conversation_id: str) -> None:
         """第一轮回复完成后，调用 LLM 自动生成 ≤10 汉字的会话标题。
@@ -1515,6 +1745,7 @@ class ConversationService:
             canvas_modules=canvas_modules,
             hint_keywords=keywords,
             competitor_keywords=competitor_keywords,
+            conversation_summary=conversation.summary or "",
         )
         logger.info(
             "[intent] LLM层: intent={} confidence={:.2f} reason={}",

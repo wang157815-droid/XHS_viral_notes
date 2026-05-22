@@ -133,14 +133,90 @@ class ConversationToolExecutor:
             "time_range": ctx.intent.slots.get("time_range"),
             "note_type": ctx.intent.slots.get("note_type"),
             "min_interaction": ctx.intent.slots.get("min_interaction"),
+            "sample_count": ctx.intent.slots.get("sample_count"),
+            "viral_ratio": ctx.intent.slots.get("viral_ratio"),
         }
         for field_key, nl_value in nl_config_slots.items():
             if not nl_value:
                 continue
             ui_value = task_advanced_config.get(field_key)
-            # 只有 UI 值是默认（不限/空）时才用 NL 值覆盖
-            if ui_value in _DEFAULT_CONFIG_VALUES:
-                task_advanced_config[field_key] = nl_value
+            if field_key == "sample_count":
+                # sample_count 默认值是 "50"，只有 UI 是默认 50 时才用 NL 值覆盖
+                if ui_value in _DEFAULT_CONFIG_VALUES or ui_value == "50":
+                    task_advanced_config[field_key] = nl_value
+            elif field_key == "viral_ratio":
+                # viral_ratio 默认值是 "前50%"，只有 UI 是默认时才用 NL 值覆盖
+                if ui_value in _DEFAULT_CONFIG_VALUES or ui_value == "前50%":
+                    task_advanced_config[field_key] = nl_value
+            else:
+                # 其他字段只有 UI 值是默认（不限/空）时才用 NL 值覆盖
+                if ui_value in _DEFAULT_CONFIG_VALUES:
+                    task_advanced_config[field_key] = nl_value
+
+        # ── 风险评估 + 竞品确认 ───────────────────────────────────────
+        # 把「配置高风险」和「未指定竞品策略」两类需要确认的情况合并为一次对话提问，
+        # 避免用户被多次打断。
+        risk_acknowledged = bool(args.get("risk_acknowledged"))
+        competitor_acknowledged = bool(args.get("competitor_acknowledged"))
+        needs_risk = False
+        needs_competitor = False
+        risk_issues: List[str] = []
+
+        if not risk_acknowledged:
+            risk_issues = self._detect_risk_issues(task_advanced_config)
+            if risk_issues:
+                needs_risk = True
+
+        if not competitor_acknowledged:
+            # 用户没有提供竞品词，也没有明确说跳过竞品分析
+            has_competitor = bool(
+                self._clean_list(args.get("competitor_keywords"))
+                or ctx.intent.competitor_keywords
+            )
+            skip_competitor = bool(
+                args.get("skip_competitor")
+                or ctx.intent.slots.get("skip_competitor")
+            )
+            if not has_competitor and not skip_competitor:
+                needs_competitor = True
+
+        if needs_risk or needs_competitor:
+            pending_args = {
+                **args,
+                "keywords": keywords,
+                "advanced_config_override": task_advanced_config,
+                "risk_acknowledged": True,
+                "competitor_acknowledged": True,
+            }
+            missing: List[str] = []
+            if needs_risk:
+                missing.append("risk_confirmation")
+            if needs_competitor:
+                missing.append("competitor_confirmation")
+            pending = {
+                "tool_name": "start_xhs_analysis",
+                "arguments": pending_args,
+                "missing_fields": missing,
+            }
+            ctx.store.update_conversation(
+                ctx.conversation_id, metadata_patch={"pending_tool_decision": pending}
+            )
+            return self._assistant(
+                ctx,
+                "",
+                debug={
+                    "tool_status": "confirmation_needed",
+                    "risk_issues": risk_issues,
+                    "risk_keywords": keywords,
+                    "needs_risk": needs_risk,
+                    "needs_competitor": needs_competitor,
+                },
+            )
+
+        # 若 pending 里携带了已合并好的 advanced_config_override，直接使用
+        if args.get("advanced_config_override") and isinstance(args["advanced_config_override"], dict):
+            task_advanced_config = args["advanced_config_override"]
+
         result = self.task_service.create_task(
             owner_user_id=ctx.owner_user_id,
             raw_input=ctx.content,
@@ -368,6 +444,34 @@ class ConversationToolExecutor:
                 "pending_tool_decision": pending,
             },
         )
+
+    @staticmethod
+    def _detect_risk_issues(config: Dict[str, Any]) -> List[str]:
+        """检测配置中的高风险项，返回问题描述列表。无风险时返回空列表。"""
+        import re as _re
+
+        issues: List[str] = []
+
+        raw_count = config.get("sample_count")
+        if raw_count:
+            try:
+                count = int(str(raw_count).strip())
+                if count > 100:
+                    issues.append(f"样本量 {count} 条（推荐上限 100）")
+            except (ValueError, TypeError):
+                pass
+
+        raw_inter = config.get("min_interaction")
+        if raw_inter and str(raw_inter) not in ("不限", "", "None"):
+            m = _re.search(r"(\d+)", str(raw_inter))
+            if m and int(m.group(1)) > 2000:
+                issues.append(f"互动量门槛 {raw_inter}（推荐上限 2000）")
+
+        return issues
+
+    async def _ask_risk_confirmation(self, *args, **kwargs):
+        """已废弃：风险确认改由 conversation_service._stream_risk_confirmation 流式处理。"""
+        raise NotImplementedError("_ask_risk_confirmation is removed; handled by conversation_service")
 
     @staticmethod
     def _assistant(

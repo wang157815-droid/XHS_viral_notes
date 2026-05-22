@@ -77,6 +77,18 @@ min_interaction（互动量下限）：
   "互动量大于10000" / "万赞以上" / "10000以上" / "1w以上" → "10000+"
   未提及 → null
 
+sample_count（采集数量）：
+  "采集50条" / "搜集50篇" / "50条" → "50"
+  "采集80条" / "80篇" → "80"
+  "采集100条" / "一百条" / "100篇" → "100"
+  未提及 → null
+
+viral_ratio（爆款比例/筛选比例）：
+  "前50%" / "前一半" / "互动前50%" → "前50%"
+  "前30%" / "互动前30%" → "前30%"
+  "前20%" / "只要前20%" / "最顶部的20%" → "前20%"
+  未提及 → null
+
 ## few-shot 示例
 
 示例1（xhs_analysis - 明确任务请求）：
@@ -117,7 +129,11 @@ min_interaction（互动量下限）：
 
 示例10（xhs_analysis - 只要视频，万赞以上）：
 输入：找一下最近半年护肤品的视频爆文，要互动量超过10000的
-输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["护肤品"],"competitor_keywords":[],"skip_competitor":false,"time_range":"半年内","note_type":"视频","min_interaction":"10000+"},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定半年内、视频类型、互动量1万以上"}
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["护肤品"],"competitor_keywords":[],"skip_competitor":false,"time_range":"半年内","note_type":"视频","min_interaction":"10000+","sample_count":null,"viral_ratio":null},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定半年内、视频类型、互动量1万以上"}
+
+示例11（xhs_analysis - 指定采集数量和爆款比例）：
+输入：帮我采集80条空调的爆文，只要前30%的
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["空调"],"competitor_keywords":[],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null,"sample_count":"80","viral_ratio":"前30%"},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定采集80条并筛选前30%"}
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 
@@ -132,7 +148,9 @@ min_interaction（互动量下限）：
     "instruction": null,
     "time_range": null,
     "note_type": null,
-    "min_interaction": null
+    "min_interaction": null,
+    "sample_count": null,
+    "viral_ratio": null
   },
   "missing_fields": [],
   "clarification_question": null,
@@ -157,6 +175,7 @@ class IntentClassifier:
         canvas_modules: Optional[List[Dict[str, Any]]] = None,
         hint_keywords: Optional[List[str]] = None,
         competitor_keywords: Optional[List[str]] = None,
+        conversation_summary: Optional[str] = None,
     ) -> IntentClassification:
         """调用 LLM 对用户消息做结构化意图分类。"""
         context = self._build_context(
@@ -166,6 +185,7 @@ class IntentClassifier:
             canvas_modules=canvas_modules or [],
             hint_keywords=hint_keywords or [],
             competitor_keywords=competitor_keywords or [],
+            conversation_summary=conversation_summary,
         )
         user_prompt = (
             f"当前上下文：\n{json.dumps(context, ensure_ascii=False)}\n\n"
@@ -208,6 +228,7 @@ class IntentClassifier:
         canvas_modules: List[Dict[str, Any]],
         hint_keywords: List[str],
         competitor_keywords: List[str],
+        conversation_summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         # 只取最近 3 条消息摘要，避免 token 过多
         recent_summary = [
@@ -219,7 +240,7 @@ class IntentClassifier:
         ]
         # 只传 module_id 列表，不传完整 Canvas 内容
         module_ids = [m.get("module_id") or m.get("moduleId") for m in canvas_modules if m]
-        return {
+        ctx: Dict[str, Any] = {
             "has_active_task": bool(active_task_id),
             "task_status": task_status,
             "canvas_module_ids": module_ids,
@@ -227,6 +248,9 @@ class IntentClassifier:
             "hint_keywords": hint_keywords,
             "competitor_hint": competitor_keywords,
         }
+        if conversation_summary and conversation_summary.strip():
+            ctx["conversation_summary"] = conversation_summary.strip()[:300]
+        return ctx
 
     @staticmethod
     def _parse(raw: str, original_content: str) -> IntentClassification:
@@ -266,6 +290,8 @@ class IntentClassifier:
             "time_range": raw_slots.get("time_range") or None,
             "note_type": raw_slots.get("note_type") or None,
             "min_interaction": raw_slots.get("min_interaction") or None,
+            "sample_count": raw_slots.get("sample_count") or None,
+            "viral_ratio": raw_slots.get("viral_ratio") or None,
         }
 
         missing_fields = [str(f) for f in (data.get("missing_fields") or [])]
