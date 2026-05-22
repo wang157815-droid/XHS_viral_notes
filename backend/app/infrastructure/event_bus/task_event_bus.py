@@ -72,22 +72,41 @@ class TaskEventBus:
         订阅任务事件流：
         1. 先回放 backlog 中缺失的事件
         2. 再进入实时模式
+
+        注意：优先使用 backlog 的 async 版本（RedisStreamBacklog.fetch_after_async），
+        因为同步版本在 FastAPI async 上下文中检测到 running loop 会直接返回空列表，
+        导致服务器上 backlog 回放完全失效，前端连接时丢失早期 Agent 事件。
         """
         sub = _Subscription(task_id=task_id)
         async with self._lock:
             self._subs.setdefault(task_id, []).append(sub)
 
         try:
-            missed = self._backlog.fetch_after(
-                task_id,
-                last_event_id=last_event_id,
-                last_sequence_id=last_sequence_id,
-            )
+            # 优先调用 async 版本（Redis 后端），避免在 running loop 中返回空
+            if hasattr(self._backlog, "fetch_after_async"):
+                missed = await self._backlog.fetch_after_async(  # type: ignore[attr-defined]
+                    task_id,
+                    last_event_id=last_event_id,
+                    last_sequence_id=last_sequence_id,
+                )
+            else:
+                missed = self._backlog.fetch_after(
+                    task_id,
+                    last_event_id=last_event_id,
+                    last_sequence_id=last_sequence_id,
+                )
+
+            # 记录已从 backlog 回放的 event_id，防止 await 期间新入队的事件被重复推送
+            seen: set = {ev.event_id for ev in missed}
             for event in missed:
                 yield event
 
             while True:
                 event = await sub.queue.get()
+                if event.event_id in seen:
+                    # 该事件已在 backlog 回放中发送过，跳过避免重复
+                    continue
+                seen.add(event.event_id)
                 yield event
                 if event.type == TaskEventType.DONE:
                     return
