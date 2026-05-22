@@ -12,7 +12,7 @@ export const ADVANCED_MENU_ROWS: Array<{
   options: string[];
 }> = [
   { key: "note_type", label: "笔记类型", options: ["不限", "视频", "图文"] },
-  { key: "sample_count", label: "采集数量", options: ["100", "200", "500"] },
+  { key: "sample_count", label: "采集数量", options: ["50", "80", "100"] },
   { key: "time_range", label: "时间范围", options: ["不限", "一天内", "一周内", "半年内"] },
   { key: "viral_ratio", label: "爆款比例", options: ["前50%", "前30%", "前20%"] },
   { key: "min_interaction", label: "互动量", options: ["不限", "1000+", "5000+", "10000+"] },
