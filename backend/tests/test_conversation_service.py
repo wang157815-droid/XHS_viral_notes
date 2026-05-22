@@ -135,6 +135,100 @@ async def test_conversation_task_handoff_keeps_main_and_competitor_keywords_sepa
     assert created["advanced_config"]["source"] == "conversation"
 
 
+def test_resolve_pending_cancel_signal_clears_pending_and_returns_selected(tmp_path):
+    """用户在风险/竞品确认等待状态下说「取消」，必须清除 pending 并返回 answer_general，
+    不能强制发起任务（Bug: dd841c3 引入，确认流程忽略取消信号）。"""
+    from backend.app.application.conversation.tool_schema import ConversationToolCall
+
+    store = ConversationStore(store_dir=str(tmp_path / "conversations"))
+    conversation = store.create(owner_user_id="u1")
+    cid = conversation.conversation_id
+
+    # 模拟 pending_tool_decision：等待风险确认
+    pending_decision = {
+        "tool_name": "start_xhs_analysis",
+        "arguments": {
+            "keywords": ["空调"],
+            "risk_acknowledged": True,
+            "competitor_acknowledged": True,
+            "advanced_config_override": {"sample_count": "200"},
+        },
+        "missing_fields": ["risk_confirmation"],
+    }
+    store.update_conversation(cid, metadata_patch={"pending_tool_decision": pending_decision})
+
+    service = ConversationService(store=store)
+    answer_general = ConversationToolCall(
+        name="answer_general",
+        arguments={"question": "取消"},
+        confidence=0.8,
+    )
+
+    # 用户说「取消」—— 应该清除 pending 并返回 answer_general
+    result = service._resolve_pending_tool_call(
+        store.get(cid).metadata,
+        "取消，不做这个分析了",
+        answer_general,
+        conversation_id=cid,
+    )
+
+    assert result is answer_general, "取消信号应返回 selected (answer_general)，不应发起任务"
+    refreshed = store.get(cid)
+    assert refreshed is not None
+    pending_after = (refreshed.metadata or {}).get("pending_tool_decision")
+    assert pending_after is None, "取消后 pending_tool_decision 必须被清除，否则下条消息仍会误触发任务"
+
+
+def test_resolve_pending_confirm_signal_proceeds_with_task(tmp_path):
+    """用户在风险确认等待状态下说「好的，继续」，应该正常发起任务（确认流程的正常路径）。"""
+    from backend.app.application.conversation.tool_schema import ConversationToolCall
+
+    store = ConversationStore(store_dir=str(tmp_path / "conversations"))
+    conversation = store.create(owner_user_id="u1")
+    cid = conversation.conversation_id
+
+    pending_decision = {
+        "tool_name": "start_xhs_analysis",
+        "arguments": {
+            "keywords": ["空调"],
+            "risk_acknowledged": True,
+            "competitor_acknowledged": True,
+        },
+        "missing_fields": ["risk_confirmation", "competitor_confirmation"],
+    }
+    store.update_conversation(cid, metadata_patch={"pending_tool_decision": pending_decision})
+
+    service = ConversationService(store=store)
+    answer_general = ConversationToolCall(
+        name="answer_general",
+        arguments={"question": "好的继续"},
+        confidence=0.6,
+    )
+
+    result = service._resolve_pending_tool_call(
+        store.get(cid).metadata,
+        "好的，继续分析",
+        answer_general,
+        conversation_id=cid,
+    )
+
+    assert result is not None
+    assert result.name == "start_xhs_analysis", "确认信号应发起 start_xhs_analysis"
+    assert result.arguments.get("confirm_new_task") is True
+
+
+def test_build_general_qa_messages_contains_no_fake_execution_guard(tmp_path):
+    """系统提示必须包含「绝对不要假装已经执行了采集、生成或导出操作」守卫指令，
+    防止 AI 错误声称任务已执行（Bug: dd841c3 意外删除此指令）。"""
+    store = ConversationStore(store_dir=str(tmp_path / "conversations"))
+    service = ConversationService(store=store)
+    msgs = service._build_general_qa_messages([{"role": "user", "content": "测试"}])
+    system_content = msgs[0]["content"]
+    assert "绝对不要假装已经执行了采集、生成或导出操作" in system_content, (
+        "系统提示缺少关键安全指令：'绝对不要假装已经执行了采集、生成或导出操作'"
+    )
+
+
 @pytest.mark.asyncio
 async def test_conversation_service_updates_summary_after_window(monkeypatch, tmp_path):
     from backend.app.application import conversation_service as service_mod
