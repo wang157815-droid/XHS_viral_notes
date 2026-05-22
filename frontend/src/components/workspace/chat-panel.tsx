@@ -898,11 +898,39 @@ function ConversationView({
     );
   }
 
-  // 实时模式（userMessage 非空）: messages[0] 是任务发起消息，已在 timeline 上方手动渲染，从 slice(1) 开始避免重复
-  // 历史恢复模式（userMessage 为空）: messages[0] 作为 beforeTimeline 渲染在 timeline 上方，afterTimeline 同样从 slice(1) 开始
+  // 找到任务发起消息在 messages 数组中的位置：
+  // - 实时模式（userMessage 非空）：最后一条内容匹配 userMessage 的 user 消息
+  // - 历史恢复模式（userMessage 为空）：messages[0] 就是任务发起消息
   const isLiveSession = !!userMessage;
-  const beforeTimeline: ChatMessage[] = isLiveSession ? [] : messages.slice(0, 1);
-  const afterTimeline: ChatMessage[] = messages.slice(1);
+
+  let taskMsgIndex = -1;
+  if (isLiveSession) {
+    const trimmed = userMessage.trim();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user" && messages[i].content?.trim() === trimmed) {
+        taskMsgIndex = i;
+        break;
+      }
+    }
+    // 找不到精确匹配时，取最后一条 user 消息作为任务发起消息
+    if (taskMsgIndex === -1) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "user") {
+          taskMsgIndex = i;
+          break;
+        }
+      }
+    }
+  }
+
+  // beforeTimeline: 任务发起消息之前的所有历史对话（实时模式），或任务发起消息本身（历史恢复模式）
+  // afterTimeline: 任务发起消息之后的所有消息（任务执行后的后续回复）
+  const beforeTimeline: ChatMessage[] = isLiveSession
+    ? (taskMsgIndex > 0 ? messages.slice(0, taskMsgIndex) : [])
+    : messages.slice(0, 1);
+  const afterTimeline: ChatMessage[] = isLiveSession
+    ? (taskMsgIndex >= 0 ? messages.slice(taskMsgIndex + 1) : messages)
+    : messages.slice(1);
 
   return (
     <div className="flex w-full flex-col gap-4">
