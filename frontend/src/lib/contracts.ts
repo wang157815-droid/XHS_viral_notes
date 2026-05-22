@@ -87,7 +87,7 @@ export interface AdvancedConfig {
 export const DEFAULT_ADVANCED: AdvancedConfig = {
   note_type: "不限",
   time_range: "不限",
-  sample_count: "100",
+  sample_count: "50",
   viral_ratio: "前50%",
   min_interaction: "不限",
 };
