@@ -124,6 +124,23 @@ class ConversationToolExecutor:
             "source": "conversation",
             "conversation_id": ctx.conversation_id,
         }
+
+        # 将 IntentClassifier 从自然语言中提取的配置槽位合并进 advanced_config
+        # 规则：NL 槽位非空时覆盖（用户在对话中明确表达优先），
+        #       但不覆盖用户通过 UI 已明确设置的非默认值
+        _DEFAULT_CONFIG_VALUES = {"不限", None, ""}
+        nl_config_slots = {
+            "time_range": ctx.intent.slots.get("time_range"),
+            "note_type": ctx.intent.slots.get("note_type"),
+            "min_interaction": ctx.intent.slots.get("min_interaction"),
+        }
+        for field_key, nl_value in nl_config_slots.items():
+            if not nl_value:
+                continue
+            ui_value = task_advanced_config.get(field_key)
+            # 只有 UI 值是默认（不限/空）时才用 NL 值覆盖
+            if ui_value in _DEFAULT_CONFIG_VALUES:
+                task_advanced_config[field_key] = nl_value
         result = self.task_service.create_task(
             owner_user_id=ctx.owner_user_id,
             raw_input=ctx.content,

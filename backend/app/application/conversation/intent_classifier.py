@@ -56,11 +56,32 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
 ### unknown（无法判断）
 触发条件：输入太模糊，无法确定意图且置信度 < 0.55
 
+## 配置参数槽位（仅在 xhs_analysis 时抽取）
+
+当用户消息包含以下自然语言描述时，从中抽取对应的 config 槽位：
+
+time_range（时间范围）：
+  "最近一天" / "今天" / "24小时内" → "一天内"
+  "最近一周" / "最近7天" / "一周内" → "一周内"
+  "最近半年" / "半年内" / "6个月内" → "半年内"
+  未提及 → null（保持前端默认值）
+
+note_type（笔记类型）：
+  "视频" / "视频笔记" / "只要视频" → "视频"
+  "图文" / "图文笔记" / "只要图文" → "图文"
+  未提及 → null
+
+min_interaction（互动量下限）：
+  "互动量大于1000" / "1000以上" / "互动量超过1000" → "1000+"
+  "互动量大于5000" / "5000以上" / "5k以上" → "5000+"
+  "互动量大于10000" / "万赞以上" / "10000以上" / "1w以上" → "10000+"
+  未提及 → null
+
 ## few-shot 示例
 
 示例1（xhs_analysis - 明确任务请求）：
 输入：帮我搜索格力空调的爆文模型
-输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"competitor_keywords":[],"skip_competitor":false},"missing_fields":[],"clarification_question":null,"reason":"明确要求搜索格力空调并生成爆文模型"}
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"competitor_keywords":[],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null},"missing_fields":[],"clarification_question":null,"reason":"明确要求搜索格力空调并生成爆文模型"}
 
 示例2（general_qa - 功能询问，禁止触发任务）：
 输入：你可以做爆文分析吗
@@ -76,7 +97,7 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
 
 示例5（xhs_analysis - 新建任务替换现有）：
 输入：换一个，搜索戴森吹风机
-输出：{"intent":"xhs_analysis","confidence":0.90,"slots":{"keywords":["戴森吹风机"],"competitor_keywords":[],"skip_competitor":false},"missing_fields":[],"clarification_question":null,"reason":"用户明确要换搜索目标，搜索戴森吹风机"}
+输出：{"intent":"xhs_analysis","confidence":0.90,"slots":{"keywords":["戴森吹风机"],"competitor_keywords":[],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null},"missing_fields":[],"clarification_question":null,"reason":"用户明确要换搜索目标，搜索戴森吹风机"}
 
 示例6（xhs_analysis - 关键词不足，需追问）：
 输入：帮我搜索一下
@@ -88,7 +109,15 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
 
 示例8（xhs_analysis - 有竞品）：
 输入：搜索花西子口红，竞品是完美日记
-输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["花西子口红"],"competitor_keywords":["完美日记"],"skip_competitor":false},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标且指定竞品"}
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["花西子口红"],"competitor_keywords":["完美日记"],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标且指定竞品"}
+
+示例9（xhs_analysis - 含时间范围和互动量限制）：
+输入：帮我搜集最近一周互动量大于1000的空调爆文笔记
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["空调"],"competitor_keywords":[],"skip_competitor":false,"time_range":"一周内","note_type":null,"min_interaction":"1000+"},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标且携带时间范围和互动量约束"}
+
+示例10（xhs_analysis - 只要视频，万赞以上）：
+输入：找一下最近半年护肤品的视频爆文，要互动量超过10000的
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["护肤品"],"competitor_keywords":[],"skip_competitor":false,"time_range":"半年内","note_type":"视频","min_interaction":"10000+"},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定半年内、视频类型、互动量1万以上"}
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 
@@ -100,7 +129,10 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
     "competitor_keywords": [],
     "skip_competitor": false,
     "module_id": null,
-    "instruction": null
+    "instruction": null,
+    "time_range": null,
+    "note_type": null,
+    "min_interaction": null
   },
   "missing_fields": [],
   "clarification_question": null,
@@ -230,6 +262,10 @@ class IntentClassifier:
             "skip_competitor": bool(raw_slots.get("skip_competitor", False)),
             "module_id": raw_slots.get("module_id"),
             "instruction": raw_slots.get("instruction"),
+            # 自然语言配置槽位（仅 xhs_analysis 有意义）
+            "time_range": raw_slots.get("time_range") or None,
+            "note_type": raw_slots.get("note_type") or None,
+            "min_interaction": raw_slots.get("min_interaction") or None,
         }
 
         missing_fields = [str(f) for f in (data.get("missing_fields") or [])]
