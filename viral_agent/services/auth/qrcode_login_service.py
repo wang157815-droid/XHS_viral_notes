@@ -157,6 +157,18 @@ class QRCodeLoginService:
 
     @staticmethod
     def _is_server_mode() -> bool:
+        """判断是否运行在无显示器的服务器环境（返回 True 时用 headless 模式）。
+
+        优先读取 XHS_QR_HEADLESS 环境变量进行强制覆盖：
+        - "true" / "1" / "yes" → 强制 headless（生产服务器推荐）
+        - "false" / "0" / "no" → 强制 headed（本地调试用）
+        - 未设置 → 自动检测 DISPLAY 变量
+        """
+        env_val = (os.environ.get("XHS_QR_HEADLESS") or "").strip().lower()
+        if env_val in ("1", "true", "yes"):
+            return True
+        if env_val in ("0", "false", "no"):
+            return False
         return not QRCodeLoginService._has_display()
 
     async def check_playwright_available(self, force_recheck: bool = False) -> bool:
