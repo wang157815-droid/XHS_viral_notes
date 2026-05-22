@@ -80,6 +80,7 @@ export interface AdvancedConfig {
   time_range: string;
   sample_count: string;
   viral_ratio: string;
+  min_interaction: string;
 }
 
 /** 与 ChatPanel / 编排默认采集参数一致 */
@@ -88,6 +89,7 @@ export const DEFAULT_ADVANCED: AdvancedConfig = {
   time_range: "不限",
   sample_count: "100",
   viral_ratio: "前50%",
+  min_interaction: "不限",
 };
 
 export interface Conversation {

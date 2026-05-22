@@ -807,6 +807,18 @@ class CrawlerAgent(BaseAgent):
                 task_id, sources, cookies_str
             )
 
+        # 互动量下限过滤
+        _min_inter = int(runtime_cfg.get("min_interaction") or 0)
+        if _min_inter:
+            _before = len(all_notes_with_hits)
+            all_notes_with_hits = _apply_min_interaction_filter(all_notes_with_hits, _min_inter)
+            notes_image = _apply_min_interaction_filter(notes_image, _min_inter)
+            notes_video = _apply_min_interaction_filter(notes_video, _min_inter)
+            await self.emit_log(
+                task_id, "info",
+                f"互动量过滤（≥{_min_inter}）：{_before} → {len(all_notes_with_hits)} 条",
+            )
+
         _ml_tr, _cl_tr = _dual_trace_layers(main_res, comp_res, main_key, comp_key)
         sample = {
             "source": source,
@@ -1560,6 +1572,18 @@ class CrawlerAgent(BaseAgent):
                 task_id, sources, cookies_str
             )
 
+        # 互动量下限过滤
+        _min_inter = int(runtime_cfg.get("min_interaction") or 0)
+        if _min_inter:
+            _before = len(all_notes_with_hits)
+            all_notes_with_hits = _apply_min_interaction_filter(all_notes_with_hits, _min_inter)
+            notes_image = _apply_min_interaction_filter(notes_image, _min_inter)
+            notes_video = _apply_min_interaction_filter(notes_video, _min_inter)
+            await self.emit_log(
+                task_id, "info",
+                f"互动量过滤（≥{_min_inter}）：{_before} → {len(all_notes_with_hits)} 条",
+            )
+
         sample = {
             "source": "cache",
             "cache_source": cache_source,
@@ -1777,6 +1801,7 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
     - viral_ratio: "前50%" / "前30%" / "前20%" -> viral_ratio (0.5 / 0.3 / 0.2)
     - note_type: "不限" / "视频" / "图文" -> 0 / 1 / 2
     - time_range: "不限" / "一天内" / "一周内" / "半年内" -> 0 / 1 / 2 / 3
+    - min_interaction: "不限" / "1000+" / "5000+" / "10000+" -> 0 / 1000 / 5000 / 10000
 
     任一字段缺失或不合法时回落到 env 默认值，保证老流程不被破坏。
     """
@@ -1788,6 +1813,7 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
         "viral_ratio": _VIRAL_RATIO,
         "note_type": 0,
         "time_range": 0,
+        "min_interaction": 0,
     }
 
     if not isinstance(config, dict):
@@ -1819,7 +1845,27 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
     if isinstance(raw_time, str) and raw_time in time_range_map:
         out["time_range"] = time_range_map[raw_time]
 
+    raw_inter = config.get("min_interaction")
+    if raw_inter and str(raw_inter) != "不限":
+        # 支持 "1000+" / "5000+" / "10000+" 或纯数字
+        m_inter = re.search(r"(\d+)", str(raw_inter))
+        if m_inter:
+            out["min_interaction"] = int(m_inter.group(1))
+
     return out
+
+
+def _apply_min_interaction_filter(
+    notes: List[Dict[str, Any]],
+    min_interaction: int,
+) -> List[Dict[str, Any]]:
+    """按互动量下限过滤笔记列表。min_interaction=0 时直接返回原列表。"""
+    if not min_interaction:
+        return notes
+    return [
+        n for n in notes
+        if int(n.get("interaction_score") or 0) >= min_interaction
+    ]
 
 
 def _fetch_note_detail_precise(
