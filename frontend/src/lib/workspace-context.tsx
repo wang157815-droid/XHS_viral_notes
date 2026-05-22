@@ -161,17 +161,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [taskId]);
 
   // ── sessionStorage 快照：有步骤数据时随时保存（不限于任务终止） ──────────────
-  // 这样执行中途刷新也能恢复已完成的步骤，终止态后保存完整记录
+  // agentLogs 每个思考块都变动（~50ms/次），从 deps 中移除避免每帧写 sessionStorage。
+  // 仍在 status / agentStatus / agentThinkingDone 等低频变化时一并写入完整快照（含 logs）。
   useEffect(() => {
     if (!taskId) return;
-    // 只有 agentStatus 有数据时才有意义保存（避免保存空快照）
     if (Object.keys(streamState.agentStatus).length === 0) return;
     saveSnapshot(taskId, streamState);
   }, [
     taskId,
     streamState.status,
     streamState.agentStatus,
-    streamState.agentLogs,
+    // streamState.agentLogs  ← 故意不依赖：思考块高频变动会把主线程打满
     streamState.agentThinkingDone,
     streamState.lastEventAt,
     streamState.error,

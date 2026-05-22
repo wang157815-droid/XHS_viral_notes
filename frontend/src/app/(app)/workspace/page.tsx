@@ -267,6 +267,12 @@ export default function WorkspacePage() {
           }
           currentConversationId = created.data.conversation_id;
           setConversation(currentConversationId, []);
+          // 显式同步 URL，避免 WorkspaceUrlSync Effect 2（URL 反写）与 Effect 3（加载）打架
+          const newConvParams = new URLSearchParams();
+          newConvParams.set("conversation", currentConversationId);
+          const newConvSurface = surfaceFromQuery(searchParams.get("surface"));
+          if (newConvSurface) newConvParams.set("surface", newConvSurface);
+          router.replace(`/workspace?${newConvParams.toString()}`, { scroll: false });
         }
 
         const optimisticMessage: ChatMessage = {
@@ -737,6 +743,17 @@ function WorkspaceUrlSync() {
   const urlConversation = searchParams.get("conversation");
   const surfaceQ = searchParams.get("surface");
 
+  // conversationId 通过 ref 读取，避免将其加入依赖导致 setConversation 触发 cleanup 杀掉在途请求
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
+
+  // 会话数据缓存（同 session 内复用，切回已访问的会话零延迟）
+  const convCacheRef = useRef(
+    new Map<string, { messages: import("@/lib/contracts").ChatMessage[]; activeTaskId: string | null }>(),
+  );
+  // 当前在途请求的 AbortController，下次切换时手动 abort（不放在 cleanup 里）
+  const abortRef = useRef<AbortController | null>(null);
+
   // ?new=<ts> → reset 回初始界面（保留 surface 供新建会话 metadata 使用）
   useEffect(() => {
     if (!newFlag) return;
@@ -746,10 +763,14 @@ function WorkspaceUrlSync() {
   }, [newFlag, surfaceQ, resetWorkspace, router]);
 
   // 上下文会话 id 与地址栏不一致时，补上 `conversation`（创建会话、继续对话等）
+  // 注意：若 URL 里已有 conversation 参数（用户主动导航），不干预 — Effect 3 会处理加载
   useEffect(() => {
     if (newFlag) return;
     if (!conversationId) return;
     if (searchParams.get("conversation") === conversationId) return;
+    // URL 里已有某个会话 ID（与当前不同）→ 说明用户刚通过侧边栏/链接切换了会话
+    // Effect 3 会负责加载，这里不能覆盖回旧 ID，否则两个 effect 会互相打架陷入死循环
+    if (searchParams.get("conversation")) return;
     const params = new URLSearchParams(searchParams.toString());
     params.delete("new");
     params.delete("task");
@@ -758,35 +779,57 @@ function WorkspaceUrlSync() {
     router.replace(qs ? `/workspace?${qs}` : "/workspace", { scroll: false });
   }, [conversationId, newFlag, router, searchParams]);
 
-  // ?conversation=<id> → 恢复对话；有关联任务时同步恢复 Canvas（地址栏保留 conversation）
+  // ?conversation=<id> → 恢复对话
+  // conversationId 故意不加入依赖：通过 ref 读取，避免 setConversation 触发 cleanup abort 在途请求
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (newFlag || !urlConversation) return;
-    if (conversationId === urlConversation) return;
-    let cancelled = false;
+    // 已是当前会话，无需重新加载
+    if (conversationIdRef.current === urlConversation) return;
+
+    // 取消上一个在途请求（防止慢→快切换时旧数据覆盖新数据）
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    // ① 缓存命中：立即填充，零延迟
+    const cached = convCacheRef.current.get(urlConversation);
+    if (cached) {
+      setConversation(urlConversation, cached.messages);
+      setTaskId(cached.activeTaskId);
+      return;
+    }
+
+    // ② 缓存未命中：立即清空消息让 UI 秒响应；taskId 不动，SSE 保持连接不断任务
+    setConversation(urlConversation, []);
+
     void (async () => {
       const res = await getConversation(urlConversation);
-      if (cancelled) return;
+      if (ctrl.signal.aborted) return;
+
       const surface = surfaceFromQuery(surfaceQ);
       const fallbackPath = surface ? `/workspace?surface=${encodeURIComponent(surface)}` : "/workspace";
       if (!res.ok) {
         router.replace(fallbackPath, { scroll: false });
         return;
       }
-      setConversation(res.data.conversation.conversation_id, res.data.messages);
-      if (res.data.conversation.active_task_id) {
-        setTaskId(res.data.conversation.active_task_id);
-      } else {
-        setTaskId(null);
-      }
+      const { conversation, messages } = res.data;
+      const activeTaskId = conversation.active_task_id ?? null;
+
+      // ③ 写缓存，下次切回零延迟
+      convCacheRef.current.set(conversation.conversation_id, { messages, activeTaskId });
+
+      // ④ 填充消息并切换到正确 taskId（此时才改 taskId，SSE 切换到新任务）
+      setConversation(conversation.conversation_id, messages);
+      setTaskId(activeTaskId);
+
       const params = new URLSearchParams();
-      params.set("conversation", res.data.conversation.conversation_id);
+      params.set("conversation", conversation.conversation_id);
       if (surface) params.set("surface", surface);
       router.replace(`/workspace?${params.toString()}`, { scroll: false });
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [urlConversation, newFlag, conversationId, surfaceQ, setConversation, setTaskId, router]);
+    // 不在 cleanup 里 abort：由下次切换时手动 abort，避免 conversationId 变化触发误 abort
+  }, [urlConversation, newFlag, surfaceQ, setConversation, setTaskId, router]);
 
   // ?task=<id> → 一次性加载任务，然后清 URL 参数
   useEffect(() => {

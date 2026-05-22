@@ -84,10 +84,21 @@ export function PromptComposer({
   const canSend = (Boolean(value.trim()) || localMediaDrafts.length > 0) && !disabled && !busy;
   const [plusOpen, setPlusOpen] = useState(false);
   const plusWrapRef = useRef<HTMLDivElement | null>(null);
-  const textInputRef = useRef<HTMLInputElement | null>(null);
+  const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [inputCaret, setInputCaret] = useState(0);
+
+  const autoResize = useCallback((el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
   const [shellDragActive, setShellDragActive] = useState(false);
   const shellDragDepth = useRef(0);
+
+  // value 被外部清空时重置高度
+  useEffect(() => {
+    if (value === "") autoResize(textInputRef.current);
+  }, [value, autoResize]);
 
   const onShellDragEnter = useCallback(
     (e: DragEvent) => {
@@ -192,9 +203,10 @@ export function PromptComposer({
     });
   };
 
-  const handleMainInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleMainInputChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     onValueChange(e.target.value);
     setInputCaret(e.target.selectionStart ?? e.target.value.length);
+    autoResize(e.target);
   };
 
   const plusBlock = (
@@ -324,9 +336,9 @@ export function PromptComposer({
                   onPick={handleKbMentionPick}
                   canRead={canReadKnowledge}
                 />
-                <input
+                <textarea
                   ref={textInputRef}
-                  type="text"
+                  rows={1}
                   value={value}
                   onChange={handleMainInputChange}
                   onSelect={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
@@ -334,8 +346,8 @@ export function PromptComposer({
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
                   disabled={disabled || busy}
                   placeholder="请输入分析目标，例如：分析近半年防脱精华的视频类爆款笔记…"
-                  className="h-10 w-full min-w-0 bg-transparent text-[15px] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
-                  onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+                  className="min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? value.length;
                     if (e.key === "Escape") {
@@ -352,7 +364,7 @@ export function PromptComposer({
                         return;
                       }
                     }
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       if (canSend) void onSubmit();
                     }
@@ -402,7 +414,7 @@ export function PromptComposer({
               </div>
             </>
           ) : (
-            <div className="flex w-full items-center gap-2 py-1">
+            <div className="flex w-full items-end gap-2 py-1">
               <div className="flex h-10 shrink-0 items-center">{plusBlock}</div>
               <div className="relative min-h-10 min-w-0 flex-1">
                 <KnowledgeMentionList
@@ -415,9 +427,9 @@ export function PromptComposer({
                   onPick={handleKbMentionPick}
                   canRead={canReadKnowledge}
                 />
-                <input
+                <textarea
                   ref={textInputRef}
-                  type="text"
+                  rows={1}
                   value={value}
                   onChange={handleMainInputChange}
                   onSelect={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
@@ -425,8 +437,8 @@ export function PromptComposer({
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
                   disabled={disabled || busy}
                   placeholder="请输入分析目标，例如：分析近半年防脱精华的视频类爆款笔记…"
-                  className="h-10 w-full min-w-0 bg-transparent text-[15px] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60 text-sm sm:text-[15px]"
-                  onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+                  className="min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? value.length;
                     if (e.key === "Escape") {
@@ -443,7 +455,7 @@ export function PromptComposer({
                         return;
                       }
                     }
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       if (canSend) void onSubmit();
                     }

@@ -1,0 +1,523 @@
+可以把“让大模型精准理解用户意图”理解成一个 **意图路由系统**，而不是单纯问模型“用户想干嘛”。工程上建议分成几层来做：
+
+## 1. 先定义“意图空间”
+
+不要一开始就让模型自由理解，而是先定义你的应用支持哪些意图。
+
+例如一个 AI 内容工具可能有这些意图：
+
+```text
+1. 生成内容
+2. 改写内容
+3. 总结内容
+4. 提取信息
+5. 分析数据
+6. 生成图片
+7. 修改图片
+8. 查询知识库
+9. 操作账号/设置
+10. 闲聊/无法识别
+```
+
+如果是更复杂的应用，可以继续细分：
+
+```text
+内容生成
+├── 写小红书文案
+├── 写短视频脚本
+├── 写公众号文章
+├── 写广告标题
+└── 写产品介绍
+```
+
+关键点是：**意图分类必须服务于后续动作**。
+如果两个意图最后调用的是同一个能力，就没必要分得太细。
+
+---
+
+## 2. 推荐使用结构化输出，而不是自然语言判断
+
+不要让模型返回：
+
+```text
+用户想生成一篇小红书文案
+```
+
+而是让模型返回稳定 JSON：
+
+```json
+{
+  "intent": "generate_xiaohongshu_post",
+  "confidence": 0.92,
+  "slots": {
+    "topic": "AI绘画工具",
+    "platform": "小红书",
+    "tone": "种草",
+    "length": "短文案"
+  },
+  "missing_fields": []
+}
+```
+
+这样后端可以直接根据 `intent` 路由到不同能力。
+
+---
+
+## 3. 意图识别不要只识别 intent，还要抽取 slots
+
+用户的真实意图通常由两部分组成：
+
+```text
+Intent = 用户想做什么
+Slots = 用户对这件事的具体要求
+```
+
+比如用户说：
+
+> 帮我写一篇适合小红书的文案，主题是新款咖啡机，风格要高级一点。
+
+识别结果应该是：
+
+```json
+{
+  "intent": "generate_marketing_copy",
+  "confidence": 0.96,
+  "slots": {
+    "platform": "小红书",
+    "topic": "新款咖啡机",
+    "style": "高级",
+    "content_type": "文案"
+  },
+  "missing_fields": []
+}
+```
+
+如果用户说：
+
+> 帮我写一篇文案
+
+那就应该返回：
+
+```json
+{
+  "intent": "generate_marketing_copy",
+  "confidence": 0.68,
+  "slots": {
+    "content_type": "文案"
+  },
+  "missing_fields": ["topic", "platform", "style"]
+}
+```
+
+然后系统可以追问：
+
+> 好的，你想写什么主题的文案？发布在哪个平台？
+
+---
+
+## 4. 技术架构建议：三层识别
+
+比较稳的方案不是只靠一次大模型调用，而是做三层。
+
+### 第一层：规则和关键词快速判断
+
+适合识别非常明确的命令，比如：
+
+```text
+“帮我生成图片”
+“把这张图改成动漫风”
+“总结这篇文章”
+“翻译成英文”
+```
+
+这类可以先用规则、正则、关键词、上下文状态判断，成本低、速度快。
+
+### 第二层：大模型结构化意图识别
+
+对自然语言复杂表达，调用 LLM 做分类和信息抽取。
+
+例如 prompt 可以这样设计：
+
+```text
+你是一个 AI 应用的意图识别模块。
+你的任务是判断用户当前消息的真实意图，并抽取必要参数。
+
+只能从以下 intent 中选择：
+- generate_text
+- rewrite_text
+- summarize_text
+- translate_text
+- generate_image
+- edit_image
+- search_knowledge_base
+- smalltalk
+- unknown
+
+请返回 JSON，不要返回解释。
+
+用户消息：
+{{user_message}}
+
+历史上下文：
+{{conversation_context}}
+
+返回格式：
+{
+  "intent": "",
+  "confidence": 0,
+  "slots": {},
+  "missing_fields": [],
+  "reason": ""
+}
+```
+
+生产环境里，`reason` 可以内部保留，不一定展示给用户。
+
+### 第三层：业务校验和兜底
+
+模型返回后，不要完全信任，要做校验。
+
+例如：
+
+```python
+if intent == "edit_image" and not has_uploaded_image:
+    ask_user_to_upload_image()
+
+if intent == "generate_text" and not slots.get("topic"):
+    ask_followup_question()
+
+if confidence < 0.6:
+    ask_clarification()
+```
+
+也就是说，大模型负责“理解”，业务系统负责“确认能不能执行”。
+
+---
+
+## 5. 意图识别 Prompt 的核心写法
+
+你可以给模型一个明确的分类标准。
+
+例如：
+
+```text
+判断用户意图时遵守以下规则：
+
+1. 如果用户要求创作新内容，选择 generate_text。
+2. 如果用户提供已有文本并要求优化、润色、改写，选择 rewrite_text。
+3. 如果用户要求缩短、概括、提炼重点，选择 summarize_text。
+4. 如果用户要求把内容变成另一种语言，选择 translate_text。
+5. 如果用户要求生成一张新图片，选择 generate_image。
+6. 如果用户上传了图片，并要求修改图片内容、风格、元素，选择 edit_image。
+7. 如果用户询问产品、知识、文档中的信息，选择 search_knowledge_base。
+8. 如果无法判断，选择 unknown。
+```
+
+比起只给几个 intent 名称，**明确边界规则**会显著提高稳定性。
+
+---
+
+## 6. 加 few-shot 示例，效果会明显提升
+
+给模型几个正反例非常重要。
+
+```text
+示例 1：
+用户：帮我写一篇小红书种草文案，介绍这款护肤品
+输出：
+{
+  "intent": "generate_text",
+  "confidence": 0.95,
+  "slots": {
+    "platform": "小红书",
+    "content_type": "种草文案",
+    "topic": "护肤品"
+  },
+  "missing_fields": []
+}
+
+示例 2：
+用户：把下面这段话改得更专业一点
+输出：
+{
+  "intent": "rewrite_text",
+  "confidence": 0.94,
+  "slots": {
+    "rewrite_goal": "更专业"
+  },
+  "missing_fields": ["source_text"]
+}
+
+示例 3：
+用户：这张图里的文字改成“新品上市”
+输出：
+{
+  "intent": "edit_image",
+  "confidence": 0.96,
+  "slots": {
+    "edit_instruction": "将图片里的文字改成“新品上市”"
+  },
+  "missing_fields": ["image"]
+}
+```
+
+---
+
+## 7. 加入上下文理解
+
+用户的意图经常依赖上一轮对话。
+
+例如：
+
+用户第一轮：
+
+> 帮我写一篇小红书文案，主题是露营灯。
+
+模型生成后，用户说：
+
+> 再短一点，语气活泼点。
+
+这句话单独看，可能是 `unknown`。
+结合上下文，应该识别为：
+
+```json
+{
+  "intent": "rewrite_text",
+  "confidence": 0.91,
+  "slots": {
+    "rewrite_goal": ["更短", "更活泼"],
+    "target": "上一轮生成的小红书文案"
+  },
+  "missing_fields": []
+}
+```
+
+所以意图识别输入里最好包含：
+
+```json
+{
+  "current_user_message": "...",
+  "last_assistant_action": "generate_xiaohongshu_post",
+  "last_generated_content_summary": "...",
+  "uploaded_files": [],
+  "conversation_state": {}
+}
+```
+
+不要把完整历史无限塞进去，可以维护一个结构化状态。
+
+---
+
+## 8. 建议维护 conversation state
+
+例如：
+
+```json
+{
+  "last_intent": "generate_text",
+  "last_topic": "露营灯",
+  "last_platform": "小红书",
+  "last_output_id": "content_123",
+  "current_task_status": "completed"
+}
+```
+
+当用户说：
+
+> 换成公众号风格
+
+系统就能理解为：
+对 `content_123` 做改写，目标风格是公众号。
+
+---
+
+## 9. 不要让意图识别模型承担所有决策
+
+推荐流程是：
+
+```text
+用户输入
+  ↓
+预处理：语言检测、附件检测、上下文状态读取
+  ↓
+规则判断：明显命令直接路由
+  ↓
+LLM 意图识别：返回 intent + slots + confidence
+  ↓
+业务校验：参数是否齐全、权限是否满足、是否需要文件
+  ↓
+执行动作：生成 / 查询 / 修改 / 调用工具
+  ↓
+更新 conversation state
+```
+
+这样会比单次 prompt 稳定很多。
+
+---
+
+## 10. 对于高精度场景，可以用“双模型/双阶段”
+
+如果你的应用对准确率要求很高，可以分两阶段。
+
+第一阶段：粗分类
+
+```json
+{
+  "domain": "content_creation"
+}
+```
+
+第二阶段：细分类
+
+```json
+{
+  "intent": "generate_xiaohongshu_post",
+  "slots": {
+    "topic": "咖啡机",
+    "tone": "高级感"
+  }
+}
+```
+
+这样比一次性在几十个 intent 里选一个更稳。
+
+---
+
+## 11. 加置信度和澄清机制
+
+不要追求每次都硬分类。
+真正好的 AI 产品会在低置信度时主动澄清。
+
+例如：
+
+```json
+{
+  "intent": "unknown",
+  "confidence": 0.42,
+  "possible_intents": [
+    "generate_text",
+    "search_knowledge_base"
+  ],
+  "clarification_question": "你是想让我帮你创作一段内容，还是想查询已有资料？"
+}
+```
+
+前端可以展示：
+
+> 你是想让我帮你创作，还是查询资料？
+
+这比误判后直接执行要好很多。
+
+---
+
+## 12. 评估方法也很关键
+
+你需要准备一批真实用户语料，人工标注：
+
+```json
+{
+  "text": "帮我把这段内容改得更有销售力",
+  "expected_intent": "rewrite_text",
+  "expected_slots": {
+    "rewrite_goal": "更有销售力"
+  }
+}
+```
+
+然后定期跑评估：
+
+```text
+Intent Accuracy：意图分类准确率
+Slot F1：参数抽取准确率
+Clarification Rate：需要追问比例
+Wrong Action Rate：错误执行率
+Fallback Rate：无法识别比例
+```
+
+意图识别系统不是一次 prompt 写完就结束，而是要靠真实数据持续优化。
+
+---
+
+## 13. 一个可落地的简化方案
+
+你可以先这样实现：
+
+```text
+第一版：
+- 定义 10 到 20 个核心 intent
+- 用 LLM 做 JSON 结构化识别
+- 加 confidence
+- 加 missing_fields
+- 加上下文 state
+- 低置信度时追问
+
+第二版：
+- 引入规则优先级
+- 加 few-shot 示例
+- 加评估集
+- 加错误样本回流
+
+第三版：
+- 粗分类 + 细分类
+- 小模型/分类模型辅助
+- 复杂任务引入 planner
+- 多轮任务状态机
+```
+
+---
+
+## 14. 一个实际可用的返回结构
+
+推荐你设计成这样：
+
+```json
+{
+  "intent": "rewrite_text",
+  "confidence": 0.91,
+  "domain": "content",
+  "slots": {
+    "target_text": "last_assistant_output",
+    "rewrite_goal": ["更短", "更活泼"],
+    "platform": "小红书"
+  },
+  "missing_fields": [],
+  "requires_context": true,
+  "requires_tool": false,
+  "next_action": "rewrite_last_output",
+  "clarification_question": null
+}
+```
+
+其中：
+
+```text
+intent：用户意图
+confidence：置信度
+domain：业务领域
+slots：参数
+missing_fields：缺失信息
+requires_context：是否依赖上下文
+requires_tool：是否需要调用外部工具
+next_action：系统下一步动作
+clarification_question：需要追问时的问题
+```
+
+---
+
+## 15. 我的建议
+
+如果你是开发 AI 应用，最推荐的方案是：
+
+> **规则判断 + LLM 结构化意图识别 + 上下文状态 + 业务校验 + 低置信度澄清。**
+
+不要只做一个“意图分类 prompt”。
+真正稳定的系统一定是“模型理解能力”和“工程约束能力”结合起来的。
+
+核心思想是：
+
+```text
+让大模型负责理解自然语言，
+让后端系统负责约束、校验、路由和兜底。
+```
+
+这样才能既智能，又稳定。
