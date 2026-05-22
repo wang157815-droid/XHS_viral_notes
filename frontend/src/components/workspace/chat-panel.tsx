@@ -934,10 +934,16 @@ function ConversationView({
 
   return (
     <div className="flex w-full flex-col gap-4">
-      {beforeTimeline.length > 0 ? (
+      {/* 历史对话消息（实时模式下任务发起消息之前的旧对话） */}
+      {isLiveSession ? (
         beforeTimeline.map(renderMessage)
-      ) : (
+      ) : null}
+
+      {/* 任务发起消息：实时模式用 userMessage 硬编码；历史恢复模式渲染 messages[0] */}
+      {isLiveSession ? (
         <Message role="user" bubble={firstMsg} time={taskId.slice(-6)} />
+      ) : (
+        beforeTimeline.map(renderMessage)
       )}
 
       <AgentTimeline state={streamState} taskId={taskId} />
