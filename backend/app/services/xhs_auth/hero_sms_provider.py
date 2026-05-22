@@ -7,14 +7,28 @@ API 约定（基于用户提供的接口规格 + sms-activate 兼容协议）::
         &service=qf            # 小红书
         &country=14            # 14=Hong Kong（用户固定值）
         &maxPrice=1            # 最高接受价格（用户固定）
-        &action=getNumber      # 或 getAllSms
+        &action=getNumberV2    # 或 getAllSms
         &id=<order_id>         # getAllSms 时必填
 
-响应是文本，常见值：
+响应格式：
 
-- ``getNumber``::
+- ``getNumberV2`` —— **JSON 对象**（新版接口，2026 起）::
 
-    ACCESS_NUMBER:<order_id>:<phone>     成功
+    {
+      "activationId": "635468024",
+      "phoneNumber": "79584******",
+      "activationCost": 12.5,
+      "currency": 840,
+      "countryCode": 6,
+      "countryPhoneCode": 62,
+      "canGetAnotherSms": true,
+      "activationTime": "2026-02-18T16:11:33+00:00",
+      "activationEndTime": "2026-02-18T18:11:23+00:00",
+      "activationOperator": "any"
+    }
+
+  错误响应仍为文本兼容协议::
+
     NO_NUMBERS                           暂无库存
     MAX_PRICE_EXCEEDED                   maxPrice 太低
     NO_BALANCE                           余额不足
@@ -178,7 +192,11 @@ class HeroSmsProvider(SmsProvider):
     # ------------------------------------------------------------------
 
     async def acquire_phone(self) -> PhonePurchase:
-        """轮询 ``getNumber`` 直到拿到号码或抛错。"""
+        """轮询 ``getNumberV2`` 直到拿到号码或抛错。
+
+        成功响应为 JSON 对象，包含 ``activationId`` 和 ``phoneNumber``。
+        错误响应仍为文本协议（NO_NUMBERS / BAD_KEY 等）。
+        """
         if not self._api_key:
             raise SmsAuthError("SMS_PROVIDER_API_KEY 未配置", code="SMS_AUTH_ERROR")
 
@@ -186,9 +204,9 @@ class HeroSmsProvider(SmsProvider):
         last_no_stock_msg = ""
         attempts = 0
 
-        # hero-sms 官方示例：getNumber 需要 service / country / maxPrice
+        # hero-sms getNumberV2 参数与旧版 getNumber 相同，只换 action
         getnumber_params = {
-            "action": "getNumber",
+            "action": "getNumberV2",
             "service": self._service,
             "country": self._country,
             "maxPrice": self._max_price,
@@ -197,12 +215,13 @@ class HeroSmsProvider(SmsProvider):
         while True:
             attempts += 1
             text = await self._call(getnumber_params)
-            tag, payload = _parse_text_response(text)
 
-            if tag == "ACCESS_NUMBER":
-                order_id, phone = _split_access_number_payload(payload, raw=text)
+            # ---- 优先：getNumberV2 返回 JSON 对象 ----
+            v2_result = _try_parse_json_number_v2_response(text)
+            if v2_result is not None:
+                order_id, phone = v2_result
                 logger.info(
-                    f"[hero_sms] 购号成功: order_id={order_id} phone=…{phone[-4:]}（attempts={attempts}）"
+                    f"[hero_sms] 购号成功(v2): order_id={order_id} phone=…{phone[-4:]}（attempts={attempts}）"
                 )
                 return PhonePurchase(
                     order_id=order_id,
@@ -210,6 +229,9 @@ class HeroSmsProvider(SmsProvider):
                     country_code=_country_iso_from_code(self._country),
                     raw={"text": text, "service": self._service},
                 )
+
+            # ---- Fallback：文本协议（错误类响应仍用旧格式） ----
+            tag, payload = _parse_text_response(text)
 
             if tag in _AUTH_ERROR_RESPONSES:
                 raise SmsAuthError(f"hero-sms 鉴权失败：{text}", code="SMS_AUTH_ERROR")
@@ -486,6 +508,42 @@ def _parse_text_response(text: str) -> Tuple[str, str]:
     if not sep:
         return text.strip(), ""
     return head.strip(), tail.strip()
+
+
+def _try_parse_json_number_v2_response(text: str) -> Optional[Tuple[str, str]]:
+    """尝试解析 ``getNumberV2`` 的 JSON 对象响应，返回 ``(activationId, phoneNumber)``。
+
+    成功响应示例（2026 hero-sms 新版接口）::
+
+        {
+          "activationId": "635468024",
+          "phoneNumber": "79584******",
+          "activationCost": 12.5,
+          "currency": 840,
+          "countryCode": 6,
+          "countryPhoneCode": 62,
+          "canGetAnotherSms": true,
+          "activationTime": "2026-02-18T16:11:33+00:00",
+          "activationEndTime": "2026-02-18T18:11:23+00:00",
+          "activationOperator": "any"
+        }
+
+    返回 ``(order_id, phone)``，或 ``None``（非 JSON / 缺必要字段 → 调用方走文本协议）。
+    """
+    s = (text or "").strip()
+    if not s.startswith("{"):
+        return None
+    try:
+        obj = json.loads(s)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    activation_id = obj.get("activationId")
+    phone_number = obj.get("phoneNumber")
+    if not activation_id or not phone_number:
+        return None
+    return str(activation_id).strip(), str(phone_number).strip()
 
 
 def _try_parse_json_sms_list(text: str) -> Optional[list]:

@@ -39,6 +39,7 @@ class QRCodeSession:
     client_device_id: Optional[str] = None  # 前端设备 ID，用于隔离服务器侧浏览器 profile
     sms_code_requested: bool = False  # 已触发短信验证码发送
     sms_code_submitted: bool = False  # 用户已提交短信验证码，允许继续校验 Cookie
+    creator_redmuse_user_id: Optional[str] = None  # 创建此会话的 RedMuse 用户 ID（归属校验用）
 
     @property
     def is_active(self) -> bool:

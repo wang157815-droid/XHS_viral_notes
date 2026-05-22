@@ -57,6 +57,7 @@ class AuthOrchestrator:
         *,
         expected_user_id: Optional[str] = None,
         client_device_id: Optional[str] = None,
+        creator_redmuse_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         try:
             from viral_agent.services.user_data_service import UserDataService
@@ -70,6 +71,7 @@ class AuthOrchestrator:
             bootstrap_username,
             expected_user_id=expected_user_id,
             client_device_id=client_device_id,
+            creator_redmuse_user_id=creator_redmuse_user_id,
         )
         return {
             "session_id": session.session_id,
@@ -100,6 +102,7 @@ class AuthOrchestrator:
             "qrcode_base64": session.qrcode_base64,
             "screenshot_version": getattr(session, "screenshot_version", 0),
             "cookies_ready": bool(session.cookies_str),
+            "creator_redmuse_user_id": getattr(session, "creator_redmuse_user_id", None),
         }
 
         if session.status == QRLoginStatus.SUCCESS and session.cookies_str:

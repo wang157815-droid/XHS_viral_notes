@@ -122,7 +122,14 @@ def _provider(client, **kwargs) -> HeroSmsProvider:
 @pytest.mark.asyncio
 async def test_acquire_phone_success(fake_client):
     fake_client.queue(
-        "getNumber", _FakeResponse(200, "ACCESS_NUMBER:order123:85291234567")
+        "getNumberV2",
+        _FakeResponse(
+            200,
+            '{"activationId":"order123","phoneNumber":"85291234567","activationCost":12.5,'
+            '"currency":840,"countryCode":14,"countryPhoneCode":852,'
+            '"canGetAnotherSms":true,"activationTime":"2026-02-18T16:11:33+00:00",'
+            '"activationEndTime":"2026-02-18T18:11:23+00:00","activationOperator":"any"}',
+        ),
     )
     p = _provider(fake_client)
 
@@ -132,21 +139,27 @@ async def test_acquire_phone_success(fake_client):
     assert result.phone == "85291234567"
     assert result.country_code == "HK"
 
-    # getNumber 必须带 service/country/maxPrice/api_key（与 hero-sms 官方示例一致）
+    # getNumberV2 必须带 service/country/maxPrice/api_key（与旧版参数一致，只换 action）
     assert fake_client.calls[0]["api_key"] == "testkey"
     assert fake_client.calls[0]["service"] == "qf"
     assert fake_client.calls[0]["country"] == "14"
     assert fake_client.calls[0]["maxPrice"] == "1"
-    assert fake_client.calls[0]["action"] == "getNumber"
+    assert fake_client.calls[0]["action"] == "getNumberV2"
 
 
 @pytest.mark.asyncio
 async def test_acquire_phone_retries_no_numbers(fake_client):
     fake_client.queue(
-        "getNumber",
+        "getNumberV2",
         _FakeResponse(200, "NO_NUMBERS"),
         _FakeResponse(200, "NO_NUMBERS"),
-        _FakeResponse(200, "ACCESS_NUMBER:order9:85299999999"),
+        _FakeResponse(
+            200,
+            '{"activationId":"order9","phoneNumber":"85299999999","activationCost":1.0,'
+            '"currency":840,"countryCode":14,"countryPhoneCode":852,'
+            '"canGetAnotherSms":true,"activationTime":"2026-01-01T00:00:00+00:00",'
+            '"activationEndTime":"2026-01-01T02:00:00+00:00","activationOperator":"any"}',
+        ),
     )
     p = _provider(fake_client)
 
@@ -159,7 +172,7 @@ async def test_acquire_phone_retries_no_numbers(fake_client):
 async def test_acquire_phone_timeout_raises_no_stock(fake_client):
     """每次都 NO_NUMBERS，超时应抛 SmsNoStockError。"""
     for _ in range(20):
-        fake_client.queue("getNumber", _FakeResponse(200, "NO_NUMBERS"))
+        fake_client.queue("getNumberV2", _FakeResponse(200, "NO_NUMBERS"))
     p = _provider(fake_client, phone_poll_timeout_sec=0)
 
     with pytest.raises(SmsNoStockError):
@@ -168,7 +181,7 @@ async def test_acquire_phone_timeout_raises_no_stock(fake_client):
 
 @pytest.mark.asyncio
 async def test_acquire_phone_bad_key_raises_auth(fake_client):
-    fake_client.queue("getNumber", _FakeResponse(200, "BAD_KEY"))
+    fake_client.queue("getNumberV2", _FakeResponse(200, "BAD_KEY"))
     p = _provider(fake_client)
     with pytest.raises(SmsAuthError):
         await p.acquire_phone()
@@ -176,7 +189,7 @@ async def test_acquire_phone_bad_key_raises_auth(fake_client):
 
 @pytest.mark.asyncio
 async def test_acquire_phone_unknown_response(fake_client):
-    fake_client.queue("getNumber", _FakeResponse(200, "WTF_UNKNOWN"))
+    fake_client.queue("getNumberV2", _FakeResponse(200, "WTF_UNKNOWN"))
     p = _provider(fake_client)
     with pytest.raises(SmsResponseError):
         await p.acquire_phone()
@@ -194,7 +207,7 @@ async def test_acquire_phone_missing_api_key(fake_client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_acquire_phone_http_500_transport_error(fake_client):
-    fake_client.queue("getNumber", _FakeResponse(503, "Service Unavailable"))
+    fake_client.queue("getNumberV2", _FakeResponse(503, "Service Unavailable"))
     p = _provider(fake_client)
     from backend.app.services.xhs_auth import SmsTransportError
 
@@ -445,9 +458,15 @@ async def test_wait_sms_code_seen_only_timeout(fake_client):
 @pytest.mark.asyncio
 async def test_full_flow_acquire_then_wait(fake_client):
     fake_client.queue(
-        "getNumber",
+        "getNumberV2",
         _FakeResponse(200, "NO_NUMBERS"),
-        _FakeResponse(200, "ACCESS_NUMBER:42:85211112222"),
+        _FakeResponse(
+            200,
+            '{"activationId":"42","phoneNumber":"85211112222","activationCost":1.0,'
+            '"currency":840,"countryCode":14,"countryPhoneCode":852,'
+            '"canGetAnotherSms":true,"activationTime":"2026-01-01T00:00:00+00:00",'
+            '"activationEndTime":"2026-01-01T02:00:00+00:00","activationOperator":"any"}',
+        ),
     )
     fake_client.queue(
         "getAllSms",
@@ -464,11 +483,11 @@ async def test_full_flow_acquire_then_wait(fake_client):
     assert code.code == "559900"
 
     # 按 action 分别校验参数：
-    # - getNumber 带 service/country/maxPrice
+    # - getNumberV2 带 service/country/maxPrice
     # - getAllSms 仅带 api_key + id（不带 service/country/maxPrice）
     for call in fake_client.calls:
         assert call["api_key"] == "testkey"
-        if call["action"] == "getNumber":
+        if call["action"] == "getNumberV2":
             assert call["service"] == "qf"
             assert call["country"] == "14"
             assert call["maxPrice"] == "1"

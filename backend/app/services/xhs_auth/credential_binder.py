@@ -173,7 +173,7 @@ class XhsCredentialBinder:
     async def bind_from_qr_session(
         self, redmuse_user_id: str, session_id: str
     ) -> BindResult:
-        """扫码完成后把结果绑到当前 RedMuse 用户。"""
+        """扫码完成后把结果绑到当前 RedMuse 用户。执行前校验会话归属。"""
         rm_uid = (redmuse_user_id or "").strip()
         sid = (session_id or "").strip()
         if not rm_uid or not sid:
@@ -183,6 +183,40 @@ class XhsCredentialBinder:
                 error_code="invalid_arguments",
                 error_message="redmuse_user_id 或 session_id 缺失",
             )
+
+        # --- 归属校验：session 必须属于当前 RedMuse 用户 ---
+        try:
+            session_meta = await self.orchestrator.get_qrcode_session(sid)
+        except Exception as exc:
+            logger.exception(f"[xhs_auth] 查询扫码 session 元数据异常: {exc}")
+            return BindResult(
+                success=False,
+                redmuse_user_id=rm_uid,
+                error_code="session_error",
+                error_message=f"读取扫码会话失败: {exc}",
+            )
+
+        if not session_meta.get("exists"):
+            return BindResult(
+                success=False,
+                redmuse_user_id=rm_uid,
+                error_code="session_not_found",
+                error_message="扫码会话不存在或已过期",
+            )
+
+        creator = session_meta.get("creator_redmuse_user_id")
+        if creator and creator != rm_uid:
+            logger.warning(
+                f"[xhs_auth] 归属校验失败：用户 {rm_uid} 尝试绑定会话 {sid}，"
+                f"但该会话属于 {creator}"
+            )
+            return BindResult(
+                success=False,
+                redmuse_user_id=rm_uid,
+                error_code="session_ownership_mismatch",
+                error_message="无权绑定他人发起的扫码会话",
+            )
+        # --- 归属校验通过 ---
 
         try:
             cookies = await self.orchestrator.get_session_cookies_str(sid)

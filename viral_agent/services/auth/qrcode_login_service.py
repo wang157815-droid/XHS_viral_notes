@@ -259,6 +259,7 @@ class QRCodeLoginService:
         *,
         expected_user_id: Optional[str] = None,
         client_device_id: Optional[str] = None,
+        creator_redmuse_user_id: Optional[str] = None,
     ) -> QRCodeSession:
         if not await self.check_playwright_available():
             raise RuntimeError("扫码功能未启用，请安装: pip install playwright && playwright install chromium")
@@ -276,6 +277,7 @@ class QRCodeLoginService:
                 username=username,
                 expected_user_id=(expected_user_id or "").strip() or None,
                 client_device_id=clean_client_device_id,
+                creator_redmuse_user_id=(creator_redmuse_user_id or "").strip() or None,
             )
             self._sessions[session.session_id] = session
 

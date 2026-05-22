@@ -201,6 +201,7 @@ async def create_xhs_login_session(
         data = await auth_orchestrator.create_qrcode_session(
             expected_user_id=expected_user_id,
             client_device_id=client_device_id,
+            creator_redmuse_user_id=current_user["user_id"],
         )
         return ok(data)
     except RuntimeError as exc:
@@ -223,6 +224,11 @@ async def get_xhs_login_session(
     if not session.get("exists"):
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
 
+    # 归属校验：只有创建者或 admin 可以查询会话
+    creator = session.get("creator_redmuse_user_id")
+    if creator and creator != current_user["user_id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="无权访问他人扫码会话")
+
     response_data = {k: v for k, v in session.items() if k != "exists"}
     response_data["token"] = None
 
@@ -235,6 +241,15 @@ async def cancel_xhs_login_session(
     current_user: dict = Depends(get_current_user),
 ):
     _require_xhs_login_session_role(current_user)
+    session = await auth_orchestrator.get_qrcode_session(session_id)
+    if not session.get("exists"):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    # 归属校验：只有创建者或 admin 可以取消会话
+    creator = session.get("creator_redmuse_user_id")
+    if creator and creator != current_user["user_id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="无权取消他人扫码会话")
+
     success = await auth_orchestrator.cancel_qrcode_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -251,6 +266,14 @@ async def submit_xhs_login_sms(
     sms_code = payload.sms_code.strip()
     if not sms_code.isdigit() or len(sms_code) < 4:
         raise HTTPException(status_code=400, detail="验证码格式不正确")
+
+    # 归属校验：只有创建者或 admin 可以向会话提交短信验证码
+    session_meta = await auth_orchestrator.get_qrcode_session(session_id)
+    if not session_meta.get("exists"):
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+    creator = session_meta.get("creator_redmuse_user_id")
+    if creator and creator != current_user["user_id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="无权向他人的扫码会话提交验证码")
 
     try:
         success = await auth_orchestrator.submit_sms_code(session_id, sms_code)
