@@ -898,11 +898,11 @@ function ConversationView({
     );
   }
 
-  // 实时模式（userMessage 非空）: messages 全部是任务后的后续对话
-  // 历史恢复模式（userMessage 为空）: messages[0] 是初始任务请求，其余是后续对话
+  // 实时模式（userMessage 非空）: messages[0] 是任务发起消息，已在 timeline 上方手动渲染，从 slice(1) 开始避免重复
+  // 历史恢复模式（userMessage 为空）: messages[0] 作为 beforeTimeline 渲染在 timeline 上方，afterTimeline 同样从 slice(1) 开始
   const isLiveSession = !!userMessage;
   const beforeTimeline: ChatMessage[] = isLiveSession ? [] : messages.slice(0, 1);
-  const afterTimeline: ChatMessage[] = isLiveSession ? messages : messages.slice(1);
+  const afterTimeline: ChatMessage[] = messages.slice(1);
 
   return (
     <div className="flex w-full flex-col gap-4">
