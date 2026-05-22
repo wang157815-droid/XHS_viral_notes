@@ -1358,7 +1358,16 @@ class ConversationService:
             )
             if manual_titled:
                 logger.info("[auto-title] ↩ 用户已手动改名（manual_titled=True），跳过")
-                return  # 只有明确手动改名才跳过
+                return
+
+            # 只在标题还是默认值时才生成；已经自动起过名后不再重复触发
+            if not is_default and was_auto:
+                logger.info("[auto-title] ↩ 已自动起名（auto_titled=True），跳过")
+                return
+
+            if not is_default and not was_auto:
+                logger.info("[auto-title] ↩ 标题已存在且非默认，跳过")
+                return
 
             messages = self.store.list_messages(conversation_id, limit=6)
             logger.info("[auto-title] 消息数={}", len(messages))
