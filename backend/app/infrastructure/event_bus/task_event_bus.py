@@ -101,10 +101,20 @@ class TaskEventBus:
             for event in missed:
                 yield event
 
+            # 如果 DONE 已在 backlog 中回放，直接终止——不能再进入 while True，
+            # 否则 queue.get() 永远阻塞（已完成的任务不再产生新事件），
+            # 导致 SSE 连接挂起并造成 _subs 字典泄漏。
+            if any(ev.type == TaskEventType.DONE for ev in missed):
+                return
+
             while True:
                 event = await sub.queue.get()
                 if event.event_id in seen:
-                    # 该事件已在 backlog 回放中发送过，跳过避免重复
+                    # 该事件已在 backlog 回放中发送过，不重复 yield。
+                    # 但若是 DONE，仍需终止生成器（处理 fetch_after_async await
+                    # 期间 DONE 同时入队的竞争窗口）。
+                    if event.type == TaskEventType.DONE:
+                        return
                     continue
                 seen.add(event.event_id)
                 yield event
