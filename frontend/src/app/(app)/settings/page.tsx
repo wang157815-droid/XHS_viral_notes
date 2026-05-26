@@ -310,6 +310,15 @@ export default function SettingsPage() {
     if (res.ok) setCrawlerStatus(res.data);
   }, []);
 
+  // crawler tab 激活时每 30s 自动刷新一次状态
+  useEffect(() => {
+    if (activeNav !== "crawler") return;
+    const timer = window.setInterval(() => {
+      void loadCrawlerStatus();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [activeNav, loadCrawlerStatus]);
+
   const loadUsers = useCallback(async () => {
     const res = await apiGet<{ users: ManagedUser[] }>("/auth/users", { withAuth: true });
     if (res.ok) setUsers(res.data.users ?? []);
@@ -504,6 +513,8 @@ export default function SettingsPage() {
       }
       setToast({ type: "ok", message: res.data.message || "已触发立即采集" });
       await loadCrawlerStatus();
+      // 任务异步执行，3s 后再刷一次以拿到最新 next_run_at
+      window.setTimeout(() => { void loadCrawlerStatus(); }, 3000);
     } finally {
       setTriggering(false);
     }

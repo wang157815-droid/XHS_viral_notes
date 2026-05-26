@@ -258,6 +258,44 @@ async def _load_top_queries_from_redis() -> List[str]:
     return []
 
 
+def _find_warmup_user_id() -> str:
+    """从 XhsCredentialStore 找第一个已绑定 XHS 账号的 RedMuse 用户 ID。
+
+    优先取 admin 角色用户，其次取任意已绑定用户。
+    返回空字符串表示没有任何可用凭据（此时走 .env COOKIES 兜底）。
+    """
+    try:
+        from ....services.xhs_auth import get_credential_store
+        from ....services.identity_store import get_identity_store
+
+        credentials = get_credential_store().list_credentials()
+        if not credentials:
+            return ""
+
+        # 收集有效凭据的 redmuse_user_id
+        valid_ids = [
+            c.redmuse_user_id for c in credentials
+            if c.redmuse_user_id and c.is_bound
+        ]
+        if not valid_ids:
+            return ""
+
+        # 优先选 admin 角色
+        store = get_identity_store()
+        for uid in valid_ids:
+            record = store.get(uid)
+            if record and str(record.get("role", "")).lower() == "admin":
+                logger.info(f"[warmup] 使用 admin 用户凭据: {uid}")
+                return uid
+
+        # 无 admin 则取第一个有效用户
+        logger.info(f"[warmup] 无 admin 凭据，使用第一个可用用户: {valid_ids[0]}")
+        return valid_ids[0]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[warmup] 查找用户凭据失败: {exc}")
+        return ""
+
+
 async def _warmup_one_keyword(keyword: str, target: int = _PER_KEYWORD_TARGET) -> int:
     """为单个关键词跑一次 L3 → 写回 L1/L2,返回真实采到的条数。
 
@@ -276,9 +314,11 @@ async def _warmup_one_keyword(keyword: str, target: int = _PER_KEYWORD_TARGET) -
         logger.warning(f"[warmup] 依赖加载失败: {exc}")
         return 0
 
-    cookies_str = _resolve_cookies_str("")  # 默认 admin
+    # 优先使用 XhsCredentialStore 中绑定的账号（管理员优先）
+    owner_user_id = _find_warmup_user_id()
+    cookies_str = _resolve_cookies_str(owner_user_id)
     if not cookies_str:
-        logger.warning("[warmup] 未找到可用 cookies,跳过")
+        logger.warning("[warmup] 未找到可用 cookies（请在设置→数据源授权中绑定小红书账号）,跳过")
         return 0
 
     runtime_cfg = {
