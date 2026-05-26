@@ -275,7 +275,7 @@ def _find_warmup_user_id() -> str:
         # 收集有效凭据的 redmuse_user_id
         valid_ids = [
             c.redmuse_user_id for c in credentials
-            if c.redmuse_user_id and c.is_bound
+            if c.redmuse_user_id and c.cookies_path and c.status != "unbound"
         ]
         if not valid_ids:
             return ""
