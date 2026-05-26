@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -28,8 +31,6 @@ async def get_system_settings(current_user: dict = Depends(get_current_user)):
 
 class CrawlerSchedulePayload(BaseModel):
     enabled: bool = True
-    interval_hours: int = Field(default=6, ge=1, le=168)
-    hot_keywords_top_n: int = Field(default=50, ge=1, le=500)
 
 
 class SystemSettingsPayload(BaseModel):
@@ -181,6 +182,14 @@ async def get_crawler_status(current_user: dict = Depends(get_current_user)):
     total_records = 0
     keyword_count = 0
 
+    next_run_at: str | None = None
+    try:
+        from ...infrastructure.queue.tasks.warmup import read_next_run_at
+
+        next_run_at = await read_next_run_at()
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         from ...infrastructure.queue.tasks.warmup import read_last_run
 
@@ -221,6 +230,7 @@ async def get_crawler_status(current_user: dict = Depends(get_current_user)):
     return ok(
         {
             "last_run": last_run_payload,
+            "next_run_at": next_run_at,
             "total_records": total_records,
             "keyword_count": keyword_count,
         }

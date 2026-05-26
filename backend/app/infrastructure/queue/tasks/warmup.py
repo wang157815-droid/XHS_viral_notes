@@ -1,21 +1,23 @@
 """
-定时预热 & 按需预热任务（阶段 4.α-patch2）。
+定时预热 & 按需预热任务。
 
 `scheduled_warmup(ctx, force=False)` —— 同一入口,两种触发来源：
 - **ARQ cron 触发**（每小时探针,force=False）：
   - 门控 1: `crawler_schedule.enabled = False` → skip
-  - 门控 2: 距上次 finished_at 不到 `interval_hours` → skip
-  - 以上都过再真跑。这样用户前端改 `interval_hours` 立即生效,无需重启 worker
+  - 门控 2: 当前时间未到 `crawler:next_run_at`（Redis）→ skip
+  - 调度策略：每次执行完后随机生成 12~24h 后的下次执行时间，
+    保证每天至少执行一次且时间点随机（防规律性访问）
 - **用户"立即采集"触发**（API 层 enqueue 时 force=True）：
   - 门控 1: 开关关着仍然 skip（尊重管理员总开关）
-  - 门控 2: **跳过**(穿透 interval,立即执行)
-  - 这样用户连续点"立即采集"都能跑,不会被 interval 节流拦截
+  - 门控 2: **跳过**（穿透时间节流,立即执行）
+  - 执行完后同样重新抽签写入下次时间
 
 核心任务流程：
 - 合并 focus_keywords ∪ Redis 热词 Top N → 去重
 - 逐个跑 CrawlerAgent 的核心采集函数 → 写 L1 Redis + L2 pgvector
 - 每个关键词间隔 30s,避免触发 XHS 反爬
 - 结果写 Redis `crawler:last_run`（供设置页 `/crawler-status` 显示）
+- 写 Redis `crawler:next_run_at`（下次随机执行时间）
 
 `warmup_keyword_on_demand`（带关键词的按需预热,保留给其他场景）：
 - 不走焦点关键词列表,而是按调用方传入的关键词列表跑
@@ -26,7 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+import random
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -34,7 +37,7 @@ from loguru import logger
 
 _DEFAULT_MAX_KEYWORDS = 30  # hot_keywords_top_n 未配置时的兜底
 _INTER_KEYWORD_SLEEP_SEC = 30.0
-_PER_KEYWORD_TARGET = 30
+_PER_KEYWORD_TARGET = 50  # 与前端 DEFAULT_ADVANCED sample_count="50" 对齐
 
 
 async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
@@ -42,13 +45,13 @@ async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str
 
     Args:
         ctx: ARQ 任务上下文
-        force: True=用户"立即采集"触发,跳过 interval 节流(但仍受开关限制);
-               False=cron 探针触发,受双门控限制(开关 + interval)
+        force: True=用户"立即采集"触发,跳过时间节流(但仍受开关限制);
+               False=cron 探针触发,受双门控限制(开关 + next_run_at)
 
     门控规则：
     - 开关(enabled) = False: 无论 force 都 skip
-    - force=False 且距上次执行不到 interval_hours: skip
-    - 其他情况: 执行采集
+    - force=False 且当前时间 < crawler:next_run_at: skip
+    - 其他情况: 执行采集，完成后随机生成 12~24h 后的下次时间
     """
     trigger = "manual" if force else "scheduled"
     start = datetime.now(timezone.utc)
@@ -60,7 +63,7 @@ async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str
         schedule_cfg = await get_system_settings_store().get_crawler_schedule()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[arq.scheduled_warmup] 读取设置失败({exc}),按默认启用处理")
-        schedule_cfg = {"enabled": True, "interval_hours": 6, "hot_keywords_top_n": _DEFAULT_MAX_KEYWORDS}
+        schedule_cfg = {"enabled": True}
 
     # ----- 门控 1: 开关 (无条件检查,force 也不能绕过) -----
     if not schedule_cfg.get("enabled", True):
@@ -72,28 +75,21 @@ async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str
             "started_at": start.isoformat(),
         }
 
-    # ----- 门控 2: interval (仅 force=False 时检查,立即采集穿透) -----
-    interval_hours = int(schedule_cfg.get("interval_hours", 6))
+    # ----- 门控 2: next_run_at (仅 force=False 时检查,立即采集穿透) -----
     if not force:
-        if not await _interval_reached(start, interval_hours):
-            logger.info(
-                f"[arq.scheduled_warmup] 距上次执行未到 {interval_hours}h 间隔,跳过本次 (cron 节流)"
-            )
+        if not await _next_run_at_reached(start):
+            logger.info("[arq.scheduled_warmup] 未到计划执行时间，跳过本次 (cron 节流)")
             return {
                 "status": "skipped",
-                "reason": "interval_not_reached",
+                "reason": "not_yet",
                 "trigger": trigger,
-                "interval_hours": interval_hours,
+                "started_at": start.isoformat(),
             }
     else:
-        logger.info(
-            f"[arq.scheduled_warmup] 立即采集模式(force=True),穿透 interval={interval_hours}h 节流"
-        )
+        logger.info("[arq.scheduled_warmup] 立即采集模式(force=True),穿透时间节流")
 
-    max_keywords = int(schedule_cfg.get("hot_keywords_top_n", _DEFAULT_MAX_KEYWORDS))
-    logger.info(
-        f"[arq.scheduled_warmup] 门控通过,top_n={max_keywords} interval_hours={interval_hours}"
-    )
+    max_keywords = _DEFAULT_MAX_KEYWORDS
+    logger.info(f"[arq.scheduled_warmup] 门控通过,top_n={max_keywords}")
 
     try:
         keywords = await _collect_warmup_keywords()
@@ -148,6 +144,7 @@ async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str
         "per_keyword": results["per_keyword"],
     }
     await _write_last_run(summary)
+    await _write_next_run_at(end)
     logger.info(f"[arq.scheduled_warmup] 完成: trigger={trigger} ok={results['ok']} failed={results['failed']}")
     return summary
 
@@ -289,6 +286,7 @@ async def _warmup_one_keyword(keyword: str, target: int = _PER_KEYWORD_TARGET) -
         "viral_ratio": 0.5,
         "note_type": 0,
         "time_range": 0,
+        "min_interaction": 0,
     }
     try:
         viral_notes = await _collect_one_dimension(
@@ -314,6 +312,47 @@ async def _warmup_one_keyword(keyword: str, target: int = _PER_KEYWORD_TARGET) -
         logger.warning(f"[warmup] L2 回填失败: {exc}")
 
     return len(normalized)
+
+
+async def _next_run_at_reached(now: datetime) -> bool:
+    """读取 Redis crawler:next_run_at，判断是否到了执行时间。
+
+    - 不存在（首次部署）→ True（立即执行）
+    - now >= next_run_at  → True
+    - now < next_run_at   → False
+    - Redis 故障          → True（放行，避免永不执行）
+    """
+    try:
+        from ...cache.redis_client import get_redis
+
+        client = await get_redis()
+        raw = await client.get("crawler:next_run_at")
+        if not raw:
+            return True
+        next_run = datetime.fromisoformat(raw.decode().replace("Z", "+00:00"))
+        if next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=timezone.utc)
+        if now >= next_run:
+            return True
+        remaining_h = (next_run - now).total_seconds() / 3600
+        logger.info(f"[warmup] 距下次执行还有 {remaining_h:.1f}h（{next_run.isoformat()}）")
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def _write_next_run_at(now: datetime) -> None:
+    """随机生成 12~24h 后的时间戳写入 Redis，供下次探针判定。"""
+    offset_sec = random.uniform(12 * 3600, 24 * 3600)
+    next_run = now + timedelta(seconds=offset_sec)
+    try:
+        from ...cache.redis_client import get_redis
+
+        client = await get_redis()
+        await client.setex("crawler:next_run_at", 86400 * 2, next_run.isoformat())
+        logger.info(f"[warmup] 下次计划执行: {next_run.isoformat()} (距今 {offset_sec/3600:.1f}h)")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[warmup] 写入 next_run_at 失败: {exc}")
 
 
 async def _write_last_run(summary: Dict[str, Any]) -> None:
@@ -345,40 +384,15 @@ async def read_last_run() -> Optional[Dict[str, Any]]:
         return None
 
 
-async def _interval_reached(now: datetime, interval_hours: int) -> bool:
-    """距上次实际执行是否已满 `interval_hours`(仅 cron 触发用,force=True 跳过)。
-
-    判定规则：
-    - 读 Redis `crawler:last_run.finished_at`(ISO 字符串)
-    - 解析失败 / 读不到 / 不是真实执行过的状态 → 视为可执行(True)
-    - 未到间隔返回 False
-
-    注意：Redis 不可用时返回 True,让本次尝试执行（避免因基础设施故障导致永远跳过）。
-    """
-    if interval_hours <= 0:
-        return True
-
-    last_run = await read_last_run()
-    if not last_run:
-        return True
-
-    # 只有上次真实执行过(ok / empty / no_keywords)才计入间隔,其他 skip 状态不算
-    last_status = str(last_run.get("status") or "")
-    if last_status not in {"ok", "empty", "no_keywords"}:
-        return True
-
-    finished_raw = last_run.get("finished_at") or last_run.get("started_at")
-    if not finished_raw:
-        return True
-
+async def read_next_run_at() -> Optional[str]:
+    """读取下次计划执行时间（ISO 字符串），供 `/settings/crawler-status` 用。"""
     try:
-        last_ts = datetime.fromisoformat(str(finished_raw).replace("Z", "+00:00"))
-        if last_ts.tzinfo is None:
-            last_ts = last_ts.replace(tzinfo=timezone.utc)
-    except Exception:  # noqa: BLE001
-        return True
+        from ...cache.redis_client import get_redis
 
-    elapsed_sec = (now - last_ts).total_seconds()
-    required_sec = interval_hours * 3600
-    # 留 1 分钟容差,避免 cron 抖动刚好少 1 秒不跑
-    return elapsed_sec + 60 >= required_sec
+        client = await get_redis()
+        raw = await client.get("crawler:next_run_at")
+        if not raw:
+            return None
+        return raw.decode()
+    except Exception:  # noqa: BLE001
+        return None

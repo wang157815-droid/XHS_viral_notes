@@ -41,8 +41,6 @@ DEFAULT_SYSTEM_SETTINGS: Dict[str, Any] = {
     "video_analysis_enabled": True,
     "crawler_schedule": {
         "enabled": True,
-        "interval_hours": 6,
-        "hot_keywords_top_n": 50,
     },
 }
 
@@ -89,8 +87,6 @@ class SystemSettingsStore:
         schedule = data.get("crawler_schedule") or {}
         return {
             "enabled": bool(schedule.get("enabled", True)),
-            "interval_hours": int(schedule.get("interval_hours", 6)),
-            "hot_keywords_top_n": int(schedule.get("hot_keywords_top_n", 50)),
         }
 
     # ------------------------------------------------------------------

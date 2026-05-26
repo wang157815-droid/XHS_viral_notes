@@ -37,8 +37,6 @@ interface SystemSettings {
   video_analysis_enabled: boolean;
   crawler_schedule: {
     enabled?: boolean;
-    interval_hours?: number;
-    hot_keywords_top_n?: number;
   };
 }
 
@@ -73,6 +71,7 @@ interface CrawlerStatus {
     at: string;
     collected_count: number;
   } | null;
+  next_run_at?: string | null;
   total_records: number;
   keyword_count: number;
 }
@@ -1530,8 +1529,6 @@ function CrawlerScheduleSection({
 }) {
   const schedule = system?.crawler_schedule ?? {};
   const enabled = schedule.enabled ?? false;
-  const intervalHours = schedule.interval_hours ?? 6;
-  const topN = schedule.hot_keywords_top_n ?? 50;
 
   const lastRun = status?.last_run;
   const lastRunMeta = (() => {
@@ -1539,7 +1536,7 @@ function CrawlerScheduleSection({
       return { color: "#A8A4A0", dot: "#A8A4A0", text: "暂无执行记录" };
     }
     const tsLabel = formatTime(lastRun.at);
-    if (lastRun.status === "success") {
+    if (lastRun.status === "ok") {
       return {
         color: "#3D8C40",
         dot: "#3D8C40",
@@ -1556,7 +1553,7 @@ function CrawlerScheduleSection({
     <section id="settings-crawler" className="relative mx-auto mb-8 max-w-[1180px] scroll-mt-24">
       <SectionTitle
         title="定时爬虫预热"
-        desc="后台自动抓取热榜关键词，预热数据到向量库，减少用户等待时间"
+        desc="每天随机时间自动抓取热榜关键词，预热数据到向量库，减少用户等待时间（采集参数与对话框默认配置一致）"
       />
       <Card>
         <Row label="启用定时采集">
@@ -1565,37 +1562,18 @@ function CrawlerScheduleSection({
             onToggle={() => onUpdate({ ...schedule, enabled: !enabled })}
           />
         </Row>
-        <Row label="热榜采集频率">
-          <select
-            value={intervalHours}
-            onChange={(e) =>
-              onUpdate({ ...schedule, interval_hours: Number(e.target.value) })
-            }
-            className="h-9 cursor-pointer rounded-lg border border-[#E8E5E0] bg-[#FAFAF8] px-3 text-[13px] outline-none"
-          >
-            <option value={3}>每 3 小时</option>
-            <option value={6}>每 6 小时</option>
-            <option value={12}>每 12 小时</option>
-            <option value={24}>每 24 小时</option>
-          </select>
-        </Row>
-        <Row label="热榜采集数量">
-          <select
-            value={topN}
-            onChange={(e) =>
-              onUpdate({ ...schedule, hot_keywords_top_n: Number(e.target.value) })
-            }
-            className="h-9 cursor-pointer rounded-lg border border-[#E8E5E0] bg-[#FAFAF8] px-3 text-[13px] outline-none"
-          >
-            <option value={20}>Top 20</option>
-            <option value={50}>Top 50</option>
-            <option value={100}>Top 100</option>
-          </select>
-        </Row>
-        <Row label="上次执行情况">
+        <Row label="上次执行时间">
           <span className="flex items-center gap-2 text-[13px]" style={{ color: lastRunMeta.color }}>
             <span className="h-2 w-2 rounded-full" style={{ background: lastRunMeta.dot }} />
             {lastRunMeta.text}
+          </span>
+        </Row>
+        <Row
+          label="下次计划执行"
+          hint="系统随机在 12–24 小时内安排下次采集"
+        >
+          <span className="text-[13px] text-[#5A5550]">
+            {status?.next_run_at ? formatTime(status.next_run_at) : "待首次执行后生成"}
           </span>
         </Row>
         <Row label="向量库预热量">
