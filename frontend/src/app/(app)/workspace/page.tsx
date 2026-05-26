@@ -342,16 +342,6 @@ export default function WorkspacePage() {
           const handoff = message.task_handoff;
           if (handoff?.task_id) {
             startTask(handoff.task_id, rawInput);
-            // 同步更新会话缓存中的 activeTaskId，避免切走再切回时 taskId 被还原为 null
-            // （convCacheRef 在首次加载会话时写入，但 startTask 后 active_task_id 已变更）
-            if (currentConversationId) {
-              const existing = convCacheRef.current.get(currentConversationId);
-              convCacheRef.current.set(currentConversationId, {
-                messages: existing?.messages ?? [],
-                activeTaskId: handoff.task_id,
-                lastUserInput: rawInput,
-              });
-            }
           }
           const debug = message.debug as
             | { regeneration_started?: unknown; module_id?: unknown }
