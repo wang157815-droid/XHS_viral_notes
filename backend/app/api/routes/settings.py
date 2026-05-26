@@ -208,23 +208,40 @@ async def get_crawler_status(current_user: dict = Depends(get_current_user)):
     except Exception:  # noqa: BLE001
         pass
 
+    # 统计 L1 Redis 关键词缓存：扫描 kwcache:v1:* 键得到当前有效预热数据量
     try:
-        from ...infrastructure.storage.db_engine import get_db_engine
-        from sqlalchemy import text as _sql
+        from ...infrastructure.cache.redis_client import get_redis
+        import os as _os
 
-        engine = await get_db_engine()
-        async with engine.connect() as conn:
-            r = await conn.execute(_sql("SELECT COUNT(*) FROM xhs_notes"))
-            total_records = int(r.scalar() or 0)
-            r = await conn.execute(
-                _sql(
-                    "SELECT COUNT(DISTINCT kw) FROM xhs_notes, "
-                    "LATERAL UNNEST(source_keywords) AS kw"
-                )
+        _kw_prefix = _os.getenv("KEYWORD_CACHE_KEY_PREFIX", "kwcache:v1:")
+        client = await get_redis()
+        cursor_val: int = 0
+        kw_keys: list = []
+        while True:
+            cursor_val, batch = await client.scan(
+                cursor_val, match=f"{_kw_prefix}*", count=200
             )
-            keyword_count = int(r.scalar() or 0)
+            kw_keys.extend(batch)
+            if cursor_val == 0:
+                break
+
+        keyword_count = len(kw_keys)
+        if kw_keys:
+            import json as _json
+            total_records = 0
+            for key in kw_keys:
+                raw = await client.get(key)
+                if raw:
+                    try:
+                        payload = _json.loads(raw)
+                        if isinstance(payload, dict):
+                            total_records += int(payload.get("count", 0))
+                        elif isinstance(payload, list):
+                            total_records += len(payload)
+                    except Exception:  # noqa: BLE001
+                        pass
     except Exception:  # noqa: BLE001
-        # pgvector 未就绪时保持 0,不报错（面板可显示 "N/A"）
+        # Redis 不可用时保持 0
         pass
 
     return ok(
