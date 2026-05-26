@@ -4,6 +4,7 @@ import Image from "next/image";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,6 +37,9 @@ import {
 } from "./composer-draft-thumbnails";
 
 export type LocalMediaDraft = ComposerFileDraft;
+
+/** 首页居中态输入框最大高度（超出后内部滚动） */
+const MAX_TEXTAREA_HEIGHT = 240;
 
 interface PromptComposerProps {
   value: string;
@@ -86,19 +90,69 @@ export function PromptComposer({
   const plusWrapRef = useRef<HTMLDivElement | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [inputCaret, setInputCaret] = useState(0);
+  // 文字接近行末（>85% 行宽）时展开，清空时收起，中间保持（单向）
+  // 初始值基于 value 直接派生：draft 恢复时含换行符则直接以展开态挂载，避免重挂载后需要二次渲染
+  const initExpanded = value.includes("\n");
+  const [isExpandedByContent, setIsExpandedByContent] = useState(initExpanded);
+  // ref 用于在 autoResize 内同步读取当前展开状态，避免闭包过时值
+  const isExpandedByContentRef = useRef(initExpanded);
 
   const autoResize = useCallback((el: HTMLTextAreaElement | null) => {
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+    const val = el.value;
+
+    if (!val) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+      el.style.overflowY = "hidden";
+      setIsExpandedByContent(false);
+      isExpandedByContentRef.current = false;
+      return;
+    }
+
+    // 检测是否应该展开
+    const alreadyExpanded = isExpandedByContentRef.current;
+    let wouldExpand = alreadyExpanded;
+    if (!alreadyExpanded) {
+      if (val.includes("\n")) {
+        wouldExpand = true;
+      } else {
+        const style = getComputedStyle(el);
+        const paddingLeft = parseFloat(style.paddingLeft) || 0;
+        const paddingRight = parseFloat(style.paddingRight) || 0;
+        const innerWidth = el.clientWidth - paddingLeft - paddingRight;
+        if (innerWidth > 0) {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.font = style.font;
+            const maxLineWidth = val
+              .split("\n")
+              .reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
+            wouldExpand = maxLineWidth > innerWidth * 0.85;
+          }
+        }
+      }
+    }
+
+    // 关键：折叠→展开过渡时，不在旧元素上设置高度，避免出现"高 textarea + 底部按钮"的中间形态。
+    // useLayoutEffect 会在新展开的 textarea 挂载后立即设置正确高度，
+    // framer-motion layout 动画负责从旧容器高度平滑过渡到新高度。
+    const isTransitioning = wouldExpand && !alreadyExpanded;
+    if (!isTransitioning) {
+      el.style.height = "auto";
+      const newH = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
+      el.style.height = `${newH}px`;
+      el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
+    }
+
+    if (wouldExpand !== alreadyExpanded) {
+      isExpandedByContentRef.current = wouldExpand;
+      setIsExpandedByContent(wouldExpand);
+    }
   }, []);
   const [shellDragActive, setShellDragActive] = useState(false);
   const shellDragDepth = useRef(0);
-
-  // value 被外部清空时重置高度
-  useEffect(() => {
-    if (value === "") autoResize(textInputRef.current);
-  }, [value, autoResize]);
 
   const onShellDragEnter = useCallback(
     (e: DragEvent) => {
@@ -145,6 +199,30 @@ export function PromptComposer({
 
   const hasExtras =
     knowledgeRefs.length > 0 || localMediaDrafts.length > 0 || advancedOverridesDefault(advanced);
+  const isExpanded = hasExtras || isExpandedByContent;
+
+  // useLayoutEffect：在浏览器绘制前同步设置高度，防止 isExpanded 切换时
+  // 新挂载的 textarea 以默认行高短暂显示（跳闪）。
+  // isExpanded 加入依赖，确保展开/折叠后新实例挂载后立即应用正确高度。
+  useLayoutEffect(() => {
+    autoResize(textInputRef.current);
+  }, [value, isExpanded, autoResize]);
+
+  // 布局切换后恢复焦点，避免 textarea remount 丢失输入焦点
+  const prevIsExpandedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevIsExpandedRef.current !== null && prevIsExpandedRef.current !== isExpanded) {
+      requestAnimationFrame(() => {
+        const el = textInputRef.current;
+        if (el) {
+          el.focus();
+          const len = el.value.length;
+          el.setSelectionRange(len, len);
+        }
+      });
+    }
+    prevIsExpandedRef.current = isExpanded;
+  }, [isExpanded]);
 
   const kbMention = useMemo(() => getActiveKbMention(value, inputCaret), [value, inputCaret]);
   const kbMentionLoad = kbMention !== null && canReadKnowledge;
@@ -308,9 +386,13 @@ export function PromptComposer({
           layout
           initial={false}
           animate={{
-            borderRadius: hasExtras ? 24 : 9999,
+            borderRadius: isExpanded ? 24 : 9999,
           }}
-          transition={shellTransition}
+          transition={
+            isExpanded
+              ? { ...shellTransition, borderRadius: { duration: 0 } }
+              : shellTransition
+          }
           onDragEnter={onShellDragEnter}
           onDragLeave={onShellDragLeave}
           onDragOver={onShellDragOver}
@@ -323,7 +405,7 @@ export function PromptComposer({
             onRemove={(id) => onRemoveLocalMediaDraft?.(id)}
             showDropHint={Boolean(onPickLocalFiles) && !disabled}
           />
-          {hasExtras ? (
+          {isExpanded ? (
             <>
               <div className="relative min-h-10 w-full min-w-0 px-0.5 pt-0.5">
                 <KnowledgeMentionList
@@ -346,7 +428,7 @@ export function PromptComposer({
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
                   disabled={disabled || busy}
                   placeholder="请输入分析目标，例如：分析近半年防脱精华的视频类爆款笔记…"
-                  className="min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
                   onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? value.length;
@@ -364,7 +446,7 @@ export function PromptComposer({
                         return;
                       }
                     }
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       if (canSend) void onSubmit();
                     }
@@ -437,7 +519,7 @@ export function PromptComposer({
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
                   disabled={disabled || busy}
                   placeholder="请输入分析目标，例如：分析近半年防脱精华的视频类爆款笔记…"
-                  className="min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
                   onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? value.length;
@@ -455,7 +537,7 @@ export function PromptComposer({
                         return;
                       }
                     }
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       if (canSend) void onSubmit();
                     }

@@ -55,10 +55,12 @@ _DEFAULT_STATS_AXIS_LABEL = "高频痛点 / 议程"
 # SEO 关键词聚合相关常量
 _SEO_CORE_TOP = 10             # 核心高频词数量
 _SEO_LONG_TAIL_TOP = 10        # 长尾词数量
-_SEO_COMPETITOR_LIMIT = 24     # 参与聚合的竞品笔记上限
+_SEO_COMPETITOR_LIMIT = 24     # 参与聚合的笔记上限
 _SEO_MIN_COUNT_CORE = 2        # 核心词至少出现 2 次
 _SEO_TOKEN_MIN_LEN = 2
 _SEO_TOKEN_MAX_LEN = 12
+# 无竞品时的回退来源优先级（依次尝试直至凑够样本）
+_SEO_FALLBACK_SOURCES = ("category_top", "serp_top", "top_interaction")
 
 
 class InsightAgent(BaseAgent):
@@ -163,8 +165,16 @@ class InsightAgent(BaseAgent):
 
     @staticmethod
     def _collect_competitor_titles(sources: Dict[str, Any]) -> List[str]:
-        """收集竞品笔记标题(给 LLM 做差异化建议时做上下文)。"""
+        """收集笔记标题(给 LLM 做差异化建议时做上下文)。
+
+        优先用竞品笔记；无竞品时回退到 category_top / serp_top。
+        """
         notes = _extract_notes(sources.get("competitor"))
+        if not notes:
+            for key in _SEO_FALLBACK_SOURCES:
+                notes = _extract_notes(sources.get(key))
+                if notes:
+                    break
         titles: List[str] = []
         for n in notes[:8]:
             t = (n.get("title") or "").strip()
@@ -176,13 +186,24 @@ class InsightAgent(BaseAgent):
     def _aggregate_seo_keywords(
         sources: Dict[str, Any],
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """从竞品笔记的标题 + pain_keywords 聚合 SEO 词频。
+        """从笔记的标题 + pain_keywords + desc 聚合 SEO 词频。
+
+        优先使用竞品笔记；无竞品样本时依次回退到
+        category_top → serp_top → top_interaction，确保只要有
+        品类词爬取结果就能生成 SEO 洞察。
 
         Returns:
             core_keywords: 频次 ≥ _SEO_MIN_COUNT_CORE 的高频词(top _SEO_CORE_TOP)
             long_tail:     频次 < _SEO_MIN_COUNT_CORE 但出现过的长尾词(top _SEO_LONG_TAIL_TOP)
         """
-        notes = _extract_notes(sources.get("competitor"))[:_SEO_COMPETITOR_LIMIT]
+        notes = _extract_notes(sources.get("competitor"))
+        if not notes:
+            # 无竞品样本时合并其他来源
+            fallback: List[Any] = []
+            for key in _SEO_FALLBACK_SOURCES:
+                fallback.extend(_extract_notes(sources.get(key)))
+            notes = fallback
+        notes = notes[:_SEO_COMPETITOR_LIMIT]
         if not notes:
             return [], []
 

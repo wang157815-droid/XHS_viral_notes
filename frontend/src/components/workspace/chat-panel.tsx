@@ -45,6 +45,7 @@ import {
   isAllowedComposerAttachmentFile,
 } from "./composer-draft-thumbnails";
 import { uploadConversationFile, type ConversationUploadResult } from "@/lib/conversation-api";
+import { Square } from "lucide-react";
 
 function newLocalDraftId(): string {
   return `lm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -54,16 +55,18 @@ interface ChatPanelProps {
   cookieHealth: CookieHealth | null;
   taskId: string | null;
   userInput: string | null;
+  /** 恢复当前会话的草稿内容（切换会话时保留） */
+  initialInput?: string;
+  /** 每次输入内容变化时回调，供父级持久化草稿 */
+  onDraftChange?: (draft: string) => void;
   messages: ChatMessage[];
   streamState: TaskStreamState;
   connectionStatus: SseClientStatus;
   creating: boolean;
-  controlBusy: boolean;
   streamError: { code: string; message: string } | null;
   canvasCollapsed: boolean;
   showCanvasToggle: boolean;
   canWriteConversation: boolean;
-  canWriteTask: boolean;
   /** 对话态下 ChatPanel 宽度（px），来自父级可拖拽状态；初始态不限制 */
   chatWidth?: number;
   onToggleCanvas: () => void;
@@ -75,11 +78,8 @@ interface ChatPanelProps {
     knowledgeRefs?: KnowledgeRefPayload[];
     localMediaFiles?: File[];
   }) => Promise<boolean | void>;
-  onNewAnalysis: () => void;
   onReconnect: () => void;
-  onPause: () => Promise<void> | void;
-  onResume: () => Promise<void> | void;
-  onCancel: () => Promise<void> | void;
+  onStop: () => Promise<void> | void;
   canReadKnowledge: boolean;
 }
 
@@ -98,6 +98,9 @@ const XHS_AUTH_SETTINGS_HREF = "/settings#xhs-credential";
 
 const LOCAL_MEDIA_ACCEPT = "image/*,.pdf,.txt,.md,.doc,.docx";
 
+/** 底部对话输入框最大高度（超出后内部滚动） */
+const MAX_FOOTER_TEXTAREA_HEIGHT = 200;
+
 /** 顶栏品牌：logo 图片 + Red Muse 文字 */
 function ChatHeaderBrand() {
   return (
@@ -114,28 +117,37 @@ export function ChatPanel({
   cookieHealth,
   taskId,
   userInput,
+  initialInput,
+  onDraftChange,
   messages,
   streamState,
   connectionStatus,
   creating,
-  controlBusy,
   streamError,
   canvasCollapsed,
   showCanvasToggle,
   canWriteConversation,
-  canWriteTask,
   chatWidth,
   onToggleCanvas,
   onSubmit,
-  onNewAnalysis,
   onReconnect,
-  onPause,
-  onResume,
-  onCancel,
+  onStop,
   canReadKnowledge,
 }: ChatPanelProps) {
   const reduceMotion = useReducedMotion();
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialInput ?? "");
+  // 文字接近行末（>75% 行宽）时展开，清空时收起，中间不回收（单向）
+  // 初始值从 initialInput 派生：草稿含换行符则直接以展开态挂载，避免切回会话时出现折叠闪烁
+  const [isFooterExpandedByContent, setIsFooterExpandedByContent] = useState(
+    (initialInput ?? "").includes("\n"),
+  );
+  // 用 ref 持有回调，避免 useEffect 依赖项频繁变化
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
+  // input 变化时通知父级保存草稿（key 切换时 initialInput 已恢复，首次同步无副作用）
+  useEffect(() => {
+    onDraftChangeRef.current?.(input);
+  }, [input]);
   const [advanced, setAdvanced] = useState<AdvancedConfig>(DEFAULT_ADVANCED);
   const [knowledgeRefs, setKnowledgeRefs] = useState<KnowledgeRefPayload[]>([]);
   const [localMediaDrafts, setLocalMediaDrafts] = useState<LocalMediaDraft[]>([]);
@@ -145,16 +157,27 @@ export function ChatPanel({
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const localMediaInputRef = useRef<HTMLInputElement | null>(null);
   const plusFooterRef = useRef<HTMLDivElement | null>(null);
-  const footerInputRef = useRef<HTMLInputElement | null>(null);
+  const footerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  // 自动跟随滚动相关
+  const autoFollowRef = useRef(true);
+  const [showBackToBottom, setShowBackToBottom] = useState(false);
+  const scrollThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const msgContainerRef = useRef<HTMLDivElement | null>(null);
 
   const hasComposerExtras =
     knowledgeRefs.length > 0 ||
     localMediaDrafts.length > 0 ||
     advancedOverridesDefault(advanced);
+  // 文字接近行末 或 有标签 → 展开双行；清空 → 收起单行
+  const isFooterExpanded = hasComposerExtras || isFooterExpandedByContent;
 
   const cookieBlocked = cookieHealth?.status === "expired";
   const hasTask = !!taskId;
   const hasMessages = messages.length > 0;
+  // 任务执行中（pending/queued/running）时显示停止按钮；用宽松判断避免 creating→task 过渡闪烁
+  const isTaskRunning = !!(taskId && !["completed", "failed", "cancelled"].includes(streamState.status));
+  // 全局"正在生成"：对话流式中 OR 任务执行中
+  const isGenerating = creating || isTaskRunning;
   const isInitialState = !hasTask && !hasMessages;
   const lastMessageId = messages[messages.length - 1]?.message_id;
   const badge = STATUS_BADGE[connectionStatus];
@@ -316,9 +339,10 @@ export function ChatPanel({
     });
   };
 
-  const handleFooterInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFooterInputChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     setInputCaret(e.target.selectionStart ?? e.target.value.length);
+    footerAutoResize(e.target);
   };
 
   const handleKbMentionPickFooter = (doc: KbDocRow) => {
@@ -342,6 +366,11 @@ export function ChatPanel({
     if (creating) return;
     if (!text && !localMediaDrafts.length) return;
 
+    // 发送新消息：强制滚到底部并开启自动跟随
+    autoFollowRef.current = true;
+    setShowBackToBottom(false);
+    bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
+
     const kw = parseKeywords(text);
     const refs = [...knowledgeRefs];
 
@@ -364,6 +393,11 @@ export function ChatPanel({
     setInputCaret(0);
     setKnowledgeRefs([]);
     setLocalMediaDrafts([]);
+    // 立即重置底部 textarea 高度，无需等待 effect
+    if (footerInputRef.current) {
+      footerInputRef.current.style.height = "auto";
+      footerInputRef.current.style.overflowY = "hidden";
+    }
 
     const ok = await onSubmit({
       rawInput: text,
@@ -382,6 +416,12 @@ export function ChatPanel({
     const uploadedAttachments: ConversationAttachmentPayload[] = localMediaDrafts
       .filter((d) => d.uploaded)
       .map((d) => d.uploaded!);
+
+    // 发送新消息：强制滚到底部并开启自动跟随
+    autoFollowRef.current = true;
+    setShowBackToBottom(false);
+    bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
+
     // 发送前立即清空 composer
     setInput("");
     setInputCaret(0);
@@ -400,17 +440,133 @@ export function ChatPanel({
     if (ok === false) return;
   };
 
-  // 自动滚到底部：在 effect 执行时直接读当前滚动距离，
-  // 若用户已向上滑（距底 > 120px）则跳过，避免打断阅读
+  // ── 自动滚动辅助函数 ──────────────────────────────────────────
+  const BOTTOM_THRESHOLD = 80;
+  const SCROLL_THROTTLE_MS = 100;
+
+  const isNearBottom = useCallback(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD;
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+  }, []);
+
+  const scheduleScrollToBottom = useCallback(() => {
+    if (!autoFollowRef.current) return;
+    if (scrollThrottleRef.current) return;
+    scrollThrottleRef.current = setTimeout(() => {
+      scrollThrottleRef.current = null;
+      if (autoFollowRef.current) scrollToBottom("smooth");
+    }, SCROLL_THROTTLE_MS);
+  }, [scrollToBottom]);
+
+  const handleScrollAreaScroll = useCallback(() => {
+    const atBottom = isNearBottom();
+    if (atBottom) {
+      autoFollowRef.current = true;
+      setShowBackToBottom(false);
+    } else {
+      // 任何时候用户滚离底部均显示「回到底部」按钮
+      if (isGenerating) {
+        // AI 输出中额外关闭自动跟随，避免强制拉回
+        autoFollowRef.current = false;
+      }
+      setShowBackToBottom(true);
+    }
+  }, [isNearBottom, isGenerating]);
+
+  // ── Effect 1：注册滚动事件监听 ───────────────────────────────
+  useEffect(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", handleScrollAreaScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScrollAreaScroll);
+  }, [handleScrollAreaScroll]);
+
+  // ── Effect 2：流式数据变化 → 节流滚底 ──────────────────────
   useEffect(() => {
     if (!hasTask && !hasMessages) return;
-    const el = scrollAreaRef.current;
-    if (el) {
-      const { scrollTop, scrollHeight, clientHeight } = el;
-      if (scrollHeight - scrollTop - clientHeight > 120) return;
+    scheduleScrollToBottom();
+  }, [hasTask, hasMessages, messages.length, lastMessageId, streamState.lastEventAt, streamState.status, scheduleScrollToBottom]);
+
+  // ── Effect 3：ResizeObserver 监听消息容器高度变化 ───────────
+  useEffect(() => {
+    const inner = msgContainerRef.current;
+    if (!inner) return;
+    const ro = new ResizeObserver(() => { scheduleScrollToBottom(); });
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [scheduleScrollToBottom]);
+
+  // ── Effect 4：组件挂载时（切换会话触发 remount）立即滚到底部 ─
+  // ChatPanel 以 key={conversationId} 挂载，切换会话整体重新挂载，
+  // 此 effect 每次挂载只运行一次，无需监听 conversationId。
+  useEffect(() => {
+    if (!hasMessages) return;
+    autoFollowRef.current = true;
+    setShowBackToBottom(false);
+    bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 底部输入框自动伸缩，同时用 canvas 测量文字宽度决定是否触发展开
+  const footerAutoResize = useCallback((el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = "auto";
+    const scrollH = el.scrollHeight;
+    const newH = Math.min(scrollH, MAX_FOOTER_TEXTAREA_HEIGHT);
+    el.style.height = `${newH}px`;
+    el.style.overflowY = scrollH > MAX_FOOTER_TEXTAREA_HEIGHT ? "auto" : "hidden";
+
+    const value = el.value;
+    if (!value) {
+      // 完全清空 → 收起
+      setIsFooterExpandedByContent(false);
+      return;
     }
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [hasTask, hasMessages, messages.length, lastMessageId, streamState.lastEventAt, streamState.status]);
+    setIsFooterExpandedByContent((prev) => {
+      if (prev) return true; // 已展开则保持（单向：只有清空才收起，避免振荡）
+      // 含换行符（如粘贴多行或草稿恢复）直接展开，不依赖宽度测量
+      if (value.includes("\n")) return true;
+      // 单行：检测文字宽度是否接近行末（>85%）
+      const style = getComputedStyle(el);
+      const paddingLeft = parseFloat(style.paddingLeft) || 0;
+      const paddingRight = parseFloat(style.paddingRight) || 0;
+      const innerWidth = el.clientWidth - paddingLeft - paddingRight;
+      if (innerWidth <= 0) return false;
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return false;
+      ctx.font = style.font;
+      const maxLineWidth = value
+        .split("\n")
+        .reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
+      return maxLineWidth > innerWidth * 0.85;
+    });
+  }, []);
+
+  useEffect(() => {
+    footerAutoResize(footerInputRef.current);
+  }, [input, footerAutoResize]);
+
+  // 布局展开/收起切换后恢复焦点，避免 textarea remount 丢失输入焦点
+  const prevIsFooterExpandedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevIsFooterExpandedRef.current !== null && prevIsFooterExpandedRef.current !== isFooterExpanded) {
+      requestAnimationFrame(() => {
+        const el = footerInputRef.current;
+        if (el) {
+          el.focus();
+          const len = el.value.length;
+          el.setSelectionRange(len, len);
+        }
+      });
+    }
+    prevIsFooterExpandedRef.current = isFooterExpanded;
+  }, [isFooterExpanded]);
 
   const kbSelected = new Set(knowledgeRefs.map((r) => r.doc_id));
 
@@ -471,16 +627,16 @@ export function ChatPanel({
   const chatFooterSendButton = (
     <button
       type="button"
-      onClick={() => void handleSend()}
-      disabled={creating || !canWriteConversation || (!input.trim() && localMediaDrafts.length === 0)}
+      onClick={() => {
+        if (isGenerating) void onStop();
+        else void handleSend();
+      }}
+      disabled={!isGenerating && (!canWriteConversation || (!input.trim() && localMediaDrafts.length === 0))}
       className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-dew text-white transition hover:bg-[#9CBBC0] disabled:cursor-not-allowed disabled:bg-fog disabled:text-obsidian/20"
-      title="发送"
+      title={isGenerating ? "停止" : "发送"}
     >
-      {creating ? (
-        <span
-          className="h-[18px] w-[18px] shrink-0 animate-spin rounded-full border-2 border-obsidian/15 border-t-dew"
-          aria-hidden
-        />
+      {isGenerating ? (
+        <Square size={16} />
       ) : (
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M13 5l7 7-7 7M5 12h14" />
@@ -563,16 +719,6 @@ export function ChatPanel({
       <header className="flex shrink-0 items-center justify-between gap-3 bg-papyrus/95 px-3 py-3 backdrop-blur-sm sm:px-4">
         <ChatHeaderBrand />
         <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
-          {hasTask && canWriteTask ? (
-            <TaskControls
-              status={streamState.status}
-              busy={controlBusy}
-              onPause={onPause}
-              onResume={onResume}
-              onCancel={onCancel}
-              onNew={onNewAnalysis}
-            />
-          ) : null}
           {hasTask ? (
             <span
               className="rounded px-2 py-[3px] text-[11px]"
@@ -604,8 +750,8 @@ export function ChatPanel({
         </div>
       </header>
 
-      <div ref={scrollAreaRef} className="custom-scrollbar flex-1 overflow-y-auto bg-papyrus pb-4">
-        <div className="mx-auto w-full max-w-4xl space-y-3 px-3 pt-4 sm:px-5">
+      <div ref={scrollAreaRef} className="custom-scrollbar relative flex-1 overflow-y-auto bg-papyrus pb-4">
+        <div ref={msgContainerRef} className="mx-auto w-full max-w-4xl space-y-3 px-3 pt-4 sm:px-5">
         <ConversationView
           messages={messages}
           streamState={streamState}
@@ -631,6 +777,25 @@ export function ChatPanel({
         ) : null}
         <div ref={bottomRef} />
         </div>
+        {showBackToBottom && (
+          <div className="sticky bottom-4 flex justify-center" style={{ pointerEvents: "none" }}>
+            <button
+              type="button"
+              onClick={() => {
+                autoFollowRef.current = true;
+                setShowBackToBottom(false);
+                scrollToBottom("smooth");
+              }}
+              title="回到底部"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.08] bg-white text-obsidian/50 shadow-md transition hover:bg-moss hover:text-obsidian"
+              style={{ pointerEvents: "auto" }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12l7 7 7-7" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="relative z-10 flex-shrink-0 bg-gradient-to-b from-papyrus/0 to-moss/20 backdrop-blur-md">
@@ -660,9 +825,9 @@ export function ChatPanel({
             onRemove={removeLocalMediaDraft}
             showDropHint={canWriteConversation}
           />
-          {hasComposerExtras ? (
+          {isFooterExpanded ? (
             <>
-              {/* 稿图：壳内上方整行输入区；下方一行左「+ + 标签」右发送 */}
+              {/* 展开态：全宽输入区 + 底部工具栏；有标签时工具栏显示 chips */}
               <div className="relative min-h-10 w-full min-w-0 px-0.5 pt-0.5">
                 <KnowledgeMentionList
                   open={kbMention !== null}
@@ -674,9 +839,9 @@ export function ChatPanel({
                   onPick={handleKbMentionPickFooter}
                   canRead={canReadKnowledge}
                 />
-                <input
+                <textarea
                   ref={footerInputRef}
-                  type="text"
+                  rows={1}
                   placeholder="输入指令，或让 RED MUSE 发现热点…"
                   value={input}
                   onChange={handleFooterInputChange}
@@ -684,8 +849,8 @@ export function ChatPanel({
                   onClick={(e) => setInputCaret(e.currentTarget.selectionStart ?? input.length)}
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? input.length)}
                   disabled={creating || !canWriteConversation}
-                  className="h-10 w-full min-w-0 bg-transparent text-[15px] text-obsidian outline-none placeholder:text-obsidian/22 disabled:cursor-not-allowed disabled:opacity-60"
-                  onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/22 disabled:cursor-not-allowed disabled:opacity-60"
+                  onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? input.length;
                     if (e.key === "Escape") {
@@ -702,7 +867,7 @@ export function ChatPanel({
                         return;
                       }
                     }
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       void handleSend();
                     }
@@ -751,6 +916,7 @@ export function ChatPanel({
               </div>
             </>
           ) : (
+            /* 收起态：空内容且无标签时恢复紧凑单行 */
             <div className="flex w-full items-center gap-2 py-1">
               <div className="flex h-10 shrink-0 items-center">{plusFooterBlock}</div>
               <div className="relative min-h-10 min-w-0 flex-1">
@@ -764,9 +930,9 @@ export function ChatPanel({
                   onPick={handleKbMentionPickFooter}
                   canRead={canReadKnowledge}
                 />
-                <input
+                <textarea
                   ref={footerInputRef}
-                  type="text"
+                  rows={1}
                   placeholder="输入指令，或让 RED MUSE 发现热点…"
                   value={input}
                   onChange={handleFooterInputChange}
@@ -774,8 +940,8 @@ export function ChatPanel({
                   onClick={(e) => setInputCaret(e.currentTarget.selectionStart ?? input.length)}
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? input.length)}
                   disabled={creating || !canWriteConversation}
-                  className="h-10 w-full min-w-0 bg-transparent text-[15px] text-obsidian outline-none placeholder:text-obsidian/22 disabled:cursor-not-allowed disabled:opacity-60"
-                  onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/22 disabled:cursor-not-allowed disabled:opacity-60"
+                  onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? input.length;
                     if (e.key === "Escape") {
@@ -792,7 +958,7 @@ export function ChatPanel({
                         return;
                       }
                     }
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       void handleSend();
                     }
@@ -898,13 +1064,14 @@ function ConversationView({
     );
   }
 
-  // 找到任务发起消息在 messages 数组中的位置：
-  // - 实时模式（userMessage 非空）：最后一条内容匹配 userMessage 的 user 消息
-  // - 历史恢复模式（userMessage 为空）：messages[0] 就是任务发起消息
+  // 三级策略统一定位任务发起消息：
+  // 1. 内容精确匹配（live 模式或缓存恢复的会话）
+  // 2. task_handoff 反查（历史恢复或内容匹配失败时）
+  // 3. 降级取最后一条 user 消息
   const isLiveSession = !!userMessage;
-
   let taskMsgIndex = -1;
-  if (isLiveSession) {
+
+  if (userMessage) {
     const trimmed = userMessage.trim();
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user" && messages[i].content?.trim() === trimmed) {
@@ -912,43 +1079,45 @@ function ConversationView({
         break;
       }
     }
-    // 找不到精确匹配时，取最后一条 user 消息作为任务发起消息
-    if (taskMsgIndex === -1) {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === "user") {
-          taskMsgIndex = i;
-          break;
-        }
-      }
+  }
+
+  if (taskMsgIndex === -1) {
+    const handoffIdx = messages.findIndex(
+      (m) => m.task_handoff?.task_id === taskId
+    );
+    if (handoffIdx > 0) {
+      taskMsgIndex = handoffIdx - 1;
+    } else if (handoffIdx === 0) {
+      taskMsgIndex = 0;
     }
   }
 
-  // beforeTimeline: 任务发起消息之前的所有历史对话（实时模式），或任务发起消息本身（历史恢复模式）
-  // afterTimeline: 任务发起消息之后的所有消息（任务执行后的后续回复）
-  const beforeTimeline: ChatMessage[] = isLiveSession
-    ? (taskMsgIndex > 0 ? messages.slice(0, taskMsgIndex) : [])
-    : messages.slice(0, 1);
-  const afterTimeline: ChatMessage[] = isLiveSession
-    ? (taskMsgIndex >= 0 ? messages.slice(taskMsgIndex + 1) : messages)
-    : messages.slice(1);
+  if (taskMsgIndex === -1) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") { taskMsgIndex = i; break; }
+    }
+  }
+
+  // 基于统一的 taskMsgIndex 三段切分：前置历史 / 任务触发消息 / 后续消息
+  const preTaskMessages = taskMsgIndex > 0 ? messages.slice(0, taskMsgIndex) : [];
+  const taskMessage = taskMsgIndex >= 0 ? messages[taskMsgIndex] : null;
+  const postTaskMessages = taskMsgIndex >= 0 ? messages.slice(taskMsgIndex + 1) : messages;
 
   return (
     <div className="flex w-full flex-col gap-4">
-      {/* 历史对话消息（实时模式下任务发起消息之前的旧对话） */}
-      {isLiveSession ? (
-        beforeTimeline.map(renderMessage)
-      ) : null}
+      {/* 任务发起前的历史对话 */}
+      {preTaskMessages.map(renderMessage)}
 
-      {/* 任务发起消息：实时模式用 userMessage 硬编码；历史恢复模式渲染 messages[0] */}
+      {/* 任务发起消息：live 模式用 userMessage 乐观渲染，历史模式渲染 DB 消息 */}
       {isLiveSession ? (
         <Message role="user" bubble={firstMsg} time={taskId.slice(-6)} />
       ) : (
-        beforeTimeline.map(renderMessage)
+        taskMessage ? renderMessage(taskMessage) : null
       )}
 
       <AgentTimeline state={streamState} taskId={taskId} />
 
-      {afterTimeline.map(renderMessage)}
+      {postTaskMessages.map(renderMessage)}
 
       {showCompletionHint ? (
         <Message
@@ -1308,7 +1477,7 @@ function Message({
 }) {
   const isUser = role === "user";
   const bubbleClass = isUser
-    ? "max-w-[min(100%,28rem)] rounded-2xl border border-black/[0.07] bg-white px-4 py-3 text-[15px] leading-[1.75] text-obsidian/90 shadow-[0_2px_14px_rgba(26,26,26,0.05)]"
+    ? "max-w-[min(100%,28rem)] rounded-xl border border-black/[0.07] bg-white px-4 py-3 text-[15px] leading-[1.75] text-obsidian/90 shadow-[0_2px_14px_rgba(26,26,26,0.05)]"
     : "w-full min-w-0 max-w-full rounded-xl border-0 bg-transparent px-0 py-2 text-[15px] leading-[1.75] text-obsidian/88 shadow-none";
   return (
     <div className={`flex w-full flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>

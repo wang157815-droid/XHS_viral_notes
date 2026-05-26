@@ -149,15 +149,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setVerifiedTaskStatus(null);
   }, [taskId]);
 
-  // ── sessionStorage 快照：taskId 变化时尝试加载 ─────────────────────────────
-  const [restoredSnapshot, setRestoredSnapshot] = useState<StreamSnapshot | null>(null);
-
-  useEffect(() => {
-    if (!taskId) {
-      setRestoredSnapshot(null);
-      return;
-    }
-    setRestoredSnapshot(loadSnapshot(taskId));
+  // ── sessionStorage 快照：与 taskId 同步计算，避免 useEffect 的异步延迟导致
+  // 旧快照在 taskId 已切换的渲染帧中仍被 effectiveStreamState 使用，造成跨会话步骤串流
+  const restoredSnapshot = useMemo<StreamSnapshot | null>(() => {
+    if (!taskId) return null;
+    return loadSnapshot(taskId);
   }, [taskId]);
 
   // ── sessionStorage 快照：有步骤数据时随时保存（不限于任务终止） ──────────────

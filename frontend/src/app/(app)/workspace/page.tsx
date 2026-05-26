@@ -106,9 +106,14 @@ export default function WorkspacePage() {
   const canWriteConversation = can("conversation.write_own");
   const canWriteTask = can("task.write_own");
 
+  // 各会话草稿内容（key = conversationId），切换会话时保留、切回时恢复
+  const conversationDraftsRef = useRef<Record<string, string>>({});
+  // 对话流 AbortController，点停止按钮时 abort
+  const convStreamAbortRef = useRef<AbortController | null>(null);
+
   // 纯 UI 本地状态（切页丢失无所谓）
   const [creating, setCreating] = useState(false);
-  const [controlBusy, setControlBusy] = useState(false);
+  const [, setControlBusy] = useState(false);
   const [canvasRefreshing, setCanvasRefreshing] = useState(false);
   const [toast, setToast] = useState<{ type: "ok" | "err"; message: string } | null>(null);
   /** 可拖拽分隔器控制 ChatPanel 宽度 [300, 768] px */
@@ -251,6 +256,14 @@ export default function WorkspacePage() {
       setToast(null);
       const clientMessageId = generateIdempotencyKey();
       let currentConversationId = conversationId ?? "pending_conversation";
+      const streamCtrl = new AbortController();
+      convStreamAbortRef.current = streamCtrl;
+      // 提前声明，catch 块（AbortError 处理）需要访问
+      let assistantMessageId = `stream_${clientMessageId}`;
+      let assistantContent = "";
+      let assistantInserted = false;
+      let thinkContent = "";
+      let thinkDurationMs = 0;
       try {
         if (!conversationId) {
           const surface = surfaceFromQuery(searchParams.get("surface")) ?? "insight";
@@ -293,12 +306,7 @@ export default function WorkspacePage() {
         };
         appendConversationMessages([optimisticMessage]);
 
-        let assistantMessageId = `stream_${clientMessageId}`;
-        let assistantContent = "";
-        let assistantInserted = false;
         // 积累本轮思考内容（供最终消息渲染思考框用）
-        let thinkContent = "";
-        let thinkDurationMs = 0;
         const makeAssistantMessage = (patch: Partial<ChatMessage> = {}): ChatMessage => ({
           message_id: assistantMessageId,
           conversation_id: currentConversationId,
@@ -334,6 +342,16 @@ export default function WorkspacePage() {
           const handoff = message.task_handoff;
           if (handoff?.task_id) {
             startTask(handoff.task_id, rawInput);
+            // 同步更新会话缓存中的 activeTaskId，避免切走再切回时 taskId 被还原为 null
+            // （convCacheRef 在首次加载会话时写入，但 startTask 后 active_task_id 已变更）
+            if (currentConversationId) {
+              const existing = convCacheRef.current.get(currentConversationId);
+              convCacheRef.current.set(currentConversationId, {
+                messages: existing?.messages ?? [],
+                activeTaskId: handoff.task_id,
+                lastUserInput: rawInput,
+              });
+            }
           }
           const debug = message.debug as
             | { regeneration_started?: unknown; module_id?: unknown }
@@ -431,9 +449,30 @@ export default function WorkspacePage() {
               upsertAssistant(makeAssistantMessage({ message_id: event.message_id, content: assistantContent, debug: { streaming: false, error: event } }));
             }
           },
+          streamCtrl.signal,
         );
         return true;
       } catch (error) {
+        // 用户主动停止：静默处理，保留已积累的内容并移除流式指示器
+        if (error instanceof Error && error.name === "AbortError") {
+          if (assistantInserted) {
+            replaceConversationMessage(assistantMessageId, {
+              message_id: assistantMessageId,
+              conversation_id: currentConversationId,
+              role: "assistant",
+              content: assistantContent,
+              intent: "unknown",
+              intent_confidence: 0,
+              clarification_needed: false,
+              clarification_question: null,
+              citations: [],
+              task_handoff: null,
+              debug: { streaming: false },
+              created_at: new Date().toISOString(),
+            });
+          }
+          return false;
+        }
         const message = error instanceof Error ? error.message : String(error);
         appendConversationMessages([
           {
@@ -454,6 +493,7 @@ export default function WorkspacePage() {
         setToast({ type: "err", message: `发送消息失败：${message}` });
         return false;
       } finally {
+        convStreamAbortRef.current = null;
         setCreating(false);
         if (typeof window !== "undefined") {
           window.dispatchEvent(new Event("redmuse-conversations-refresh"));
@@ -617,6 +657,15 @@ export default function WorkspacePage() {
     }
   }, [taskId, canWriteTask]);
 
+  // 统一停止：对话流式中 → abort fetch；任务执行中 → cancel 任务
+  const handleStop = useCallback(async () => {
+    if (creating) {
+      convStreamAbortRef.current?.abort();
+    } else if (taskId) {
+      await handleCancel();
+    }
+  }, [creating, taskId, handleCancel]);
+
   const downloadExport = useCallback(
     async (format: "excel" | "json") => {
       if (!taskId || !realtime) {
@@ -678,28 +727,28 @@ export default function WorkspacePage() {
       {toastBanner}
       <div className="flex flex-1 overflow-hidden">
         <ChatPanel
+          key={conversationId ?? "new"}
           cookieHealth={cookieHealth}
           taskId={taskId}
           userInput={lastUserInput}
+          initialInput={conversationDraftsRef.current[conversationId ?? ""] ?? ""}
+          onDraftChange={(draft) => {
+            if (conversationId) conversationDraftsRef.current[conversationId] = draft;
+          }}
           messages={messages}
           streamState={streamState}
           connectionStatus={connectionStatus}
           creating={creating}
-          controlBusy={controlBusy}
           streamError={streamError}
           canvasCollapsed={canvasCollapsed}
           showCanvasToggle={canShowCanvas}
           canWriteConversation={canWriteConversation}
-          canWriteTask={canWriteTask}
           canReadKnowledge={can("knowledge.read")}
           chatWidth={chatWidth}
           onToggleCanvas={toggleCanvasCollapsed}
           onSubmit={handleSubmit}
-          onNewAnalysis={handleNewAnalysis}
           onReconnect={reconnectStream}
-          onPause={handlePause}
-          onResume={handleResume}
-          onCancel={handleCancel}
+          onStop={handleStop}
         />
         {!canvasCollapsed && canShowCanvas ? (
           <>
@@ -736,20 +785,26 @@ export default function WorkspacePage() {
 function WorkspaceUrlSync() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { resetWorkspace, setTaskId, setConversation, conversationId } = useWorkspace();
+  const { resetWorkspace, setTaskId, setConversation, conversationId, messages, taskId, lastUserInput } = useWorkspace();
 
   const newFlag = searchParams.get("new");
   const urlTask = searchParams.get("task");
   const urlConversation = searchParams.get("conversation");
   const surfaceQ = searchParams.get("surface");
 
-  // conversationId 通过 ref 读取，避免将其加入依赖导致 setConversation 触发 cleanup 杀掉在途请求
+  // conversationId / messages / taskId 通过 ref 读取，避免加入依赖导致 Effect 3 频繁重建
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const taskIdRef = useRef(taskId);
+  taskIdRef.current = taskId;
+  const lastUserInputRef = useRef(lastUserInput);
+  lastUserInputRef.current = lastUserInput;
 
   // 会话数据缓存（同 session 内复用，切回已访问的会话零延迟）
   const convCacheRef = useRef(
-    new Map<string, { messages: import("@/lib/contracts").ChatMessage[]; activeTaskId: string | null }>(),
+    new Map<string, { messages: import("@/lib/contracts").ChatMessage[]; activeTaskId: string | null; lastUserInput: string | null }>(),
   );
   // 当前在途请求的 AbortController，下次切换时手动 abort（不放在 cleanup 里）
   const abortRef = useRef<AbortController | null>(null);
@@ -787,6 +842,17 @@ function WorkspaceUrlSync() {
     // 已是当前会话，无需重新加载
     if (conversationIdRef.current === urlConversation) return;
 
+    // 切走前把当前会话最新的 messages 和 taskId 写回缓存，
+    // 保证切回时（缓存命中）拿到的是最新状态而非首次加载的快照
+    const outgoingId = conversationIdRef.current;
+    if (outgoingId) {
+      convCacheRef.current.set(outgoingId, {
+        messages: messagesRef.current,
+        activeTaskId: taskIdRef.current,
+        lastUserInput: lastUserInputRef.current,
+      });
+    }
+
     // 取消上一个在途请求（防止慢→快切换时旧数据覆盖新数据）
     abortRef.current?.abort();
     const ctrl = new AbortController();
@@ -796,7 +862,7 @@ function WorkspaceUrlSync() {
     const cached = convCacheRef.current.get(urlConversation);
     if (cached) {
       setConversation(urlConversation, cached.messages);
-      setTaskId(cached.activeTaskId);
+      setTaskId(cached.activeTaskId, cached.lastUserInput);
       return;
     }
 
@@ -816,8 +882,8 @@ function WorkspaceUrlSync() {
       const { conversation, messages } = res.data;
       const activeTaskId = conversation.active_task_id ?? null;
 
-      // ③ 写缓存，下次切回零延迟
-      convCacheRef.current.set(conversation.conversation_id, { messages, activeTaskId });
+      // ③ 写缓存，下次切回零延迟（lastUserInput 首次加载时未知，置 null；startTask 时会更新）
+      convCacheRef.current.set(conversation.conversation_id, { messages, activeTaskId, lastUserInput: null });
 
       // ④ 填充消息并切换到正确 taskId（此时才改 taskId，SSE 切换到新任务）
       setConversation(conversation.conversation_id, messages);

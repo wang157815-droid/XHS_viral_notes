@@ -102,6 +102,23 @@
     height: 0;
   }
 
+  /** 输入框 textarea：滚动条轨道有微弱底色，内容多行时可见 */
+  .textarea-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(26, 26, 26, 0.08) rgba(26, 26, 26, 0.03);
+  }
+  .textarea-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .textarea-scrollbar::-webkit-scrollbar-track {
+    background: rgba(26, 26, 26, 0.03);
+    border-radius: 999px;
+  }
+  .textarea-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(26, 26, 26, 0.08);
+    border-radius: 999px;
+  }
+
   /** hover 时才显示滚动条（侧边栏历史区） */
   .hover-scrollbar {
     scrollbar-width: none;

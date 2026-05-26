@@ -451,6 +451,7 @@ export function AppSidebar() {
                           const rawTitle = c.title?.trim() || c.last_message_preview?.trim() || "未命名对话";
                           const short = rawTitle.length > 22 ? `${rawTitle.slice(0, 22)}…` : rawTitle;
                           const isEditing = editingId === c.conversation_id;
+                          const isActive = searchParams.get("conversation") === c.conversation_id;
                           return (
                             <div key={c.conversation_id} className="group relative flex w-full items-center gap-1">
                               {isEditing ? (
@@ -475,7 +476,11 @@ export function AppSidebar() {
                                 <button
                                   type="button"
                                   onClick={() => openConversation(c.conversation_id)}
-                                  className="min-w-0 flex-1 truncate rounded-lg px-4 py-2 text-left text-[12px] text-obsidian/70 transition-colors hover:bg-white/50"
+                                  className={`min-w-0 flex-1 truncate rounded-lg px-4 py-2 text-left text-[12px] transition-colors ${
+                                    isActive
+                                      ? "bg-black/[0.06] font-medium text-obsidian"
+                                      : "text-obsidian/70 hover:bg-white/50"
+                                  }`}
                                 >
                                   {short}
                                 </button>

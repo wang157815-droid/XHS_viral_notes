@@ -74,7 +74,8 @@ _MODULE_REGISTRATIONS: List[ModuleNodeSpec] = [
     ModuleNodeSpec(
         module_id="mod-seo-insights",
         provides_by="InsightAgent",
-        depends_on=["mod-competitor-samples"],
+        # 优先依赖竞品样本；无竞品时也可由 top_interaction / serp_top 驱动
+        depends_on=["mod-viral-model-matrix"],
     ),
 
     # 空白工作台(CanvasRenderAgent 静态骨架)
@@ -441,9 +442,12 @@ def _build_seo_insights(
     summary = (
         f"核心词 {len(core)} / 长尾 {len(long_tail)}"
         if (core or long_tail)
-        else "SEO 洞察(待竞品样本)"
+        else "SEO 洞察(暂无数据)"
     )
-    comp_dep = competitor_depends_on or ["mod-competitor-samples"]
+    # depends_on 优先使用调用方传入的竞品模块；无竞品时回退到 top_interaction
+    comp_dep: List[str] = list(competitor_depends_on) if competitor_depends_on else []
+    if not comp_dep:
+        comp_dep = ["mod-top-interaction-samples"]
     return CanvasModule(
         module_id="mod-seo-insights",
         title="SEO 关键词洞察",
@@ -453,7 +457,7 @@ def _build_seo_insights(
         summary=summary,
         content=content,
         actions=_actions(["regenerate"]),
-        depends_on=list(comp_dep),
+        depends_on=comp_dep,
     )
 
 
@@ -521,7 +525,11 @@ def _build_layer3_sample_modules(
     annotations: Dict[str, Dict[str, Any]],
     input_spec: Dict[str, Any],
 ) -> Tuple[List[CanvasModule], List[str], List[str]]:
-    """返回 (样本模块列表, 矩阵 depends_on 列表, SEO 竞品 depends_on 列表)。"""
+    """返回 (样本模块列表, 矩阵 depends_on 列表, SEO 竞品 depends_on 列表)。
+
+    SEO 竞品 depends_on 列表在无竞品词时为空，_build_seo_insights 会
+    自动回退到 mod-top-interaction-samples 作为依赖占位。
+    """
     nt = _canvas_note_type_int(input_spec)
     sources = crawler.get("sources") or {}
     modules: List[CanvasModule] = []

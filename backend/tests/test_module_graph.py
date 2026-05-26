@@ -4,9 +4,9 @@
   mod-competitor-samples / mod-top-interaction-samples / mod-serp-top-samples
       (CrawlerAgent 驱动,无上游)
       └─ mod-viral-model-matrix   (ViralModelAgent)
-            └─ mod-pain-points   (InsightAgent)
-  mod-competitor-samples
-      └─ mod-seo-insights        (InsightAgent)
+            ├─ mod-pain-points   (InsightAgent)
+            └─ mod-seo-insights  (InsightAgent)
+                注: SEO 不再强依赖竞品,无竞品时回退到 category_top 等来源
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _build_graph() -> ModuleGraph:
             ModuleNodeSpec(
                 module_id="mod-seo-insights",
                 provides_by="InsightAgent",
-                depends_on=["mod-competitor-samples"],
+                depends_on=["mod-viral-model-matrix"],
             ),
         ]
     )
@@ -59,10 +59,10 @@ def test_descendants_resolves_transitive():
 
 
 def test_serp_top_samples_only_hits_matrix_and_pain():
-    """SERP 样本只影响矩阵/痛点,不影响 SEO 洞察(SEO 只依赖竞品)。"""
+    """SERP 样本影响矩阵/痛点/SEO 洞察(SEO 现依赖 viral-model-matrix,传递覆盖)。"""
     g = _build_graph()
     descendants = g.descendants("mod-serp-top-samples")
-    assert descendants == {"mod-viral-model-matrix", "mod-pain-points"}
+    assert descendants == {"mod-viral-model-matrix", "mod-pain-points", "mod-seo-insights"}
 
 
 def test_cascade_marks_only_ready_downstream():

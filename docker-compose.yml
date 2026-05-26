@@ -158,11 +158,11 @@ services:
     ports:
       - "80:80"
       # 启用HTTPS后取消注释下行
-      # - "443:443"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       # 启用HTTPS后取消注释下行，并放入证书文件
-      # - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
     depends_on:
       spider-xhs:
         condition: service_started

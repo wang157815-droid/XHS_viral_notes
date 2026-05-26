@@ -67,11 +67,14 @@ export default function LoginPage() {
   return (
     <div className="grid h-screen grid-cols-1 overflow-hidden bg-[radial-gradient(ellipse_at_75%_50%,rgba(185,215,205,0.45),transparent_55%),linear-gradient(to_right,rgba(255,255,255,1)_0%,rgba(248,251,249,0.97)_100%)] text-obsidian lg:grid-cols-[3fr_2fr]">
       <section className="hidden items-center justify-center p-12 lg:flex">
-        <img
-          src="/login-banner.png"
-          alt="RedMuse"
-          className="max-h-[70vh] w-auto max-w-full object-contain"
-        />
+        <picture>
+          <source srcSet="/login-banner.webp" type="image/webp" />
+          <img
+            src="/login-banner.png"
+            alt="RedMuse"
+            className="max-h-[70vh] w-auto max-w-full object-contain"
+          />
+        </picture>
       </section>
 
       <section className="flex items-center justify-start pl-8 pr-12 py-10">

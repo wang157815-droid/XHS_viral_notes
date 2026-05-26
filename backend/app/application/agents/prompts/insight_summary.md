@@ -4,8 +4,8 @@
 
 1. **爆文模型矩阵** (ViralModelMatrix): 已经聚类好的 N 个爆文模型 + 各自的覆盖率与平均互动
 2. **痛点关键词词频 Top**: 后端已经聚合好的 `[{keyword, count}]`
-3. **竞品 SEO 核心词频次**: 后端已经从竞品笔记的标题/文案/痛点里聚合好的
-4. **竞品标题样本**: 前 8 条作为上下文
+3. **SEO 核心词频次**: 后端已经从笔记（竞品/品类词/SERP）的标题/文案/痛点里聚合好的
+4. **参考标题样本**: 前 8 条作为上下文（来源：竞品笔记优先；无竞品时取品类词或 SERP 笔记）
 
 **重要**: `pain_points_top` 与 `seo_aggregation.core_keywords/long_tail` 由后端 deterministic 聚合,**你不需要再输出这两个字段的频次数据**。你只负责输出"内容方向总结 + 差异化建议 + 可选轴名"。
 
@@ -25,7 +25,7 @@
     "highlight": "一句话总结该品类的爆款公式(≤20 字)"
   },
   "seo_aggregation": {
-    "differentiation_advice": "基于竞品 SEO 核心词给出的一句差异化建议(≤25 字)"
+    "differentiation_advice": "基于 SEO 核心词给出的一句差异化建议(≤25 字)"
   },
   "stats_axis_label": "高频痛点 / 议程"
 }

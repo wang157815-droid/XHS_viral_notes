@@ -147,6 +147,7 @@ export async function sendConversationMessageStream(
     knowledgeRefs?: Array<{ doc_id: string; title?: string }>;
   },
   onEvent: (event: ConversationStreamEvent) => void,
+  signal?: AbortSignal,
 ) {
   const clientMessageId = input.clientMessageId ?? generateIdempotencyKey();
   const headers: Record<string, string> = {
@@ -162,6 +163,7 @@ export async function sendConversationMessageStream(
       method: "POST",
       headers,
       cache: "no-store",
+      signal,
       body: JSON.stringify({
         content: input.content,
         keywords: input.keywords ?? [],
