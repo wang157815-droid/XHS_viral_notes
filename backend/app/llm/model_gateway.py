@@ -623,8 +623,11 @@ class ModelGateway:
     def _classify_error(exc: Optional[BaseException]) -> tuple[str, str]:
         if exc is None:
             return "MODEL_UNKNOWN", "模型调用失败"
+        # asyncio.TimeoutError / asyncio.CancelledError 的 str() 是空字符串，需要先按类型判断
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            return "MODEL_TIMEOUT", f"模型调用超时: {type(exc).__name__}"
         text = str(exc).lower()
-        if "timeout" in text or "timed out" in text:
+        if "timeout" in text or "timed out" in text or "504" in text or "gateway timeout" in text:
             return "MODEL_TIMEOUT", f"模型调用超时: {exc}"
         if "rate limit" in text or "429" in text:
             return "MODEL_RATE_LIMIT", f"模型限流: {exc}"

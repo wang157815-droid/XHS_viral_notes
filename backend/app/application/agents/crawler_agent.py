@@ -1554,6 +1554,7 @@ def _normalize_note(note: Any, dimension: str, primary_keyword: str) -> Dict[str
         "cover_url": cover or "",
         "image_urls": list(image_list),
         "video_url": getattr(note, "video_addr", "") or "",
+        "video_urls": getattr(note, "video_urls", []) or [],
         "nickname": getattr(note, "nickname", "") or "",
         "dimension": dimension,
         "keyword": primary_keyword,

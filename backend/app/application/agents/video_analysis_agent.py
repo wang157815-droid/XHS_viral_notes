@@ -224,6 +224,29 @@ class VideoAnalysisAgent(BaseAgent):
     # 单条视频标注
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _pick_best_video_url(note: Dict[str, Any]) -> str:
+        """从 note 的 video_url / video_urls 中选出最适合传给 AI 模型的 URL。
+
+        XHS stream 的 master_url 是 HLS m3u8 播放列表，AI 模型无法直接处理。
+        优先选 origin_key 生成的直接 MP4 URL；如果主 URL 已是直接地址也直接用。
+        """
+        def _is_m3u8(url: str) -> bool:
+            return ".m3u8" in url.lower()
+
+        primary = (note.get("video_url") or "").strip()
+        if primary and not _is_m3u8(primary):
+            return primary
+
+        # 遍历 video_urls（已按 priority 升序排列），取第一个非 m3u8
+        for url_info in (note.get("video_urls") or []):
+            url = (url_info.get("url") or "").strip()
+            if url and not _is_m3u8(url):
+                return url
+
+        # 实在找不到直接 URL，原样回退（让模型尽力尝试）
+        return primary
+
     async def _annotate_video(
         self,
         task_id: str,
@@ -232,9 +255,16 @@ class VideoAnalysisAgent(BaseAgent):
     ) -> tuple[str, Optional[Dict[str, Any]]]:
         """调 ModelGateway 对单条视频产出 8 字段标注 dict;失败返回 None。"""
         note_id = note.get("note_id") or ""
-        video_url = (note.get("video_url") or "").strip()
+        video_url = self._pick_best_video_url(note)
         if not note_id or not video_url:
             return (note_id, None)
+
+        # 记录实际使用的 URL 来源，方便排查 MODEL_UPSTREAM_ERROR
+        raw_url = (note.get("video_url") or "").strip()
+        if video_url != raw_url:
+            logger.debug(
+                f"[VideoAgent] {note_id} 主URL是m3u8，已切换到备用直链: {video_url[:80]}..."
+            )
 
         user_text = (
             f"【视频标题】{note.get('title', '')}\n"
