@@ -219,12 +219,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const liveHasStatus = streamState.status !== "unknown";
     const liveHasProgress = streamState.progress > 0;
 
-    // 优先级：SSE 实时状态 > REST 验证状态 > 快照状态
-    // verifiedTaskStatus 在 refreshCanvas 时从 REST 获取，解决 backlog 重置后"永远运行中"问题
+    // REST 已确认终态（completed/failed/cancelled）则绝不允许 SSE backlog 将状态降级回 running。
+    // 刷新后 SSE 重放 backlog 时会先经过 task_status{running}，在 done 事件到来前会短暂显示停止按钮，
+    // 用此规则可提前锁住终态，避免闪烁和误操作。
+    const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
     const resolvedStatus = (
-      liveHasStatus
-        ? streamState.status
-        : (verifiedTaskStatus ?? restoredSnapshot!.status)
+      TERMINAL_STATUSES.has(verifiedTaskStatus ?? "")
+        ? verifiedTaskStatus
+        : liveHasStatus
+          ? streamState.status
+          : (verifiedTaskStatus ?? restoredSnapshot!.status)
     ) as TaskStreamState["status"];
 
     return {
@@ -242,6 +246,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       agentThinking: streamState.agentThinking,  // 不持久化（太大）
       agentThinkingDone: mergedAgentThinkingDone,
       agentLogs: mergedAgentLogs,
+      pendingMessages: streamState.pendingMessages,
     };
   }, [streamState, restoredSnapshot, verifiedTaskStatus]);
 

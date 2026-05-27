@@ -870,7 +870,7 @@ async def _regen_sample_module(
     source_type = str(content.get("source_type") or "")
     media_kind = content.get("media_kind")
     notes_override = None
-    for key in ("competitor", "top_interaction", "serp_top"):
+    for key in ("competitor", "top_interaction"):
         if key == source_type:
             raw = list(sources.get(key) or [])
             if media_kind == "video":

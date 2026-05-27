@@ -146,7 +146,6 @@ class InputParserAgent(BaseAgent):
             "adjustments": [],
             "confidence": 0.5,
             "competitor_source": "api" if api_competitors else "llm_inferred",
-            "serp_expanded_keyword": "",
             "pipeline_config": {
                 "run_video_analysis": True,
                 "run_rag": True,
@@ -193,21 +192,6 @@ class InputParserAgent(BaseAgent):
 
         # 根据用户输入自动推断 pipeline_config
         _infer_pipeline_config(parsed, raw_input)
-
-        # 清理 serp_expanded_keyword：去除空值，限制长度
-        serp_kw_raw = str(parsed.get("serp_expanded_keyword") or "").strip()
-        serp_kw = serp_kw_raw
-        if serp_kw:
-            # 避免与原始关键词完全相同（失去扩展意义）
-            base_kw_set = {str(k).strip().lower() for k in (parsed.get("keywords") or [])}
-            if serp_kw.lower() in base_kw_set:
-                logger.warning(f"[SERP] 扩展词 '{serp_kw}' 与主关键词重复,已过滤")
-                serp_kw = ""
-        if serp_kw:
-            logger.info(f"[SERP] 扩展词已确定: '{serp_kw}' (LLM原始: '{serp_kw_raw}')")
-        else:
-            logger.warning(f"[SERP] 扩展词为空 (LLM原始: '{serp_kw_raw}'), Sheet 6 将使用品类兜底")
-        parsed["serp_expanded_keyword"] = serp_kw[:32]
 
         TaskContextWriter(context.task_context).write(
             "input_spec",
@@ -296,10 +280,6 @@ def _merge_parsed(base: Dict[str, Any], extracted: Dict[str, Any]) -> Dict[str, 
     cs = extracted.get("competitor_source")
     if cs and isinstance(cs, str):
         out["competitor_source"] = cs.strip()
-    # 传递 SERP 扩展词
-    serp = extracted.get("serp_expanded_keyword")
-    if serp is not None:
-        out["serp_expanded_keyword"] = str(serp).strip()
     # 传递 pipeline_config（若 LLM 返回了合法的布尔值则采用，否则保留默认 True）
     pc = extracted.get("pipeline_config")
     if isinstance(pc, dict):

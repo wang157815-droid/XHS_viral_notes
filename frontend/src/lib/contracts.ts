@@ -30,7 +30,8 @@ export type TaskEventType =
   | "done"
   | "task_video_done"
   | "agent_thinking_chunk"
-  | "agent_thinking_done";
+  | "agent_thinking_done"
+  | "conversation_message";
 
 export interface TaskEvent<P = Record<string, unknown>> {
   event_id: string;
@@ -79,17 +80,15 @@ export interface AdvancedConfig {
   note_type: string;
   time_range: string;
   sample_count: string;
-  viral_ratio: string;
   min_interaction: string;
 }
 
 /** 与 ChatPanel / 编排默认采集参数一致 */
 export const DEFAULT_ADVANCED: AdvancedConfig = {
   note_type: "不限",
-  time_range: "不限",
+  time_range: "半年内",
   sample_count: "50",
-  viral_ratio: "前50%",
-  min_interaction: "不限",
+  min_interaction: "1000+",
 };
 
 export interface Conversation {

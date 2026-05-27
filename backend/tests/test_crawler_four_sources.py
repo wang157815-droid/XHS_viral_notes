@@ -1,4 +1,4 @@
-"""4.3pre.2: CrawlerAgent 四源视图(category_top / competitor / top_interaction / serp_top)。
+"""4.3pre.2: CrawlerAgent 三源视图(category_top / competitor / top_interaction)。
 
 不真实采集 — 直接测试 `_build_four_source_view()` 纯函数 + run() 集成。
 """
@@ -48,20 +48,17 @@ def test_four_source_view_maps_dimensions_to_sources():
 
     sources, all_notes_with_hits = _build_four_source_view(all_notes, samples_by_dim)
 
-    # 4 个源都存在
-    assert set(sources.keys()) == {"category_top", "competitor", "top_interaction", "serp_top"}
+    # 3 个源都存在
+    assert set(sources.keys()) == {"category_top", "competitor", "top_interaction"}
     # industry → category_top
     assert {n["note_id"] for n in sources["category_top"]} == {"i1", "i2"}
     # competitor 维度 → competitor 源
     assert {n["note_id"] for n in sources["competitor"]} == {"c1"}
     # top_interaction 来自 brand 维度 → b1 互动 3000 排第一
     assert sources["top_interaction"][0]["note_id"] == "b1"
-    # serp_top：industry 按发布时间优先 → i2 比 i1 新
-    assert sources["serp_top"][0]["note_id"] == "i2"
     c1 = next(n for n in all_notes_with_hits if n["note_id"] == "c1")
     assert "competitor" in c1["sources_hit"]
     assert "top_interaction" not in c1["sources_hit"]
-    assert "serp_top" not in c1["sources_hit"]
 
 
 def test_four_source_view_top_interaction_sorts_by_score():
@@ -81,8 +78,6 @@ def test_four_source_view_top_interaction_sorts_by_score():
     sources, _ = _build_four_source_view(all_notes, samples_by_dim)
     # brand 为空 → 回退全库互动 Top，第一条 high
     assert sources["top_interaction"][0]["note_id"] == "high"
-    # serp_top 用 industry 发布时间优先 → mid 最新
-    assert sources["serp_top"][0]["note_id"] == "mid"
 
 
 def test_four_source_view_handles_empty_input():
@@ -193,8 +188,8 @@ async def test_crawler_run_writes_sources_field(monkeypatch):
     # 新字段
     assert "sources" in out
     assert "all_notes" in out
-    # 4 个源都在
-    assert set(out["sources"].keys()) == {"category_top", "competitor", "top_interaction", "serp_top"}
+    # 3 个源都在
+    assert set(out["sources"].keys()) == {"category_top", "competitor", "top_interaction"}
     # 每条 note 的 sources_hit 至少有一项
     for note in out["all_notes"]:
         assert isinstance(note.get("sources_hit"), list)

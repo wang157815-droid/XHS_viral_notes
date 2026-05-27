@@ -35,7 +35,6 @@ _EXPECTED_SHEETS = [
     "数据源总",
     "竞品爆文",
     "【品类】抗老精华互动top",
-    "【精华】小红书前10屏爆文",
     "草稿",
 ]
 
@@ -93,21 +92,19 @@ def _make_task_context_with_data(
         ),
     ]
     notes_top_interaction = [_make_note("n4", published_at="2024-11-01", likes=5000)]
-    notes_serp = [_make_note("n5", likes=800)]
 
     writer.write(
         "crawler_output",
         {
             "source": "live",
-            "sample_count": 5,
+            "sample_count": 4,
             "keywords": ["抗老精华"],
             "sources": {
                 "category_top": notes_category,
                 "competitor": notes_competitor,
                 "top_interaction": notes_top_interaction,
-                "serp_top": notes_serp,
             },
-            "all_notes": notes_category + notes_competitor + notes_top_interaction + notes_serp,
+            "all_notes": notes_category + notes_competitor + notes_top_interaction,
         },
         agent_id="test",
     )
@@ -120,7 +117,6 @@ def _make_task_context_with_data(
                 "n2": _make_annotation(content_direction="干货分享"),
                 "n3": _make_annotation(cover_type="达人手持产品", content_direction="口播单推"),
                 "n4": _make_annotation(content_direction="知识科普"),
-                "n5": _make_annotation(),
             }
         },
         agent_id="test",
@@ -284,8 +280,8 @@ async def _build_bytes(
 # ======================================================================
 
 
-def test_build_7_sheets(monkeypatch):
-    """Sheet 1-7 齐全,名字与模板完全一致。"""
+def test_build_6_sheets(monkeypatch):
+    """Sheet 1-6 齐全,名字与模板完全一致。"""
     data = asyncio.run(_build_bytes(monkeypatch))
     wb = load_workbook(io.BytesIO(data))
     assert wb.sheetnames == _EXPECTED_SHEETS, f"实际 sheet: {wb.sheetnames}"
@@ -298,11 +294,10 @@ def test_sheet3_source_column_one_label_per_row_from_merge_pool(monkeypatch):
     ws3 = wb["数据源总"]
     assert ws3["A2"].value == "【竞品】爆文"
     assert ws3["A3"].value == "【互动 TOP】"
-    assert ws3["A4"].value == "【精华】小红书前十屏爆文"
 
 
-def test_sheet3_merges_sheet4_5_6_sources_only(monkeypatch):
-    """Sheet3 只合并 competitor + top_interaction + serp_top,不再混入 category_top。"""
+def test_sheet3_merges_sheet4_5_sources_only(monkeypatch):
+    """Sheet3 只合并 competitor + top_interaction,不再混入 category_top。"""
     data = asyncio.run(_build_bytes(monkeypatch))
     wb = load_workbook(io.BytesIO(data))
     ws3 = wb["数据源总"]
@@ -313,7 +308,6 @@ def test_sheet3_merges_sheet4_5_6_sources_only(monkeypatch):
     }
     assert "示例笔记 n3" in titles
     assert "示例笔记 n4" in titles
-    assert "示例笔记 n5" in titles
     assert "示例笔记 n1" not in titles
     assert "示例笔记 n2" not in titles
 
@@ -619,7 +613,7 @@ def test_infer_brand_keyword_fallback_when_title_plain():
 
 
 def test_sample_sheets_metric_columns_width_10(monkeypatch):
-    """Sheet3-6:类型/品牌/互动量/点赞/收藏/评论列宽为 10(其余列仍为统一 25)。"""
+    """Sheet3-5:类型/品牌/互动量/点赞/收藏/评论列宽为 10(其余列仍为统一 25)。"""
     data = asyncio.run(_build_bytes(monkeypatch))
     wb = load_workbook(io.BytesIO(data))
 
@@ -632,20 +626,15 @@ def test_sample_sheets_metric_columns_width_10(monkeypatch):
     for letter in ("D", "E", "G", "H", "I", "J"):
         assert ws5.column_dimensions[letter].width == 10
 
-    ws6 = wb["【精华】小红书前10屏爆文"]
-    # 无「品牌」列:类型 C + 互动/赞藏评 E-H
-    for letter in ("C", "E", "F", "G", "H"):
-        assert ws6.column_dimensions[letter].width == 10
 
-
-def test_sheet3_to_6_sample_annotations_mapping(monkeypatch):
-    """Sheet 3-6 的 6 要素列(N-S 或类似位置)正确从 annotations 取值。"""
+def test_sheet3_to_5_sample_annotations_mapping(monkeypatch):
+    """Sheet 3-5 的 6 要素列(N-S 或类似位置)正确从 annotations 取值。"""
     data = asyncio.run(_build_bytes(monkeypatch))
     wb = load_workbook(io.BytesIO(data))
 
     # Sheet 3: 20 列,N-S 是 6 要素(列号 14-19)
     ws3 = wb["数据源总"]
-    # 合并序 competitor -> top_interaction -> serp_top，首行是 n3（竞品）
+    # 合并序 competitor -> top_interaction，首行是 n3（竞品）
     # Sheet 3 columns: [source,author,...,cover_type(N),cover_text_type(O),...
     assert ws3["N2"].value == "达人手持产品"
     assert ws3["O2"].value == "干货/经验分享"

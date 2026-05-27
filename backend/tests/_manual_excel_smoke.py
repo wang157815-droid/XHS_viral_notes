@@ -108,7 +108,6 @@ async def build_real_xlsx(img_cache):
                     )
                 ],
                 "top_interaction": [_make_note("n3", published_at="2024-12-01")],
-                "serp_top": [_make_note("n1")],
             },
             "all_notes": [_make_note(k) for k in url_by_note],
         },

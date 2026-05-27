@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
@@ -893,6 +894,67 @@ async def export_excel(task_id: str, current_user: dict = Depends(get_current_us
     # Content-Disposition：
     # - filename= 只允许 ASCII，替换非 ASCII 为下划线（兼容旧客户端）
     # - filename*= RFC 5987 UTF-8 编码，现代浏览器优先使用
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", filename)
+    encoded_name = quote(filename, safe="")
+    cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": cd},
+    )
+
+
+@router.get("/{task_id}/export/comment_excel")
+async def export_comment_excel(task_id: str, current_user: dict = Depends(get_current_user)):
+    """导出评论分析报告 xlsx（CommentAnalysisSkill 专用）。
+
+    数据来源：TaskContext["comment_output"]，不依赖 Canvas。
+    """
+    record = resolve_task_record(task_id, current_user, action="export.comment_excel")
+
+    try:
+        from ...domain.task_context import task_context_store
+        from ...services.canvas_export.comment_excel_exporter import build_comment_excel
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=build_error(ErrorCode.SYSTEM_DEPENDENCY, f"缺少依赖: {exc}")["error"],
+        )
+
+    ctx = task_context_store.require(task_id)
+    comment_output = ctx.get("comment_output")
+    if not comment_output:
+        raise HTTPException(
+            status_code=404,
+            detail=build_error(
+                ErrorCode.TASK_NOT_FOUND,
+                "评论分析结果不存在，请先完成评论分析任务后再导出",
+            )["error"],
+        )
+
+    try:
+        data = build_comment_excel(comment_output)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=build_error(ErrorCode.SYSTEM_INTERNAL, f"评论报告生成失败: {exc}")["error"],
+        ) from exc
+
+    # 文件名：日期-关键词-评论分析报告.xlsx
+    try:
+        dt = datetime.fromisoformat(record.created_at.replace("Z", "+00:00")).astimezone(
+            timezone(timedelta(hours=8))
+        )
+        date_str = dt.strftime("%Y.%m.%d")
+    except Exception:
+        date_str = datetime.now().strftime("%Y.%m.%d")
+
+    keywords = comment_output.get("keywords") or record.keywords or []
+    subject = keywords[0] if keywords else record.task_id
+    subject = re.sub(r'[\\/:*?"<>|]', "", subject).strip() or record.task_id
+    filename = f"{date_str}-{subject}-评论分析报告.xlsx"
+
     ascii_name = re.sub(r"[^\x20-\x7e]", "_", filename)
     encoded_name = quote(filename, safe="")
     cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'

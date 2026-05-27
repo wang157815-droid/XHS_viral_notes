@@ -61,6 +61,7 @@ class TaskRecord:
     updated_at: str = field(default_factory=_utc_now)
     error_code: Optional[str] = None
     last_error: Optional[str] = None
+    task_type: str = "viral_analysis"  # "viral_analysis" | "comment_analysis"
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -90,6 +91,7 @@ class TaskRecord:
             updated_at=raw.get("updated_at") or _utc_now(),
             error_code=raw.get("error_code"),
             last_error=raw.get("last_error"),
+            task_type=str(raw.get("task_type") or "viral_analysis"),
         )
 
 

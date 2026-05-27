@@ -86,6 +86,7 @@ CREATE INDEX IF NOT EXISTS xhs_notes_crawled_at_idx
     ON xhs_notes (crawled_at DESC);
 
 ALTER TABLE xhs_notes ADD COLUMN IF NOT EXISTS published_at TEXT DEFAULT '';
+ALTER TABLE xhs_notes ADD COLUMN IF NOT EXISTS dimension TEXT DEFAULT '';
 """
 
 
@@ -176,6 +177,7 @@ class NotesVectorStore:
                     "nickname": _str(note.get("nickname"), ""),
                     "source_keywords": list(note.get("source_keywords") or []),
                     "published_at": _str(note.get("published_at"), ""),
+                    "dimension": _str(note.get("dimension"), ""),
                     "embedding": _format_vector(emb) if emb is not None else None,
                 }
             )
@@ -196,11 +198,11 @@ class NotesVectorStore:
             INSERT INTO xhs_notes (
                 note_id, title, "desc", url, cover_url, image_urls, video_url,
                 likes, comments, collects, share_count, interaction_score, metrics_precise,
-                media_type, note_type, nickname, source_keywords, published_at, embedding, updated_at
+                media_type, note_type, nickname, source_keywords, published_at, dimension, embedding, updated_at
             ) VALUES (
                 :note_id, :title, :desc_col, :url, :cover_url, :image_urls, :video_url,
                 :likes, :comments, :collects, :share_count, :interaction_score, :metrics_precise,
-                :media_type, :note_type, :nickname, :source_keywords, :published_at,
+                :media_type, :note_type, :nickname, :source_keywords, :published_at, :dimension,
                 CASE WHEN CAST(:embedding AS text) IS NULL
                      THEN NULL
                      ELSE CAST(:embedding AS vector)
@@ -227,6 +229,10 @@ class NotesVectorStore:
                     SELECT ARRAY(SELECT DISTINCT UNNEST(xhs_notes.source_keywords || EXCLUDED.source_keywords))
                 ),
                 published_at = CASE WHEN EXCLUDED.published_at != '' THEN EXCLUDED.published_at ELSE xhs_notes.published_at END,
+                dimension = CASE
+                    WHEN xhs_notes.dimension = 'warmup' THEN xhs_notes.dimension
+                    ELSE EXCLUDED.dimension
+                END,
                 embedding = COALESCE(EXCLUDED.embedding, xhs_notes.embedding),
                 updated_at = NOW()
             """

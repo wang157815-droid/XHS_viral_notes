@@ -25,7 +25,6 @@ def test_visible_ids_dedupe_across_buckets() -> None:
             "category_top": [_v("a", 1), _v("b", 2)],
             "competitor": [_v("a", 1)],
             "top_interaction": [],
-            "serp_top": [],
         }
     }
     assert visible_note_ids_for_media(crawler, "video") == ["a", "b"]
@@ -43,7 +42,6 @@ def test_pick_prioritizes_all_visible_then_rest_by_score() -> None:
             "category_top": [_v("sheet_only", 5)],
             "competitor": [_v("low", 1)],
             "top_interaction": [],
-            "serp_top": [],
         }
     }
     # floor=2, visible unique = low + sheet_only → len=2, target=max(2,2)=2
@@ -56,7 +54,7 @@ def test_pick_prioritizes_all_visible_then_rest_by_score() -> None:
 
 def test_floor_extends_beyond_visible_with_high_scorers() -> None:
     pool = [_v("v1", 10), _v("v2", 9), _v("v3", 8), _v("v4", 7), _v("v5", 6), _v("v6", 5)]
-    crawler = {"sources": {k: [] for k in ("category_top", "competitor", "top_interaction", "serp_top")}}
+    crawler = {"sources": {k: [] for k in ("category_top", "competitor", "top_interaction")}}
     picked = pick_multimodal_notes(
         pool, crawler, media_type="video", floor_n=4, hard_max=99
     )
@@ -70,7 +68,6 @@ def test_hard_max_truncates_visible_sorted_by_score() -> None:
             "category_top": [_v("a", 1), _v("b", 100), _v("c", 50)],
             "competitor": [],
             "top_interaction": [],
-            "serp_top": [],
         }
     }
     # visible 3, floor 2 → target=min(2, max(2,3))=2 — wait hard_max=2

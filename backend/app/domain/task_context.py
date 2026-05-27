@@ -34,6 +34,7 @@ _VALID_PARTITIONS = frozenset(
         "cookie_health",
         "metrics",
         "xhs_auth_status",  # Phase 2-B: XhsAuthAgent 写入凭据校验结果
+        "comment_output",   # CommentAnalysisSkill 产出的评论分析结果
     }
 )
 

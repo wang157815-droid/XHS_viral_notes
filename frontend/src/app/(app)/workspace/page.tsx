@@ -132,6 +132,17 @@ export default function WorkspacePage() {
     }
   }, [toast]);
 
+  // SSE conversation_message：后台 Skill 完成后的消息（如评论分析下载链接）
+  // 去重：SSE 刷新/重连后 backlog 重放会再次触发此 effect，需跳过已在会话中存在的消息
+  useEffect(() => {
+    if (!streamState.pendingMessages || streamState.pendingMessages.length === 0) return;
+    const existingIds = new Set(messages.map((m) => m.message_id));
+    const toAdd = streamState.pendingMessages
+      .filter((m) => !existingIds.has(m.message_id))
+      .map((m) => (m.conversation_id ? m : { ...m, conversation_id: conversationId ?? "" }));
+    if (toAdd.length > 0) appendConversationMessages(toAdd);
+  }, [streamState.pendingMessages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 画布优先级：SSE 实时推送 > Provider 里的 fallback > 演示数据
   const { canvasModel, realtime } = useMemo<{
     canvasModel: PrototypeCanvasModel;

@@ -168,8 +168,12 @@ def generate_headers(a1, api, data='', cookie_str='', method='POST'):
             xs, xt, xs_common, traceid = _sign_via_xhshow(
                 cookie_str, api, data, method
             )
-        except Exception:
-            # 任何异常都降级到 execjs,不阻断主链路
+        except Exception as _sign_exc:
+            # 降级到 execjs 老算法——老算法会导致 XHS 返回 data:{}，务必排查根因
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f"[xhs_sign] xhshow 签名失败，已降级到 execjs 老算法（会导致 data:{{}}）: {_sign_exc}"
+            )
             xs, xt, xs_common = generate_xs_xs_common(a1, api, data)
             traceid = generate_x_b3_traceid()
     else:

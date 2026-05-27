@@ -919,7 +919,7 @@ export function ChatPanel({
             /* 收起态：空内容且无标签时恢复紧凑单行 */
             <div className="flex w-full items-center gap-2 py-1">
               <div className="flex h-10 shrink-0 items-center">{plusFooterBlock}</div>
-              <div className="relative min-h-10 min-w-0 flex-1">
+              <div className="relative min-h-10 min-w-0 flex-1 flex items-center">
                 <KnowledgeMentionList
                   open={kbMention !== null}
                   placement="above"
@@ -940,7 +940,7 @@ export function ChatPanel({
                   onClick={(e) => setInputCaret(e.currentTarget.selectionStart ?? input.length)}
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? input.length)}
                   disabled={creating || !canWriteConversation}
-                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/22 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent pt-[10px] pb-[8px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/22 disabled:cursor-not-allowed disabled:opacity-60"
                   onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? input.length;
@@ -1376,6 +1376,48 @@ function renderMarkdownText(content: string, blockIndex: number): ReactNode[] {
   return nodes;
 }
 
+/** /api/v1/... 相对路径补全为后端完整 URL */
+function resolveHref(href: string): string {
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return href;
+  if (href.startsWith("/api/")) {
+    const base = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8100/api/v1").replace(/\/api\/v1\/?$/, "");
+    return `${base}${href}`;
+  }
+  if (/^\/[^/]/.test(href)) return href;
+  return "";
+}
+
+/**
+ * 带 JWT 认证的文件下载：适用于后端 API 导出链接。
+ * fetch 时携带 Authorization 头，响应以 Blob 触发浏览器下载。
+ */
+async function downloadWithAuth(url: string, filename: string): Promise<void> {
+  try {
+    const { getAuthToken } = await import("@/lib/auth-storage");
+    const token = getAuthToken();
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      console.error(`[download] 请求失败 ${res.status}`, await res.text().catch(() => ""));
+      alert(`下载失败（${res.status}），请确认已登录`);
+      return;
+    }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    console.error("[download] 异常", err);
+    alert("下载失败，请稍后重试");
+  }
+}
+
 function renderInlineMarkdown(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
@@ -1401,19 +1443,34 @@ function renderInlineMarkdown(text: string): ReactNode[] {
       );
     } else {
       const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      const href = link?.[2] ?? "";
-      const safeHref = /^(https?:\/\/|mailto:)/i.test(href) ? href : "";
+      const rawHref = link?.[2] ?? "";
+      const safeHref = resolveHref(rawHref);
+      const isApiDownload = rawHref.startsWith("/api/");
       nodes.push(
         safeHref ? (
-          <a
-            key={`link-${match.index}`}
-            href={safeHref}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[#c2716b] underline decoration-dew/50 underline-offset-2"
-          >
-            {link?.[1]}
-          </a>
+          isApiDownload ? (
+            <button
+              key={`link-${match.index}`}
+              type="button"
+              onClick={() => {
+                const filename = rawHref.split("/").pop()?.replace("comment_excel", "评论分析报告.xlsx") ?? "report.xlsx";
+                void downloadWithAuth(safeHref, filename);
+              }}
+              className="cursor-pointer text-[#c2716b] underline decoration-dew/50 underline-offset-2 bg-transparent border-0 p-0 font-inherit text-inherit"
+            >
+              {link?.[1]}
+            </button>
+          ) : (
+            <a
+              key={`link-${match.index}`}
+              href={safeHref}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[#c2716b] underline decoration-dew/50 underline-offset-2"
+            >
+              {link?.[1]}
+            </a>
+          )
         ) : (
           link?.[1] ?? token
         ),

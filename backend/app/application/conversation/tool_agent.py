@@ -69,6 +69,28 @@ class ConversationToolAgent:
                 ]
             )
 
+        # ─── comment_analysis ────────────────────────────────────────────────
+        if intent_name == "comment_analysis":
+            kw = slots.get("keywords") or intent.extracted_keywords or keywords or []
+            if not kw:
+                kw = IntentRouter.extract_keywords(content)
+            top_notes = int(slots.get("top_notes") or 0)  # 0 = 不限，爬到多少用多少
+            top_comments = int(slots.get("top_comments_per_note") or 5)
+            return ConversationToolDecision(
+                calls=[
+                    ConversationToolCall(
+                        name="start_comment_analysis",
+                        arguments={
+                            "keywords": kw,
+                            "top_notes": top_notes,
+                            "top_comments_per_note": top_comments,
+                        },
+                        confidence=intent.confidence,
+                        reason=f"intent=comment_analysis slots={kw}",
+                    )
+                ]
+            )
+
         # ─── refine_canvas ───────────────────────────────────────────────────
         if intent_name == "refine_canvas":
             module_id = slots.get("module_id")

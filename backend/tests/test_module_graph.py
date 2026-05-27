@@ -1,7 +1,7 @@
 """验收门槛:模块依赖图 + DirtyFlag 级联(4.3pre.3 新拓扑)。
 
 新拓扑:
-  mod-competitor-samples / mod-top-interaction-samples / mod-serp-top-samples
+  mod-competitor-samples / mod-top-interaction-samples
       (CrawlerAgent 驱动,无上游)
       └─ mod-viral-model-matrix   (ViralModelAgent)
             ├─ mod-pain-points   (InsightAgent)
@@ -22,14 +22,12 @@ def _build_graph() -> ModuleGraph:
         [
             ModuleNodeSpec(module_id="mod-competitor-samples", provides_by="CrawlerAgent"),
             ModuleNodeSpec(module_id="mod-top-interaction-samples", provides_by="CrawlerAgent"),
-            ModuleNodeSpec(module_id="mod-serp-top-samples", provides_by="CrawlerAgent"),
             ModuleNodeSpec(
                 module_id="mod-viral-model-matrix",
                 provides_by="ViralModelAgent",
                 depends_on=[
                     "mod-competitor-samples",
                     "mod-top-interaction-samples",
-                    "mod-serp-top-samples",
                 ],
             ),
             ModuleNodeSpec(
@@ -56,13 +54,6 @@ def test_descendants_resolves_transitive():
         "mod-pain-points",
         "mod-seo-insights",
     }
-
-
-def test_serp_top_samples_only_hits_matrix_and_pain():
-    """SERP 样本影响矩阵/痛点/SEO 洞察(SEO 现依赖 viral-model-matrix,传递覆盖)。"""
-    g = _build_graph()
-    descendants = g.descendants("mod-serp-top-samples")
-    assert descendants == {"mod-viral-model-matrix", "mod-pain-points", "mod-seo-insights"}
 
 
 def test_cascade_marks_only_ready_downstream():

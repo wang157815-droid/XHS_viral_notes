@@ -106,14 +106,13 @@ def test_canvas_new_modules_cover_required_nine(fake_canvas_task):
                 "cover_url": "https://example.com/b.jpg",
                 "nickname": "作者 B",
                 "url": "https://www.xiaohongshu.com/explore/n2",
-                "sources_hit": ["competitor", "serp_top"],
+                "sources_hit": ["competitor"],
             },
         ],
         "sources": {
             "category_top": [{"note_id": "n1", "title": "样本 1", "media_type": "image"}],
             "competitor": [{"note_id": "n2", "title": "样本 2", "media_type": "video"}],
             "top_interaction": [{"note_id": "n1", "title": "样本 1", "media_type": "image"}],
-            "serp_top": [{"note_id": "n2", "title": "样本 2", "media_type": "video"}],
         },
     }
     ctx.data["multimodal_output"] = {

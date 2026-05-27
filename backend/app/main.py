@@ -81,6 +81,9 @@ async def lifespan(app: FastAPI):
         # 仅生产/dev 启动时执行；测试环境通过 REDMUSE_SKIP_STARTUP_CHECKS=true 跳过，
         # 避免污染真实 datas/redmuse_auth/users.json。
         bootstrap_admin_if_needed()
+        # 评论缓存表（幂等建表，PostgreSQL 不可用时静默跳过）
+        from .infrastructure.storage.comment_cache_store import comment_cache_store
+        await comment_cache_store.setup()
         # 重置上次进程崩溃/重启时卡住的 GENERATING 模块
         _reset_generating_modules()
     try:

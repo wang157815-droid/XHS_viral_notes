@@ -39,8 +39,6 @@ REQUIRED_CANVAS_MODULES = {
     "mod-competitor-samples-video",
     "mod-top-interaction-samples-image",
     "mod-top-interaction-samples-video",
-    "mod-serp-top-samples-image",
-    "mod-serp-top-samples-video",
     "mod-seo-insights",
     "mod-pain-points",
     "mod-draft-workbench",

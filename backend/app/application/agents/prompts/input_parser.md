@@ -24,13 +24,11 @@ RedMuse 是一个 B2B 的小红书爆文分析平台,服务品牌方。用户提
 2. **不得凭空扩展品类词**：`keywords` 必须忠实于用户原文，不推断同类词、父类词或宽泛品类词
    - 用户说"海尔空调" → keywords: ["海尔空调"]，而**不是** ["海尔空调", "空调"]
    - 用户说"防脱洗发水" → keywords: ["防脱洗发水"]，而**不是** ["防脱洗发水", "洗发水", "防脱"]
-3. **品类宽泛词放 serp_expanded_keyword**：如果需要一个更宽泛的品类词，写在 `serp_expanded_keyword` 里，不要写进 `keywords`
 
 **典型正确示例：**
 - 输入："帮我分析海尔空调，并对比格力，给出爆文模型"
   - keywords: ["海尔空调"] ✅（只有主分析对象）
   - dimensions.competitor: ["格力"] ✅
-  - serp_expanded_keyword: "空调" ✅（宽泛品类词放这里）
   - **错误做法** keywords: ["海尔空调", "空调", "格力空调"] ❌
 
 - 输入："分析SK-II，竞品看雅诗兰黛和兰蔻"
@@ -83,25 +81,8 @@ RedMuse 是一个 B2B 的小红书爆文分析平台,服务品牌方。用户提
 
 ---
 
-## SERP 扩展词推断（重要）
-
-为了让系统能搜索到与用户主题相关的"更宽泛"爆文（用于 Sheet 6「小红书前10屏爆文」），你需要额外推断一个 `serp_expanded_keyword`：
-
-- **规则**：基于用户输入的主题，推断一个**更宽泛的同类词或父类词**，用于小红书搜索前10屏爆文
-- **示例**：
-  - 用户关键词是 "海尔空调" → `serp_expanded_keyword` 应为 "空调"（**这个词只放这里，不放 keywords**）
-  - 用户关键词是 "fazer"（巧克力品牌）→ `serp_expanded_keyword` 应为 "巧克力"
-  - 用户关键词是 "防脱洗发水" → `serp_expanded_keyword` 应为 "洗发水" 或 "护发"
-- **要求**：
-  1. 必须是一个能在小红书上搜索到爆文的词
-  2. 应比用户原始关键词更宽泛（父类或同类），但不要过于宽泛（如"好物""推荐"）
-  3. 只返回**一个词/短语**，不要列表
-  4. 如果无法合理推断，可返回空字符串 `""`
-
----
-
 ## 输出格式
 
 先用**一句话**简述你的分析判断（例如："用户主品是海尔空调，明确提到了竞品格力，品类词为空调"），然后换行输出 JSON：
 
-{"keywords": ["只放主分析对象，不放竞品词不放品类词"], "dimensions": {"brand": [], "competitor": ["用户提到的竞品，或推断竞品；用户拒绝竞品时为[]"], "industry": []}, "adjustments": ["调整需求"], "confidence": 0.9, "competitor_source": "user_explicit 或 llm_inferred 或 user_skip", "serp_expanded_keyword": "宽泛品类词", "pipeline_config": {"run_video_analysis": true, "run_rag": true, "skip_competitor": false}}
+{"keywords": ["只放主分析对象，不放竞品词不放品类词"], "dimensions": {"brand": [], "competitor": ["用户提到的竞品，或推断竞品；用户拒绝竞品时为[]"], "industry": []}, "adjustments": ["调整需求"], "confidence": 0.9, "competitor_source": "user_explicit 或 llm_inferred 或 user_skip", "pipeline_config": {"run_video_analysis": true, "run_rag": true, "skip_competitor": false}}

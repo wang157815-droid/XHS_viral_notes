@@ -3,7 +3,7 @@ Agent 节点集合（阶段 4.3pre.3 拓扑）:
 
 - BaseAgent: 约束 Agent 只能经由 TaskContext 读写、ModelGateway 调用模型
 - InputParserAgent: 用户自然语言 → 关键词 / 维度 / 调整需求
-- CrawlerAgent: 四源采集(category_top / competitor / top_interaction / serp_top)
+- CrawlerAgent: 三源采集(category_top / competitor / top_interaction)
 - ImageAnalysisAgent: 图文 6 要素标注(写 multimodal_output.annotations)
 - VideoAnalysisAgent: 视频 6 要素标注(同步并发,共享 multimodal_output.annotations)
 - ViralModelAgent: 混合聚类生成爆文模型矩阵(替代原 StrategyAgent)

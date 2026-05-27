@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 ConversationToolName = Literal[
     "start_xhs_analysis",
+    "start_comment_analysis",
     "regenerate_canvas_module",
     "answer_with_knowledge",
     "export_task",
@@ -80,6 +81,7 @@ class ConversationStreamEvent:
 
 _TOOL_NAMES = {
     "start_xhs_analysis",
+    "start_comment_analysis",
     "regenerate_canvas_module",
     "answer_with_knowledge",
     "export_task",
@@ -89,6 +91,37 @@ _TOOL_NAMES = {
 
 
 CONVERSATION_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "start_comment_analysis",
+            "description": "采集指定关键词下的笔记，提取每条笔记中互动量最高的评论并进行分类聚合，生成用户评论洞察报告（Excel）。与爆文模型分析不同，本工具专注于评论内容，不生成 Canvas 和内容矩阵，完成后直接提供下载链接。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 5,
+                        "description": "要分析的关键词列表，如['防脱精华']",
+                    },
+                    "top_notes": {
+                        "type": "integer",
+                        "minimum": 5,
+                        "maximum": 50,
+                        "description": "取互动量最高的前 N 条笔记进行评论分析，默认 20。",
+                    },
+                    "top_comments_per_note": {
+                        "type": "integer",
+                        "minimum": 3,
+                        "maximum": 20,
+                        "description": "每条笔记取点赞数最高的前 K 条评论，默认 5。",
+                    },
+                },
+                "required": ["keywords"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

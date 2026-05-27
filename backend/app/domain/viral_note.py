@@ -24,12 +24,11 @@ from typing import Any, Dict, List, Optional
 
 
 class SourceType(str, Enum):
-    """爆款笔记的采集来源 — 对应模板里 4 个数据 sheet。"""
+    """爆款笔记的采集来源 — 对应模板里 3 个数据 sheet。"""
 
     CATEGORY_TOP = "category_top"       # Sheet 3 "数据源总" / 品类 TOP
     COMPETITOR = "competitor"           # Sheet 4 "竞品爆文"
-    TOP_INTERACTION = "top_interaction" # Sheet 5 "【品类】抗老精华互动 top"
-    SERP_TOP = "serp_top"               # Sheet 6 "【精华】小红书前 10 屏爆文"
+    TOP_INTERACTION = "top_interaction" # Sheet 5 "互动 TOP"
 
 
 @dataclass

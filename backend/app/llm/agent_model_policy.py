@@ -58,6 +58,13 @@ class AgentModelPolicy:
             ("CoverAgent", "multimodal", "multimodal_default"),
             ("VideoAgent", "multimodal", "multimodal_default"),
             ("StrategyAgent", "text", "text_default"),
+            # warmup 品类词扩词（在 ARQ worker 中调用）
+            ("WarmupKeywordExpander", "text", "text_default"),
+            # 评论分析 pipeline（comment_pipeline.py）
+            ("CommentPipeline.InputParser", "text", "text_default"),
+            ("CommentPipeline.NoteClassifier", "text", "text_default"),
+            ("CommentPipeline.CommentClassifier", "text", "text_default"),
+            ("CommentPipeline.Summarizer", "text", "text_default"),
         ]
         for agent_id, modality, profile_id in defaults:
             self.set(agent_id, modality, profile_id)

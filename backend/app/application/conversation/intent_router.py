@@ -46,6 +46,11 @@ _NEW_ANALYSIS_EXPLICIT = re.compile(
     r"(?:新建|重新采集|重新搜索|重新跑|重跑|再跑一遍|另做|另起|换一个任务|新的分析)",
 )
 
+# 评论分析高置信触发规则
+_COMMENT_ANALYSIS_TRIGGERS = re.compile(
+    r"(?:高赞评论|评论区|评论数据|评论分析|帮我.{0,10}评论|采集.{0,10}评论|分析.{0,10}评论|整理.{0,10}评论|汇总.{0,10}评论)",
+)
+
 # ─── 工具方法保留（keyword/module 抽取供 LLM 层调用） ──────────────────────────
 
 
@@ -89,7 +94,18 @@ class IntentRouter:
                 clarification_question=None if active_task_id else "当前还没有可导出的分析任务，请先生成爆文模型。",
             )
 
-        # 3. 有活跃任务 + 明确修改动词 + 画布对象词 → refine_canvas
+        # 3. 评论分析意图（高置信触发词）
+        if _COMMENT_ANALYSIS_TRIGGERS.search(text):
+            keywords = self.extract_keywords(text)
+            return IntentClassification(
+                intent="comment_analysis",
+                confidence=0.90,
+                reason="命中评论分析高置信触发词",
+                extracted_keywords=keywords,
+                slots={"keywords": keywords},
+            )
+
+        # 5. 有活跃任务 + 明确修改动词 + 画布对象词 → refine_canvas
         if (
             active_task_id
             and not _NEW_ANALYSIS_EXPLICIT.search(text)
@@ -105,7 +121,7 @@ class IntentRouter:
                 slots={"instruction": text, "module_id": target_module_ids[0] if target_module_ids else None},
             )
 
-        # 4. 其余情况：置信度不足，交给 LLM 分类器
+        # 6. 其余情况：置信度不足，交给 LLM 分类器
         return IntentClassification(
             intent="general_qa",
             confidence=0.50,
@@ -181,7 +197,6 @@ class IntentRouter:
             (("草稿", "文案", "正文", "脚本", "写一篇", "生成一篇"), "mod-draft-workbench"),
             (("竞品",), "mod-competitor-samples-image"),
             (("互动", "高互动", "点赞", "收藏", "评论"), "mod-top-interaction-samples-image"),
-            (("serp", "SERP", "搜索排名", "搜索结果"), "mod-serp-top-samples-image"),
             (("视频",), "mod-competitor-samples-video"),
             (("图文", "图片"), "mod-competitor-samples-image"),
         ]

@@ -38,6 +38,8 @@ class TaskEventType(str, Enum):
     AGENT_THINKING_CHUNK = "agent_thinking_chunk"
     # 某个 Agent 的流式推理结束
     AGENT_THINKING_DONE = "agent_thinking_done"
+    # 后台任务完成后回写的对话消息（评论分析等 Skill 专用）
+    CONVERSATION_MESSAGE = "conversation_message"
 
 
 @dataclass

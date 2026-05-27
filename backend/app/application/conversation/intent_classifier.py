@@ -3,13 +3,14 @@
 职责：对规则层无法高置信度判断的输入，调用 LLM 返回结构化 JSON，包含
 intent / confidence / slots / missing_fields / clarification_question。
 
-意图空间（6 个）：
-  xhs_analysis   — 发起新爆文采集分析任务
-  refine_canvas  — 调整当前 Canvas 某模块
-  export         — 导出任务结果
-  knowledge_qa   — 查询知识库 / SOP / 文档
-  general_qa     — 普通问答 / 功能询问 / 概念解释
-  unknown        — 无法判断，触发追问
+意图空间（7 个）：
+  xhs_analysis      — 发起新爆文采集分析任务
+  comment_analysis  — 发起评论分析任务（采集评论区高赞评论并总结洞察，导出 Excel）
+  refine_canvas     — 调整当前 Canvas 某模块
+  export            — 导出任务结果
+  knowledge_qa      — 查询知识库 / SOP / 文档
+  general_qa        — 普通问答 / 功能询问 / 概念解释
+  unknown           — 无法判断，触发追问
 """
 
 from __future__ import annotations
@@ -37,6 +38,17 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
   - 用户在询问系统能力（如"你可以做爆文分析吗""系统支持搜索吗"）
   - 只提到功能词但没有实际产品/品牌/品类词
   - 已有 active_task_id 且未明确说"重新/新建/换一个"
+  - 用户明确提到"评论""评论区""高赞评论"——那应触发 comment_analysis
+
+### comment_analysis（发起评论分析任务）
+触发条件（必须同时满足 A 和 B）：
+  A. 有明确的评论相关词：评论 / 评论区 / 高赞评论 / 留言 / 用户反馈
+  B. 有执行意图：帮我 / 分析 / 采集 / 汇总 / 整理 / 看看
+典型触发短语：
+  "帮我分析 XX 的评论区" / "采集 XX 的高赞评论" / "看看 XX 下面的评论" / "分析用户评论"
+禁止触发：
+  - 用户只是说"好评很多"等描述性语句，没有执行意图
+  - 用户在问评论功能的概念（如"评论分析是什么"）
 
 ### refine_canvas（调整当前 Canvas 模块）
 触发条件：已有 active_task_id，且用户要求修改/优化/展开/重写某个模块或内容
@@ -83,11 +95,6 @@ sample_count（采集数量）：
   "采集100条" / "一百条" / "100篇" → "100"
   未提及 → null
 
-viral_ratio（爆款比例/筛选比例）：
-  "前50%" / "前一半" / "互动前50%" → "前50%"
-  "前30%" / "互动前30%" → "前30%"
-  "前20%" / "只要前20%" / "最顶部的20%" → "前20%"
-  未提及 → null
 
 ## few-shot 示例
 
@@ -129,11 +136,23 @@ viral_ratio（爆款比例/筛选比例）：
 
 示例10（xhs_analysis - 只要视频，万赞以上）：
 输入：找一下最近半年护肤品的视频爆文，要互动量超过10000的
-输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["护肤品"],"competitor_keywords":[],"skip_competitor":false,"time_range":"半年内","note_type":"视频","min_interaction":"10000+","sample_count":null,"viral_ratio":null},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定半年内、视频类型、互动量1万以上"}
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["护肤品"],"competitor_keywords":[],"skip_competitor":false,"time_range":"半年内","note_type":"视频","min_interaction":"10000+","sample_count":null},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定半年内、视频类型、互动量1万以上"}
 
-示例11（xhs_analysis - 指定采集数量和爆款比例）：
-输入：帮我采集80条空调的爆文，只要前30%的
-输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["空调"],"competitor_keywords":[],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null,"sample_count":"80","viral_ratio":"前30%"},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定采集80条并筛选前30%"}
+示例11（xhs_analysis - 指定采集数量）：
+输入：帮我采集80条空调的爆文
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["空调"],"competitor_keywords":[],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null,"sample_count":"80"},"missing_fields":[],"clarification_question":null,"reason":"明确搜索目标，指定采集80条"}
+
+示例12（comment_analysis - 分析评论区）：
+输入：帮我分析一下防晒的评论区
+输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["防晒"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户明确要分析评论区，关键词为防晒"}
+
+示例13（comment_analysis - 采集高赞评论）：
+输入：采集格力空调高赞评论，看看用户都在说什么
+输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户要采集高赞评论并分析用户反馈"}
+
+示例14（comment_analysis - 缺少关键词，追问）：
+输入：帮我看看评论区
+输出：{"intent":"comment_analysis","confidence":0.75,"slots":{"keywords":[]},"missing_fields":["keywords"],"clarification_question":"你想分析哪个产品或关键词的评论区？","reason":"有评论分析意图但缺少具体关键词"}
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 
@@ -150,7 +169,8 @@ viral_ratio（爆款比例/筛选比例）：
     "note_type": null,
     "min_interaction": null,
     "sample_count": null,
-    "viral_ratio": null
+    "top_notes": null,
+    "top_comments_per_note": null
   },
   "missing_fields": [],
   "clarification_question": null,
@@ -271,7 +291,7 @@ class IntentClassifier:
             else:
                 data = {}
 
-        valid_intents = {"xhs_analysis", "refine_canvas", "export", "knowledge_qa", "general_qa", "unknown"}
+        valid_intents = {"xhs_analysis", "comment_analysis", "refine_canvas", "export", "knowledge_qa", "general_qa", "unknown"}
         intent = str(data.get("intent") or "general_qa")
         if intent not in valid_intents:
             intent = "general_qa"
@@ -286,22 +306,28 @@ class IntentClassifier:
             "skip_competitor": bool(raw_slots.get("skip_competitor", False)),
             "module_id": raw_slots.get("module_id"),
             "instruction": raw_slots.get("instruction"),
-            # 自然语言配置槽位（仅 xhs_analysis 有意义）
+            # xhs_analysis 配置槽位
             "time_range": raw_slots.get("time_range") or None,
             "note_type": raw_slots.get("note_type") or None,
             "min_interaction": raw_slots.get("min_interaction") or None,
             "sample_count": raw_slots.get("sample_count") or None,
-            "viral_ratio": raw_slots.get("viral_ratio") or None,
+            # comment_analysis 配置槽位
+            "top_notes": raw_slots.get("top_notes") or None,
+            "top_comments_per_note": raw_slots.get("top_comments_per_note") or None,
         }
 
         missing_fields = [str(f) for f in (data.get("missing_fields") or [])]
         clarification_question = data.get("clarification_question") or None
 
-        # 业务校验：xhs_analysis 但关键词为空 → 追问
+        # 业务校验：xhs_analysis / comment_analysis 但关键词为空 → 追问
         if intent == "xhs_analysis" and not slots["keywords"] and "keywords" not in missing_fields:
             missing_fields.append("keywords")
             if not clarification_question:
                 clarification_question = "请告诉我你想搜索的产品或品牌名称？"
+        if intent == "comment_analysis" and not slots["keywords"] and "keywords" not in missing_fields:
+            missing_fields.append("keywords")
+            if not clarification_question:
+                clarification_question = "你想分析哪个产品或关键词的评论区？"
 
         clarification_needed = bool(missing_fields and clarification_question)
 

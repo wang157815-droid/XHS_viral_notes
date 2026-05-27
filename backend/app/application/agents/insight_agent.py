@@ -60,7 +60,7 @@ _SEO_MIN_COUNT_CORE = 2        # 核心词至少出现 2 次
 _SEO_TOKEN_MIN_LEN = 2
 _SEO_TOKEN_MAX_LEN = 12
 # 无竞品时的回退来源优先级（依次尝试直至凑够样本）
-_SEO_FALLBACK_SOURCES = ("category_top", "serp_top", "top_interaction")
+_SEO_FALLBACK_SOURCES = ("category_top", "top_interaction")
 
 
 class InsightAgent(BaseAgent):
@@ -167,7 +167,7 @@ class InsightAgent(BaseAgent):
     def _collect_competitor_titles(sources: Dict[str, Any]) -> List[str]:
         """收集笔记标题(给 LLM 做差异化建议时做上下文)。
 
-        优先用竞品笔记；无竞品时回退到 category_top / serp_top。
+        优先用竞品笔记；无竞品时回退到 category_top / top_interaction。
         """
         notes = _extract_notes(sources.get("competitor"))
         if not notes:
@@ -189,7 +189,7 @@ class InsightAgent(BaseAgent):
         """从笔记的标题 + pain_keywords + desc 聚合 SEO 词频。
 
         优先使用竞品笔记；无竞品样本时依次回退到
-        category_top → serp_top → top_interaction，确保只要有
+        category_top → top_interaction，确保只要有
         品类词爬取结果就能生成 SEO 洞察。
 
         Returns:

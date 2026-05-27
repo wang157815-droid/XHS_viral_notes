@@ -310,12 +310,13 @@ export default function SettingsPage() {
     if (res.ok) setCrawlerStatus(res.data);
   }, []);
 
-  // crawler tab 激活时每 30s 自动刷新一次状态
+  // crawler tab 激活时立刻刷新一次，然后每 10s 自动刷新
   useEffect(() => {
     if (activeNav !== "crawler") return;
+    void loadCrawlerStatus();
     const timer = window.setInterval(() => {
       void loadCrawlerStatus();
-    }, 30_000);
+    }, 10_000);
     return () => window.clearInterval(timer);
   }, [activeNav, loadCrawlerStatus]);
 
@@ -513,8 +514,10 @@ export default function SettingsPage() {
       }
       setToast({ type: "ok", message: res.data.message || "已触发立即采集" });
       await loadCrawlerStatus();
-      // 任务异步执行，3s 后再刷一次以拿到最新 next_run_at
-      window.setTimeout(() => { void loadCrawlerStatus(); }, 3000);
+      // ARQ 任务异步执行，分别在 5s / 15s / 30s 后刷新，确保拿到最新 next_run_at
+      window.setTimeout(() => { void loadCrawlerStatus(); }, 5_000);
+      window.setTimeout(() => { void loadCrawlerStatus(); }, 15_000);
+      window.setTimeout(() => { void loadCrawlerStatus(); }, 30_000);
     } finally {
       setTriggering(false);
     }
@@ -1579,10 +1582,7 @@ function CrawlerScheduleSection({
             {lastRunMeta.text}
           </span>
         </Row>
-        <Row
-          label="下次计划执行"
-          hint="系统随机在 12–24 小时内安排下次采集"
-        >
+        <Row label="下次计划执行">
           <span className="text-[13px] text-[#5A5550]">
             {status?.next_run_at ? formatTime(status.next_run_at) : "待首次执行后生成"}
           </span>

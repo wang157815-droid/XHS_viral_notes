@@ -1,4 +1,4 @@
-import type { CanvasModule, CanvasSchema, TaskEvent, TaskStatus } from "@/lib/contracts";
+import type { CanvasModule, CanvasSchema, ChatMessage, TaskEvent, TaskStatus } from "@/lib/contracts";
 
 export interface TaskLogEntry {
   event_id: string;
@@ -32,6 +32,8 @@ export interface TaskStreamState {
   agentThinkingDone: Record<string, boolean>;
   /** 按 agent_id 分组的结构化日志 */
   agentLogs: Record<string, TaskLogEntry[]>;
+  /** 后台 Skill 完成后推送的对话消息（消费后清空） */
+  pendingMessages: ChatMessage[];
 }
 
 export function initialTaskStreamState(): TaskStreamState {
@@ -47,6 +49,7 @@ export function initialTaskStreamState(): TaskStreamState {
     agentThinking: {},
     agentThinkingDone: {},
     agentLogs: {},
+    pendingMessages: [],
   };
 }
 
@@ -237,6 +240,30 @@ export function reduceTaskEvent(
         level: failed > 0 ? "warn" : "info",
         message: `[视频异步] 完成 ${completed}/${total}${failed > 0 ? ` · 失败 ${failed}` : ""}`,
       });
+      break;
+    }
+    case "conversation_message": {
+      const p = event.payload as {
+        role?: string;
+        content?: string;
+        intent?: string;
+        linked_task_id?: string;
+      };
+      const msg: ChatMessage = {
+        message_id: event.event_id || `sse_${Date.now()}`,
+        conversation_id: "",
+        role: (p.role ?? "assistant") as ChatMessage["role"],
+        content: p.content ?? "",
+        intent: (p.intent ?? "general_qa") as ChatMessage["intent"],
+        intent_confidence: 1,
+        clarification_needed: false,
+        clarification_question: null,
+        citations: [],
+        task_handoff: null,
+        linked_task_id: p.linked_task_id ?? null,
+        created_at: event.timestamp ?? new Date().toISOString(),
+      };
+      next.pendingMessages = [...state.pendingMessages, msg];
       break;
     }
     case "ping":

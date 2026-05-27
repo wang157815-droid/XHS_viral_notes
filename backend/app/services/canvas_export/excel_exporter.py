@@ -75,7 +75,6 @@ _SOURCE_TYPE_LABEL_CN = {
     "category_top": "【品类】TOP",
     "competitor": "【竞品】爆文",
     "top_interaction": "【互动 TOP】",
-    "serp_top": "【精华】小红书前十屏爆文",
 }
 
 # Sheet3 合并行写入：标记该行是「第几个池」首次纳入（去重后保留先出现的池），来源列只显示该池单一标签
@@ -93,8 +92,8 @@ def _format_note_source_cell(
 ) -> str:
     """A 列「来源」文案。
 
-    - 单来源 Sheet（4/5/6）：固定用该片对应标签。
-    - 合并 Sheet3：优先用构建合并表时写入的 ``__sheet3_row_pool``（与 Sheet4/5/6 语义一致），
+    - 单来源 Sheet（4/5）：固定用该片对应标签。
+    - 合并 Sheet3：优先用构建合并表时写入的 ``__sheet3_row_pool``（与 Sheet4/5 语义一致），
       避免把 ``sources_hit`` 里多标签用 `` / `` 拼成长串（易截断、且与「本行来自哪张分表」不一致）。
     """
     if sheet_primary_source:
@@ -135,7 +134,7 @@ _TITLE_ALIGN = Alignment(horizontal="center", vertical="center")
 _DATA_ALIGN = Alignment(horizontal="left", vertical="center", wrap_text=True)
 _CENTER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-# Sheet3-6 样本表:等线 10 号 + 单元格不换行(内容强制单行,换行符压成空格)
+# Sheet3-5 样本表:等线 10 号 + 单元格不换行(内容强制单行,换行符压成空格)
 _SAMPLE_SHEET_FONT = Font(name="DengXian", size=10)
 _SAMPLE_SHEET_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=False)
 _SAMPLE_SHEET_HEADER_FONT = Font(name="DengXian", bold=True, size=10, color="FFFFFF")
@@ -163,7 +162,7 @@ _S2_ELEMENT_BLOCK_FILL = PatternFill(
 _S2_ELEMENT_BLOCK_FONT = Font(name="等线", bold=True, size=10, color="1F4E79")
 _S2_DATA_FONT = Font(name="等线", size=10)  # 概括/解释/示例内容行
 
-# Sheet2 矩阵:含图数据行高 + K 列宽 + 示例图像素(与 Sheet3-6 小缩略图区分)
+# Sheet2 矩阵:含图数据行高 + K 列宽 + 示例图像素(与 Sheet3-5 小缩略图区分)
 _COVER_ROW_HEIGHT = 80.0
 _COVER_COLUMN_WIDTH = 18.0
 _MATRIX_COVER_PIXEL_SIZE = 100
@@ -171,7 +170,7 @@ _SAMPLE_COVER_PIXEL_SIZE = 36  # 样本表行高 15 时配小图,避免溢出
 
 # 全工作簿统一版式(保存前套用;豁免 Sheet1/2,见 _SKIP_DEFAULT_LAYOUT_SHEETS)
 _DEFAULT_EXCEL_COL_WIDTH = 25
-# Sheet3-6:类型/品牌/互动量/点赞/收藏/评论 在统一列宽后再收窄
+# Sheet3-5:类型/品牌/互动量/点赞/收藏/评论 在统一列宽后再收窄
 _SAMPLE_METRIC_COL_WIDTH = 10.0
 # Sheet4 竞品:T/U 热搜词与评论热词列需要更宽展示
 _COMPETITOR_SEO_TU_COL_WIDTH = 60.0
@@ -375,16 +374,8 @@ def _assemble_workbook(
         task_keywords=task_kw,
     )
 
-    ws6 = wb.create_sheet("【精华】小红书前10屏爆文")
-    _build_sheet6_serp_top(
-        ws6,
-        crawler=crawler,
-        annotations=annotations,
-        img_cache=img_cache,
-    )
-
-    ws7 = wb.create_sheet("草稿")
-    _build_sheet7_draft(ws7, semantic=semantic)
+    ws6 = wb.create_sheet("草稿")
+    _build_sheet7_draft(ws6, semantic=semantic)
 
     # 元信息 docProps
     try:
@@ -424,7 +415,7 @@ def _collect_image_urls(
                         if url:
                             urls.append(url)
 
-    # Sheet 3-6: 样本封面
+    # Sheet 3-5: 样本封面
     sources = crawler.get("sources") or {}
     for src_notes in sources.values():
         for n in _as_note_list(src_notes):
@@ -990,7 +981,7 @@ def _infer_brand_for_export(
 
 
 # ==================================================================
-# Sheet 3-6: 四样本表(同型构造器 + 特化)
+# Sheet 3-5: 三样本表(同型构造器 + 特化)
 # ==================================================================
 def _sample_header_row(
     ws,
@@ -1107,7 +1098,7 @@ def _sample_write_row(
             font=_SAMPLE_SHEET_FONT,
         )
 
-    # 行高由 Sheet3-6 的 _apply_default_excel_layout 统一为 15
+    # 行高由 Sheet3-5 的 _apply_default_excel_layout 统一为 15
 
 
 # Sheet 3 数据源总: 20 列 A-S
@@ -1150,10 +1141,10 @@ def _build_sheet3_source(
     task_keywords: Optional[List[str]] = None,
 ) -> None:
     sources = crawler.get("sources") or {}
-    # 合并三个来源: 竞品爆文 + 本品样本(top_interaction) + SERP前十屏, 按 note_id 去重
+    # 合并两个来源: 竞品爆文 + 本品样本(top_interaction), 按 note_id 去重
     seen_ids: set[str] = set()
     merged_notes: List[Dict[str, Any]] = []
-    for source_key in ("competitor", "top_interaction", "serp_top"):
+    for source_key in ("competitor", "top_interaction"):
         for n in _as_note_list(sources.get(source_key)):
             nid = str(n.get("note_id") or "")
             if nid and nid in seen_ids:
@@ -1249,33 +1240,6 @@ def _build_sheet5_top_interaction(
     )
 
 
-# Sheet 6 SERP 前 10 屏: 精简版(无品牌、无痛点、保留 6 要素 + 封面)
-_SHEET6_HEADERS = [
-    "来源",         # A
-    "达人昵称",     # B
-    "类型",         # C
-    "笔记链接",     # D
-    "互动量",       # E
-    "点赞",         # F
-    "收藏",         # G
-    "评论",         # H
-    "内容方向",     # I
-    "封面截图",     # J (嵌图)
-    "标题",         # K
-    "封面",         # L
-    "封面压字",     # M
-    "标题(类型)",   # N
-    "内容切入点",   # O
-    "产品引出方式", # P
-    "产品植入方式", # Q
-]
-_SHEET6_COLS = [
-    "source", "author", "note_type", "url",
-    "interaction_formula", "likes", "collects", "comments", "direction",
-    "cover", "title",
-    "cover_type", "cover_text_type", "title_type", "opening_type",
-    "product_intro_type", "product_placement_type",
-]
 
 _SAMPLE_METRIC_COL_KEYS = frozenset(
     {
@@ -1297,7 +1261,6 @@ def _apply_sample_sheet_metric_column_widths(
         ("数据源总", _SHEET3_COLS),
         ("竞品爆文", _SHEET4_COLS),
         (sheet5_title, _SHEET5_COLS),
-        ("【精华】小红书前10屏爆文", _SHEET6_COLS),
     )
     for title, col_keys in specs:
         ws = wb[title]
@@ -1313,24 +1276,6 @@ def _apply_competitor_sheet_seo_wide_columns(wb: Workbook) -> None:
     ws = wb["竞品爆文"]
     ws.column_dimensions["T"].width = float(_COMPETITOR_SEO_TU_COL_WIDTH)
     ws.column_dimensions["U"].width = float(_COMPETITOR_SEO_TU_COL_WIDTH)
-
-
-def _build_sheet6_serp_top(
-    ws,
-    *,
-    crawler: Dict[str, Any],
-    annotations: Dict[str, Dict[str, Any]],
-    img_cache: Dict[str, Optional[io.BytesIO]],
-) -> None:
-    sources = crawler.get("sources") or {}
-    notes = _as_note_list(sources.get("serp_top"))
-    _render_sample_sheet(
-        ws, notes,
-        headers=_SHEET6_HEADERS, columns=_SHEET6_COLS,
-        annotations=annotations, img_cache=img_cache,
-        cover_col="J",
-        sheet_primary_source="serp_top",
-    )
 
 
 def _render_sample_sheet(

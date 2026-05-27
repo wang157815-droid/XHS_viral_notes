@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-# 与 CrawlerAgent._build_four_source_view 的四个桶一致
-_SOURCE_BUCKETS = ("category_top", "competitor", "top_interaction", "serp_top")
+# 与 CrawlerAgent._build_four_source_view 的三个桶一致
+_SOURCE_BUCKETS = ("category_top", "competitor", "top_interaction")
 
 
 def _score(note: Dict[str, Any]) -> float:

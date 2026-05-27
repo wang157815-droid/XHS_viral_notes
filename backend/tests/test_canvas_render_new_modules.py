@@ -47,20 +47,17 @@ _BASE_CANVAS_MODULE_IDS = {
     "mod-draft-workbench",
 }
 
-# advanced_config.note_type 为「不限」或未设置时:Layer3 为 6 张分载体样本卡
+# advanced_config.note_type 为「不限」或未设置时:Layer3 为 4 张分载体样本卡
 _LAYER3_SPLIT_SAMPLE_IDS = {
     "mod-competitor-samples-image",
     "mod-competitor-samples-video",
     "mod-top-interaction-samples-image",
     "mod-top-interaction-samples-video",
-    "mod-serp-top-samples-image",
-    "mod-serp-top-samples-video",
 }
 
 _LAYER3_CLASSIC_SAMPLE_IDS = {
     "mod-competitor-samples",
     "mod-top-interaction-samples",
-    "mod-serp-top-samples",
 }
 
 _REQUIRED_NEW_MODULE_IDS_UNLIMITED = _BASE_CANVAS_MODULE_IDS | _LAYER3_SPLIT_SAMPLE_IDS
@@ -128,13 +125,6 @@ def _seed_full_context(tid: str) -> None:
                  "media_type": "image", "cover_url": "u3",
                  "url": "https://xhs/n3",
                  "sources_hit": ["top_interaction"]},
-            ],
-            "serp_top": [
-                {"note_id": "n1", "title": "样本 1", "nickname": "A",
-                 "likes": 100, "comments": 5, "collects": 10,
-                 "media_type": "image", "cover_url": "u1",
-                 "url": "https://xhs/n1",
-                 "sources_hit": ["category_top", "serp_top"]},
             ],
         },
     }

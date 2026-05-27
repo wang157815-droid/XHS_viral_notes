@@ -262,16 +262,24 @@ async def trigger_crawler_now(current_user: dict = Depends(get_current_user)):
     try:
         from ...infrastructure.queue.client import enqueue_job
 
-        # force=True: 用户意图明确,不受 interval 节流限制
-        job_id = await enqueue_job("scheduled_warmup", force=True)
+        # force=True: 用户意图明确，不受 interval 节流限制
+        # 固定 job_id 保证幂等：多次点击只入队一次，避免并发写 next_run_at 导致顺序混乱
+        job_id = await enqueue_job("scheduled_warmup", force=True, _job_id="warmup:manual")
         if job_id:
             return ok(
                 {
                     "triggered_at": triggered_at,
                     "job_id": job_id,
-                    "message": "已下发到 ARQ 队列,请稍后在此页查看预热结果",
+                    "message": "已下发到 ARQ 队列，请稍后在此页查看预热结果",
                 }
             )
+        # job_id 为 None 说明同名任务已在队列中，直接告知用户
+        return ok(
+            {
+                "triggered_at": triggered_at,
+                "message": "采集任务已在队列中，请稍等",
+            }
+        )
     except Exception:  # noqa: BLE001
         pass
 

@@ -55,7 +55,6 @@ _PER_GROUP_TIMEOUT = int(os.getenv("CRAWLER_GROUP_TIMEOUT", "3600"))
 #   - 500 条（前端最大）：约 30-40 分钟
 #   - 设为 3600s(1h) 确保任意合理配置都能采集完毕，不在中途斩断数据
 _DEFAULT_TARGET_PER_GROUP = int(os.getenv("CRAWLER_TARGET_PER_GROUP", "45"))
-_VIRAL_RATIO = float(os.getenv("CRAWLER_VIRAL_RATIO", "0.5"))
 _MIN_SAMPLE = int(os.getenv("CRAWLER_MIN_SAMPLE", "5"))
 _INTER_GROUP_SLEEP = float(os.getenv("CRAWLER_INTER_GROUP_SLEEP", "3.0"))
 # 每维关键词数量上限；与 InputParser 竞品词条数上限对齐，用于分组采集、
@@ -436,16 +435,14 @@ def _dual_trace_layers(
 
 class CrawlerAgent(BaseAgent):
     agent_id = "CrawlerAgent"
-    # 4.3pre.3: 采集层喂给总览 + 三源画布样本(品类 TOP 仅统计/矩阵用,无独立画布卡)
+    # 4.3pre.3: 采集层喂给总览 + 两源画布样本(品类 TOP 仅统计/矩阵用,无独立画布卡)
     #  - mod-overview-stats:          Sheet 1（统计总览）
     #  - mod-competitor-samples:      竞品爆文
     #  - mod-top-interaction-samples: 互动 TOP
-    #  - mod-serp-top-samples:        SERP 前 10 屏
     provides = [
         "mod-overview-stats",
         "mod-competitor-samples",
         "mod-top-interaction-samples",
-        "mod-serp-top-samples",
     ]
     depends_on: List[str] = []
     write_partition = "crawler_output"
@@ -520,8 +517,7 @@ class CrawlerAgent(BaseAgent):
 
         await self.emit_progress(
             task_id,
-            f"开始采集：{len(active_dims)} 个维度 · 目标 {runtime_cfg['target_count']} 条"
-            f" · 爆款比例 {int(runtime_cfg['viral_ratio'] * 100)}%",
+            f"开始采集：{len(active_dims)} 个维度 · 目标 {runtime_cfg['target_count']} 条",
             progress=10,
         )
         # 主动让出事件循环，给上游 cancel 机会命中（stub 降级路径下尤其重要）
@@ -749,58 +745,12 @@ class CrawlerAgent(BaseAgent):
                 await self._write_back_l1([kw], all_notes)
             await self._write_back_l2(all_notes)
 
-        # 阶段 4.3pre.2：构造四源视图，供下游新 Agent（ViralModel / Insight）消费
-        serp_expanded_keyword = str(parsed.get("serp_expanded_keyword") or "").strip()
-        logger.info(f"[SERP] 扩展词 '{serp_expanded_keyword}' | cookies={'Y' if cookies_str else 'N'} | source={source}")
-        await self.emit_log(
-            task_id, "info",
-            f"SERP 扩展词：'{serp_expanded_keyword}'"
-            if serp_expanded_keyword
-            else "SERP 扩展词为空，本次不填充 serp_top"
-        )
+        # 构造三源视图，供下游 Agent（ViralModel / Insight）消费
         sources, all_notes_with_hits = _build_four_source_view(
-            all_notes, samples_by_dim, skip_serp_fallback=bool(serp_expanded_keyword),
+            all_notes, samples_by_dim,
         )
         for n in all_notes_with_hits:
             _backfill_seo_top10_on_dict(n)
-
-        # SERP 扩展词独立搜索（Sheet 6「小红书前 10 屏爆文」）
-        # 使用 LLM 推断出的父类 / 同类词单独搜索，与主词结果隔离
-        if serp_expanded_keyword and cookies_str:
-            serp_notes = await self._fetch_serp_top_notes(
-                task_id, serp_expanded_keyword, cookies_str, runtime_cfg
-            )
-            if serp_notes:
-                sources["serp_top"] = serp_notes
-                # 将 SERP 笔记合并到 all_notes_with_hits，按 note_id 去重。
-                existing_ids = {str(n.get("note_id") or "").strip() for n in all_notes_with_hits}
-                for sn in serp_notes:
-                    nid = str(sn.get("note_id") or "").strip()
-                    if nid and nid not in existing_ids:
-                        all_notes_with_hits.append(sn)
-                        existing_ids.add(nid)
-                await self.emit_log(
-                    task_id, "info",
-                    f"SERP 扩展词搜索完成: '{serp_expanded_keyword}' -> {len(serp_notes)} 条",
-                )
-        # 无独立 SERP 结果时，用 industry / 全库回退填充 serp_top（Sheet6）。
-        if not sources.get("serp_top"):
-            _fill_serp_from_industry(sources, samples_by_dim, all_notes_with_hits)
-
-        # SERP 笔记也要进入 notes_image / notes_video，
-        # 否则 ImageAnalysisAgent / VideoAnalysisAgent 看不到这些样本。
-        _existing_img_ids = {str(n.get("note_id") or "") for n in notes_image}
-        _existing_vid_ids = {str(n.get("note_id") or "") for n in notes_video}
-        for sn in (sources.get("serp_top") or []):
-            nid = str(sn.get("note_id") or "")
-            if sn.get("media_type") == "video":
-                if nid and nid not in _existing_vid_ids:
-                    notes_video.append(sn)
-                    _existing_vid_ids.add(nid)
-            else:
-                if nid and nid not in _existing_img_ids:
-                    notes_image.append(sn)
-                    _existing_img_ids.add(nid)
 
         if source == "live" and cookies_str:
             await self._enrich_competitor_comment_hotwords(
@@ -856,113 +806,6 @@ class CrawlerAgent(BaseAgent):
         )
         return AgentResult(ok=True, produced_modules=self.provides, output=sample)
 
-    async def _fetch_serp_top_notes(
-        self,
-        task_id: str,
-        serp_keyword: str,
-        cookies_str: str,
-        runtime_cfg: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        """使用 SERP 扩展词（父类 / 同类词）单独搜索前 10 条笔记，供 Sheet 6 使用。
-
-        优先查数据库：
-        - 命中 >= 10 条：直接返回，不实时爬取
-        - 命中 0 条：实时爬取，再把结果回写数据库
-        """
-        # ---- 步骤 1：先查数据库（不限时间窗口，>= 10 条即视为命中）----
-        db_notes = await self._try_serp_db_cache(task_id, serp_keyword)
-        if db_notes:
-            # 补 sources_hit / source 标记，DB 行里不带这些运行时字段。
-            for n in db_notes:
-                n.setdefault("sources_hit", ["serp_top"])
-                n.setdefault("source", "【精华】小红书前10屏爆文")
-            db_notes.sort(key=_interaction_sort_key, reverse=True)
-            await self.emit_log(
-                task_id, "info",
-                f"SERP 扩展词命中数据库缓存: '{serp_keyword}' -> {len(db_notes)} 条，跳过实时爬取"
-            )
-            logger.info(f"[SERP] DB 缓存命中: '{serp_keyword}' -> {len(db_notes)} 条")
-            return db_notes
-
-        # ---- 步骤 2: 数据库未命中 -> 实时爬取 ----
-        try:
-            await self.emit_log(
-                task_id, "info",
-                f"SERP 扩展词数据库未命中，开始实时搜索: '{serp_keyword}' (目标 {_SERP_CRAWL_TARGET} 条)"
-            )
-            logger.info(f"[SERP] DB 未命中，开始爬取: '{serp_keyword}' target={_SERP_CRAWL_TARGET}")
-            raw_notes = await _collect_one_dimension(
-                cookies_str,
-                [serp_keyword],
-                target_count=_SERP_CRAWL_TARGET,
-                runtime_cfg=runtime_cfg,
-            )
-            if not raw_notes:
-                await self.emit_log(
-                    task_id, "warn",
-                    f"SERP 扩展词搜索返回 0 条原始笔记: '{serp_keyword}'"
-                )
-                return []
-            # 统一 normalize 为 dict；raw_notes 是 ViralNote 对象，不是 dict。
-            all_normalized: List[Dict[str, Any]] = []
-            for note in raw_notes:
-                normalized = _normalize_note(note, "serp_top", serp_keyword)
-                normalized["sources_hit"] = ["serp_top"]
-                normalized["source"] = "【精华】小红书前10屏爆文"
-                # 确保 source_keywords 包含 serp_keyword，便于后续 DB 查询命中。
-                sk = normalized.get("source_keywords") or []
-                if serp_keyword not in sk:
-                    sk.append(serp_keyword)
-                    normalized["source_keywords"] = sk
-                all_normalized.append(normalized)
-            # 按互动量降序截取前 N。
-            all_normalized.sort(key=_interaction_sort_key, reverse=True)
-            result = all_normalized[:_SERP_TOP_N]
-
-            # ---- 步骤 3：回写数据库（异步，不阻塞返回）----
-            await self._write_back_serp_db(task_id, serp_keyword, result)
-
-            await self.emit_log(
-                task_id, "info",
-                f"SERP 扩展词搜索成功：'{serp_keyword}' -> "
-                f"原始 {len(raw_notes)} 条，取前 {len(result)} 条，已存入数据库"
-            )
-            logger.info(f"[SERP] 搜索成功: '{serp_keyword}' -> raw={len(raw_notes)}, final={len(result)}")
-            return result
-        except Exception as exc:  # noqa: BLE001
-            await self.emit_log(
-                task_id, "warn",
-                f"SERP 扩展词搜索异常（'{serp_keyword}'）：{type(exc).__name__}: {exc}"
-            )
-            logger.error(f"[SERP] 搜索异常: '{serp_keyword}' {type(exc).__name__}: {exc}")
-            return []
-
-    async def _try_serp_db_cache(
-        self,
-        task_id: str,
-        serp_keyword: str,
-    ) -> List[Dict[str, Any]]:
-        """查询 xhs_notes 数据库；使用可配置的时间窗口（默认 90 天）。"""
-        try:
-            from ...core.config import settings
-            from ...infrastructure.storage.notes_vector_store import (
-                get_notes_vector_store,
-            )
-            store = get_notes_vector_store()
-            rows = await store.search_notes(
-                keywords=[serp_keyword],
-                top_k=100,
-                recent_days=settings.serp_cache_days,
-            )
-            if rows:
-                logger.info(
-                    f"[SERP] DB 查询命中: keyword='{serp_keyword}' -> {len(rows)} 条"
-                )
-                return rows
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(f"[SERP] DB 查询异常，降级为实时爬取: {exc}")
-        return []
-
     async def _react_keyword_retry(self, task_id: str, keywords: List[str]) -> List[str]:
         """[ReAct] 关键词采集结果为 0 时，调 LLM 生成 1-2 个同义词重试一次。
 
@@ -1007,32 +850,6 @@ class CrawlerAgent(BaseAgent):
             logger.debug("[ReAct] 关键词扩展失败，跳过重试: {}", exc)
             return []
 
-    async def _write_back_serp_db(
-        self,
-        task_id: str,
-        serp_keyword: str,
-        notes: List[Dict[str, Any]],
-    ) -> None:
-        """把 SERP 爬取结果写入 xhs_notes 数据库。"""
-        if not notes:
-            return
-        try:
-            from ...infrastructure.storage.notes_vector_store import (
-                get_notes_vector_store,
-            )
-            store = get_notes_vector_store()
-            written = await store.add_notes(notes)
-            logger.info(
-                f"[SERP] DB 回写完成: keyword='{serp_keyword}' -> "
-                f"写入 {written}/{len(notes)} 条"
-            )
-            await self.emit_log(
-                task_id, "debug",
-                f"SERP 结果已存入数据库: '{serp_keyword}' -> {written} 条"
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[SERP] DB 回写失败（不影响结果）: {exc}")
-
     async def _run_real_collection(
         self,
         task_id: str,
@@ -1053,13 +870,8 @@ class CrawlerAgent(BaseAgent):
         3. 每组独立超时，单组失败不影响其它组。
         4. 采集参数全部来自 runtime_cfg（前端高级配置），不再读取硬编码 env。
         """
-        # 用户设定的是期望进入分析的数量（分析目标），
-        # 而 viral_collector 内部会按 viral_ratio 截取前 N%，
-        # 所以采集目标需要按 1/viral_ratio 放大，保证过滤后仍能接近用户期望量。
-        # 例：用户设 200、viral_ratio=0.5 → 需采集 400，过滤后约剩 200。
-        _vr = max(0.05, float(runtime_cfg.get("viral_ratio", _VIRAL_RATIO)))
         user_analysis_target = max(5, int(runtime_cfg["target_count"]))
-        per_group_target = max(user_analysis_target, int(user_analysis_target / _vr))
+        per_group_target = user_analysis_target
         eff_kw: Dict[str, List[str]] = (
             keywords_by_dim_override
             if keywords_by_dim_override is not None
@@ -1089,7 +901,7 @@ class CrawlerAgent(BaseAgent):
             task_id,
             "info",
             f"关键词分组（共 {len(keyword_groups)} 组）：{' | '.join(group_desc)}"
-            f" · 采集目标 {per_group_target} 条/组（分析目标 {user_analysis_target}，爆款比例 {int(_vr*100)}%）",
+            f" · 采集目标 {per_group_target} 条/组（分析目标 {user_analysis_target}）",
         )
 
         # 逐组串行采集
@@ -1522,50 +1334,11 @@ class CrawlerAgent(BaseAgent):
             or []
         )
 
-        # 阶段 4.3pre.2：构造四源视图
-        parsed = (input_spec.get("parsed") or {})
-        serp_expanded_keyword = str(parsed.get("serp_expanded_keyword") or "").strip()
-        logger.info(f"[SERP][cache] 扩展词 '{serp_expanded_keyword}' | parsed keys={list(parsed.keys())}")
+        # 构造三源视图
         sources, all_notes_with_hits = _build_four_source_view(
-            all_notes, samples_by_dim, skip_serp_fallback=bool(serp_expanded_keyword),
+            all_notes, samples_by_dim,
         )
         cookies_str = _resolve_cookies_str(_resolve_owner_user_id(task_id))
-
-        # SERP 扩展词独立搜索（缓存路径也触发）
-        if serp_expanded_keyword and cookies_str:
-            serp_notes = await self._fetch_serp_top_notes(
-                task_id, serp_expanded_keyword, cookies_str, runtime_cfg
-            )
-            if serp_notes:
-                sources["serp_top"] = serp_notes
-                existing_ids = {str(n.get("note_id") or "").strip() for n in all_notes_with_hits}
-                for sn in serp_notes:
-                    nid = str(sn.get("note_id") or "").strip()
-                    if nid and nid not in existing_ids:
-                        all_notes_with_hits.append(sn)
-                        existing_ids.add(nid)
-                await self.emit_log(
-                    task_id, "info",
-                    f"SERP 扩展词搜索完成（缓存路径）: '{serp_expanded_keyword}' -> {len(serp_notes)} 条",
-                )
-        # 无独立 SERP 结果时，用 industry / 全库回退填充 serp_top（Sheet6）。
-        if not sources.get("serp_top"):
-            _fill_serp_from_industry(sources, samples_by_dim, all_notes_with_hits)
-
-        # SERP 笔记也要进入 notes_image / notes_video，
-        # 否则 ImageAnalysisAgent / VideoAnalysisAgent 看不到这些样本。
-        _existing_img_ids = {str(n.get("note_id") or "") for n in notes_image}
-        _existing_vid_ids = {str(n.get("note_id") or "") for n in notes_video}
-        for sn in (sources.get("serp_top") or []):
-            nid = str(sn.get("note_id") or "")
-            if sn.get("media_type") == "video":
-                if nid and nid not in _existing_vid_ids:
-                    notes_video.append(sn)
-                    _existing_vid_ids.add(nid)
-            else:
-                if nid and nid not in _existing_img_ids:
-                    notes_image.append(sn)
-                    _existing_img_ids.add(nid)
 
         if cookies_str and _CRAWLER_COMMENT_HW_ENABLED:
             await self._enrich_competitor_comment_hotwords(
@@ -1729,7 +1502,6 @@ async def _collect_one_dimension(
     notes = await collector.search_viral_notes_multi_keywords(
         keywords=keywords[:_MAX_KWS_PER_DIM],
         target_count=target_count,
-        viral_ratio=runtime_cfg.get("viral_ratio", _VIRAL_RATIO),
         note_type=runtime_cfg.get("note_type", 0),
         time_range=runtime_cfg.get("time_range", 0),
         min_sample_count=_MIN_SAMPLE,
@@ -1797,8 +1569,7 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
     """从前端高级配置 `advanced_config` 解析出后端采集参数。
 
     前端 UI（chat-panel.tsx）选项映射：
-    - sample_count: "100" / "200" / "500" -> target_count (int)
-    - viral_ratio: "前50%" / "前30%" / "前20%" -> viral_ratio (0.5 / 0.3 / 0.2)
+    - sample_count: "50" / "80" / "100" -> target_count (int)
     - note_type: "不限" / "视频" / "图文" -> 0 / 1 / 2
     - time_range: "不限" / "一天内" / "一周内" / "半年内" -> 0 / 1 / 2 / 3
     - min_interaction: "不限" / "1000+" / "5000+" / "10000+" -> 0 / 1000 / 5000 / 10000
@@ -1807,13 +1578,12 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
     """
     import re
 
-    # 默认值（env 兜底）
+    # 默认值（env 兜底；与前端 DEFAULT_ADVANCED 对齐：时间范围=半年内，互动量=1000+）
     out: Dict[str, Any] = {
         "target_count": _DEFAULT_TARGET_PER_GROUP,
-        "viral_ratio": _VIRAL_RATIO,
         "note_type": 0,
-        "time_range": 0,
-        "min_interaction": 0,
+        "time_range": 3,    # 半年内
+        "min_interaction": 1000,
     }
 
     if not isinstance(config, dict):
@@ -1827,13 +1597,6 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
                 out["target_count"] = max(5, min(500, value))  # 上限保护 500
         except (ValueError, TypeError):
             pass
-
-    raw_ratio = config.get("viral_ratio")
-    if raw_ratio:
-        m = re.search(r"(\d+)\s*%", str(raw_ratio))
-        if m:
-            pct = int(m.group(1))
-            out["viral_ratio"] = max(0.05, min(1.0, pct / 100.0))
 
     note_type_map = {"不限": 0, "视频": 1, "图文": 2}
     raw_note = config.get("note_type")
@@ -1950,11 +1713,10 @@ def _propagate_enriched_to_dim_samples(
 # 不额外调用 XHS API，而是把现有三维采集结果映射到四源视图，供
 # ViralModelAgent / Insight / CanvasRender 消费新协议。
 #
-# 当前映射规则（三维 -> 四源）：
+# 当前映射规则（三维 -> 三源）：
 # - industry   -> category_top（品类样本）
 # - competitor -> competitor（竞品样本）
 # - brand      -> top_interaction（本品样本）
-# - serp_top   -> SERP / 前十屏结果
 
 def _safe_env_int(key: str, default: int) -> int:
     """避免 .env 里写成空串或非数字时 int() 在 import 阶段炸掉整个 worker。"""
@@ -1978,10 +1740,7 @@ def _competitor_comment_max_notes_from_env() -> int:
     return _safe_env_int("CRAWLER_COMPETITOR_COMMENT_MAX_NOTES", 50)
 
 
-_SERP_TOP_N = _safe_env_int("CRAWLER_SERP_TOP_N", 10)
-_SERP_CRAWL_TARGET = _safe_env_int("CRAWLER_SERP_CRAWL_TARGET", 50)  # 爬取目标数，因爆款比例筛选会减少
 _TOP_INTERACTION_N = _safe_env_int("CRAWLER_TOP_INTERACTION_N", 50)
-_SERP_FALLBACK_OFFSET = _safe_env_int("CRAWLER_SERP_FALLBACK_OFFSET", 5)
 _CRAWLER_COMMENT_HW_ENABLED = os.getenv(
     "CRAWLER_COMPETITOR_COMMENT_HOTWORDS", "true"
 ).strip().lower() in ("1", "true", "yes")
@@ -2007,11 +1766,6 @@ def _published_ts(note: Dict[str, Any]) -> float:
         return datetime.strptime(raw[:10].replace("/", "-"), "%Y-%m-%d").timestamp()
     except ValueError:
         return 0.0
-
-
-def _serp_sort_key(n: Dict[str, Any]) -> Tuple[float, float]:
-    """SERP 视图排序：优先新笔记（发布时间），再按互动打破平局。"""
-    return (_published_ts(n), _interaction_sort_key(n))
 
 
 def _backfill_seo_top10_on_dict(n: Dict[str, Any]) -> None:
@@ -2282,23 +2036,15 @@ def _fetch_comment_hotwords_sync(
 def _build_four_source_view(
     all_notes: List[Dict[str, Any]],
     samples_by_dim: Dict[str, List[Dict[str, Any]]],
-    *,
-    skip_serp_fallback: bool = False,
 ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]:
-    """把三维采集结果映射成“四源视图”。
-
-    Args:
-        skip_serp_fallback: 为 True 时不使用 industry 样本预填 serp_top，
-            交给调用方用独立 SERP 搜索结果覆盖。
+    """把三维采集结果映射成三源视图。
 
     Returns:
-        sources: {"category_top": [...], "competitor": [...], "top_interaction": [...], "serp_top": [...]}
+        sources: {"category_top": [...], "competitor": [...], "top_interaction": [...]}
         all_notes_with_hits: 每条 note 附加 sources_hit: List[str]，标明命中了哪些来源
 
     Note:
-    - top_interaction: 优先 brand 维度样本；brand 为空时回退为全库（all_notes）互动 Top
-    - serp_top: skip_serp_fallback=False 时由 industry 样本按发布时间优先填充，并可做互动偏移切片；
-      skip_serp_fallback=True 时留给调用方用 SERP 扩展词独立搜索覆盖
+    - top_interaction: 优先 brand 维度样本；brand 为空时回退为 industry(category_top) 互动 Top
     - sources_hit 与模板 A 列“来源”标签对齐，可多选
     """
     by_id: Dict[str, Dict[str, Any]] = {}
@@ -2311,7 +2057,6 @@ def _build_four_source_view(
         "category_top": [],
         "competitor": [],
         "top_interaction": [],
-        "serp_top": [],
     }
 
     # industry / competitor 两源（与样本维度一一对应）
@@ -2348,56 +2093,8 @@ def _build_four_source_view(
                 note["sources_hit"].append("top_interaction")
             sources["top_interaction"].append(note)
 
-    if not skip_serp_fallback:
-        industry_notes: List[Dict[str, Any]] = []
-        for note in samples_by_dim.get("industry") or []:
-            nid = note.get("note_id") or f"_noid_{note.get('title', '')[:16]}"
-            industry_notes.append(by_id.get(nid, note))
-        ind_sorted = sorted(industry_notes, key=_serp_sort_key, reverse=True)
-        for note in ind_sorted[:_SERP_TOP_N]:
-            if "serp_top" not in note["sources_hit"]:
-                note["sources_hit"].append("serp_top")
-            sources["serp_top"].append(note)
-
-    if not skip_serp_fallback and not sources["serp_top"]:
-        sorted_all = sorted(all_notes, key=_interaction_sort_key, reverse=True)
-        start = min(_SERP_FALLBACK_OFFSET, max(0, len(sorted_all) - 1))
-        slice_notes = sorted_all[start : start + _SERP_TOP_N]
-        if not slice_notes:
-            slice_notes = sorted_all[:_SERP_TOP_N]
-        for note in slice_notes:
-            if "serp_top" not in note["sources_hit"]:
-                note["sources_hit"].append("serp_top")
-            sources["serp_top"].append(note)
-
     return sources, list(by_id.values())
 
-
-def _fill_serp_from_industry(
-    sources: Dict[str, List[Dict[str, Any]]],
-    samples_by_dim: Dict[str, List[Dict[str, Any]]],
-    all_notes: List[Dict[str, Any]],
-) -> None:
-    """当 SERP 扩展词搜索返回空（或没有扩展词）时，用 industry 样本回退填充 serp_top。"""
-    industry_notes = list(samples_by_dim.get("industry") or [])
-    if industry_notes:
-        ind_sorted = sorted(industry_notes, key=_serp_sort_key, reverse=True)
-        for note in ind_sorted[:_SERP_TOP_N]:
-            note.setdefault("sources_hit", [])
-            if "serp_top" not in note["sources_hit"]:
-                note["sources_hit"].append("serp_top")
-            sources["serp_top"].append(note)
-    if not sources.get("serp_top") and all_notes:
-        sorted_all = sorted(all_notes, key=_interaction_sort_key, reverse=True)
-        start = min(_SERP_FALLBACK_OFFSET, max(0, len(sorted_all) - 1))
-        slice_notes = sorted_all[start : start + _SERP_TOP_N]
-        if not slice_notes:
-            slice_notes = sorted_all[:_SERP_TOP_N]
-        for note in slice_notes:
-            note.setdefault("sources_hit", [])
-            if "serp_top" not in note["sources_hit"]:
-                note["sources_hit"].append("serp_top")
-            sources["serp_top"].append(note)
 
 
 def _build_stub(
@@ -2488,6 +2185,10 @@ def _resolve_cookies_str(owner_user_id: str) -> str:
 
     resolved = get_credential_resolver().resolve(owner_user_id)
     if resolved.found:
+        logger.info(
+            f"[cookie] owner={owner_user_id!r} source={resolved.source} "
+            f"path={resolved.cookies_path} len={len(resolved.cookies_str)}"
+        )
         return resolved.cookies_str
 
     # u_* 用户未绑定 XHS 账号时，抛出明确错误，禁止使用空 cookie 继续爬取

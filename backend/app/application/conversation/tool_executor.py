@@ -69,6 +69,8 @@ class ConversationToolExecutor:
         ctx.status_events.append({"type": "tool_selected", "tool": call.name, "arguments": call.arguments})
         if call.name == "start_xhs_analysis":
             return await self._start_xhs_analysis(call, ctx)
+        if call.name == "start_comment_analysis":
+            return await self._start_comment_analysis(call, ctx)
         if call.name == "regenerate_canvas_module":
             return await self._regenerate_canvas_module(call, ctx)
         if call.name == "answer_with_knowledge":
@@ -134,7 +136,6 @@ class ConversationToolExecutor:
             "note_type": ctx.intent.slots.get("note_type"),
             "min_interaction": ctx.intent.slots.get("min_interaction"),
             "sample_count": ctx.intent.slots.get("sample_count"),
-            "viral_ratio": ctx.intent.slots.get("viral_ratio"),
         }
         for field_key, nl_value in nl_config_slots.items():
             if not nl_value:
@@ -143,10 +144,6 @@ class ConversationToolExecutor:
             if field_key == "sample_count":
                 # sample_count 默认值是 "50"，只有 UI 是默认 50 时才用 NL 值覆盖
                 if ui_value in _DEFAULT_CONFIG_VALUES or ui_value == "50":
-                    task_advanced_config[field_key] = nl_value
-            elif field_key == "viral_ratio":
-                # viral_ratio 默认值是 "前50%"，只有 UI 是默认时才用 NL 值覆盖
-                if ui_value in _DEFAULT_CONFIG_VALUES or ui_value == "前50%":
                     task_advanced_config[field_key] = nl_value
             else:
                 # 其他字段只有 UI 值是默认（不限/空）时才用 NL 值覆盖
@@ -272,6 +269,119 @@ class ConversationToolExecutor:
         )
         message.task_handoff = handoff
         return message
+
+    async def _start_comment_analysis(
+        self,
+        call: ConversationToolCall,
+        ctx: ConversationToolExecutionContext,
+    ) -> ChatMessage:
+        """创建评论分析任务并在后台启动 comment_pipeline。"""
+        args = call.arguments
+        keywords = self._clean_list(args.get("keywords")) or ctx.intent.extracted_keywords
+        if not keywords:
+            return self._ask_clarification(
+                ConversationToolCall(
+                    name="ask_clarification",
+                    arguments={
+                        "question": "你想分析哪个关键词下的评论？请直接说，例如：分析小红书防晒评论区。",
+                        "missing_fields": ["keywords"],
+                        "pending_tool_name": "start_comment_analysis",
+                        "pending_arguments": args,
+                    },
+                    confidence=call.confidence,
+                    reason="missing keywords",
+                ),
+                ctx,
+            )
+
+        try:
+            cookie_health = self.cookie_health_service.get_cookie_health(
+                current_user=ctx.current_user, force_check=False
+            )
+        except Exception as exc:
+            logger.warning("Comment analysis cookie health check failed: {}", exc)
+            return self._assistant(
+                ctx,
+                f"启动评论分析任务前检查小红书登录态失败：{exc}",
+                debug={"tool_name": call.name, "model_error_code": ErrorCode.SYSTEM_INTERNAL.value},
+            )
+
+        if cookie_health.get("status") == "expired":
+            return self._assistant(
+                ctx,
+                f"小红书 Cookie 已过期：{cookie_health.get('message', '请重新登录')}。请重新登录后再发起评论分析。",
+                debug={"tool_name": call.name, "cookie_health": cookie_health},
+            )
+
+        top_notes = int(args.get("top_notes") or 0)   # 0 = 不限
+        top_comments = int(args.get("top_comments_per_note") or 5)
+
+        result = self.task_service.create_task(
+            owner_user_id=ctx.owner_user_id,
+            raw_input=ctx.content,
+            keywords=keywords,
+            advanced_config={
+                "source": "conversation",
+                "conversation_id": ctx.conversation_id,
+                "top_notes": top_notes,
+                "top_comments_per_note": top_comments,
+            },
+            idempotency_key=(
+                f"conversation:{ctx.conversation_id}:message:{ctx.user_message_id}:comment_analysis"
+            ),
+            task_type="comment_analysis",
+        )
+
+        if result.created:
+            from ..comment_pipeline import run_comment_pipeline
+            await self.task_event_bus.publish_event(
+                task_id=result.record.task_id,
+                type=TaskEventType.TASK_STATUS,
+                payload={"status": result.record.status.value, "progress": result.record.progress},
+            )
+            asyncio.create_task(
+                run_comment_pipeline(
+                    task_id=result.record.task_id,
+                    keywords=keywords,
+                    raw_input=ctx.content,
+                    top_notes=top_notes,
+                    top_comments_per_note=top_comments,
+                )
+            )
+
+        ctx.store.update_conversation(
+            ctx.conversation_id,
+            active_task_id=result.record.task_id,
+            metadata_patch={"pending_tool_decision": None},
+        )
+        from ...domain.conversation import TaskHandoff
+        handoff = TaskHandoff(
+            task_id=result.record.task_id,
+            status=result.record.status.value,
+            raw_input=ctx.content,
+            keywords=keywords,
+            canvas_url_hint=None,
+        )
+        kw_str = "、".join(keywords)
+        msg = self._assistant(
+            ctx,
+            (
+                f"好的，已为「{kw_str}」启动**评论分析任务**（ID: `{result.record.task_id}`）。\n"
+                f"正在采集{'全部' if not top_notes else f' Top {top_notes} '}条笔记，每条笔记取 Top {top_comments} 条高赞评论。\n"
+                f"分析完成后会自动推送下载链接，稍等片刻。"
+            ),
+            linked_task_id=result.record.task_id,
+            debug={
+                "tool_name": call.name,
+                "tool_status": "started",
+                "idempotent_hit": not result.created,
+                "keywords": keywords,
+                "top_notes": top_notes,
+                "top_comments_per_note": top_comments,
+            },
+        )
+        msg.task_handoff = handoff
+        return msg
 
     async def _regenerate_canvas_module(
         self,

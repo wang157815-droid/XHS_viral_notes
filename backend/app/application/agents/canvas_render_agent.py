@@ -52,7 +52,6 @@ _MODULE_REGISTRATIONS: List[ModuleNodeSpec] = [
     ModuleNodeSpec(module_id="mod-overview-stats", provides_by="CrawlerAgent"),
     ModuleNodeSpec(module_id="mod-competitor-samples", provides_by="CrawlerAgent"),
     ModuleNodeSpec(module_id="mod-top-interaction-samples", provides_by="CrawlerAgent"),
-    ModuleNodeSpec(module_id="mod-serp-top-samples", provides_by="CrawlerAgent"),
 
     # 矩阵层(ViralModelAgent 驱动,消费 multimodal.annotations + crawler.all_notes)
     ModuleNodeSpec(
@@ -61,7 +60,6 @@ _MODULE_REGISTRATIONS: List[ModuleNodeSpec] = [
         depends_on=[
             "mod-competitor-samples",
             "mod-top-interaction-samples",
-            "mod-serp-top-samples",
         ],
     ),
 
@@ -74,7 +72,6 @@ _MODULE_REGISTRATIONS: List[ModuleNodeSpec] = [
     ModuleNodeSpec(
         module_id="mod-seo-insights",
         provides_by="InsightAgent",
-        # 优先依赖竞品样本；无竞品时也可由 top_interaction / serp_top 驱动
         depends_on=["mod-viral-model-matrix"],
     ),
 
@@ -107,8 +104,6 @@ _LAYER3_SPLIT_SPECS: Tuple[Tuple[str, str, str, str], ...] = (
         "top_interaction",
         "video",
     ),
-    ("mod-serp-top-samples-image", "样本 · SERP 前 10 屏 · 图文", "serp_top", "image"),
-    ("mod-serp-top-samples-video", "样本 · SERP 前 10 屏 · 视频", "serp_top", "video"),
 )
 
 _DRAFT_SKELETON_FIELDS = [
@@ -213,7 +208,7 @@ def _build_overview_stats(
 
     source_breakdown = [
         {"source_type": src, "count": len(_as_note_list(sources.get(src)))}
-        for src in ("competitor", "top_interaction", "serp_top")
+        for src in ("competitor", "top_interaction")
     ]
 
     direction_counter: Counter = Counter()
@@ -305,7 +300,6 @@ def _build_viral_model_matrix(
     dep = sample_modules_dep or [
         "mod-competitor-samples",
         "mod-top-interaction-samples",
-        "mod-serp-top-samples",
     ]
     return CanvasModule(
         module_id="mod-viral-model-matrix",
@@ -335,7 +329,7 @@ def _build_sample_module(
     notes_override: Optional[List[Dict[str, Any]]] = None,
     media_kind: Optional[str] = None,
 ) -> CanvasModule:
-    """样本类模块统一构造器(category_top / competitor / top_interaction / serp_top)。"""
+    """样本类模块统一构造器(category_top / competitor / top_interaction)。"""
     sources = crawler.get("sources") or {}
     if notes_override is not None:
         raw_notes = list(notes_override)[:_SAMPLE_ROW_LIMIT]
@@ -568,11 +562,6 @@ def _build_layer3_sample_modules(
                 "样本 · 互动 TOP",
                 "top_interaction",
             ),
-            (
-                "mod-serp-top-samples",
-                "样本 · SERP 前 10 屏",
-                "serp_top",
-            ),
         )
         for mid, title, source_key in triple:
             raw = _as_note_list(sources.get(source_key))
@@ -666,9 +655,6 @@ class CanvasRenderAgent(BaseAgent):
         "mod-top-interaction-samples",
         "mod-top-interaction-samples-image",
         "mod-top-interaction-samples-video",
-        "mod-serp-top-samples",
-        "mod-serp-top-samples-image",
-        "mod-serp-top-samples-video",
         "mod-viral-model-matrix",
         "mod-pain-points",
         "mod-seo-insights",

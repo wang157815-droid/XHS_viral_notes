@@ -57,6 +57,7 @@ class TaskService:
         competitor_keywords: Optional[List[str]] = None,
         advanced_config: Optional[Dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
+        task_type: str = "viral_analysis",
     ) -> CreateTaskResult:
         if idempotency_key:
             existing = task_repository.find_by_idempotency(idempotency_key)
@@ -75,10 +76,11 @@ class TaskService:
                 "keywords": keywords or [],
                 "competitor_keywords": comp_kw,
                 "advanced_config": advanced_config or {},
-            "_trace_id": get_trace_id(),
+                "_trace_id": get_trace_id(),
             },
             idempotency_key=idempotency_key,
             keywords=keywords or [],
+            task_type=task_type,
         )
         task_repository.create(record)
         task_context_store.create(task_id, input_spec=record.input_spec)

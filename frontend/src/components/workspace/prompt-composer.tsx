@@ -496,9 +496,9 @@ export function PromptComposer({
               </div>
             </>
           ) : (
-            <div className="flex w-full items-end gap-2 py-1">
+            <div className="flex w-full items-center gap-2 py-1">
               <div className="flex h-10 shrink-0 items-center">{plusBlock}</div>
-              <div className="relative min-h-10 min-w-0 flex-1">
+              <div className="relative min-h-10 min-w-0 flex-1 flex items-center">
                 <KnowledgeMentionList
                   open={kbMention !== null}
                   placement="below"
@@ -519,7 +519,7 @@ export function PromptComposer({
                   onKeyUp={(e) => setInputCaret(e.currentTarget.selectionStart ?? value.length)}
                   disabled={disabled || busy}
                   placeholder="请输入分析目标，例如：分析近半年防脱精华的视频类爆款笔记…"
-                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent py-[9px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="textarea-scrollbar min-h-[40px] w-full min-w-0 resize-none overflow-hidden bg-transparent pt-[10px] pb-[8px] text-[15px] leading-[1.6] text-obsidian outline-none placeholder:text-obsidian/35 disabled:cursor-not-allowed disabled:opacity-60"
                   onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                     const el = e.currentTarget;
                     const c = el.selectionStart ?? value.length;

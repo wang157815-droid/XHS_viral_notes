@@ -168,7 +168,6 @@ class ViralNoteCollector:
         self,
         keywords: List[str],
         target_count: int = 100,
-        viral_ratio: float = 0.5,
         note_type: int = 0,
         time_range: int = 0,
         min_sample_count: int = 50,
@@ -187,7 +186,6 @@ class ViralNoteCollector:
         Args:
             keywords: 搜索关键词列表（最多5个）
             target_count: 目标爬取总数量
-            viral_ratio: 爆款比例
             note_type: 笔记类型
             time_range: 时间范围
             min_sample_count: 最低样本量要求
@@ -201,22 +199,18 @@ class ViralNoteCollector:
         self.search_keywords = keywords  # 保存多关键词列表
 
         # 智能调整参数：确保 min_sample_count 不超过合理范围
-        expected_analysis = int(target_count * viral_ratio)
         original_min_sample = min_sample_count
 
         if min_sample_count > target_count:
             min_sample_count = target_count
             logger.info(f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (不超过目标数量)")
-        elif min_sample_count > expected_analysis:
-            min_sample_count = max(expected_analysis, 10)  # 至少保留10条
-            logger.info(f"📊 智能调整: 最低样本量 {original_min_sample} → {min_sample_count} (适配预估分析量)")
 
         logger.info(f"开始多关键词采集: {keywords}")
-        logger.info(f"目标数量: {target_count}, 爆款比例: {viral_ratio}, 最低样本量: {min_sample_count}")
+        logger.info(f"目标数量: {target_count}, 最低样本量: {min_sample_count}")
 
         # 计算每个关键词的目标数量
         target_per_keyword = self._calculate_target_per_keyword(
-            len(keywords), target_count, viral_ratio, min_sample_count
+            len(keywords), target_count, min_sample_count
         )
 
         # 存储所有笔记（按 note_id 去重，记录来源关键词）
@@ -322,9 +316,7 @@ class ViralNoteCollector:
         # 保留筛选前的全部笔记（供自动补采阶段1使用）
         self._all_notes_before_filter = viral_notes.copy()
 
-        # 应用爆款比例筛选
-        viral_count = max(1, int(len(viral_notes) * viral_ratio))
-        result = viral_notes[:viral_count]
+        result = viral_notes
 
         # 校验样本量
         if len(result) < min_sample_count:
@@ -347,7 +339,6 @@ class ViralNoteCollector:
         self,
         keyword_count: int,
         total_target: int,
-        viral_ratio: float,
         min_sample_count: int
     ) -> int:
         """
@@ -361,10 +352,9 @@ class ViralNoteCollector:
         # 基础分配：总目标 / 关键词数
         base_per_keyword = total_target // keyword_count
 
-        # 需要的原始数量（考虑筛选比例和去重损耗）
-        raw_needed = min_sample_count / viral_ratio
+        # 需要的原始数量（考虑去重损耗）
         safety_factor = 1.3  # 考虑30%去重损耗
-        ideal_per_keyword = int((raw_needed * safety_factor) / keyword_count)
+        ideal_per_keyword = int((min_sample_count * safety_factor) / keyword_count)
 
         # 计算上限（不超过用户设定总目标的1.5倍分摊）
         upper_limit = max(int(base_per_keyword * 1.5), base_per_keyword)
@@ -377,8 +367,8 @@ class ViralNoteCollector:
 
         # 如果计算结果仍不足以满足样本量需求，记录警告
         estimated_total = result * keyword_count
-        estimated_after_filter = int(estimated_total * viral_ratio * 0.7)  # 考虑去重
-        if estimated_after_filter < min_sample_count:
+        estimated_after_dedup = int(estimated_total * 0.7)  # 考虑去重
+        if estimated_after_dedup < min_sample_count:
             logger.warning(
                 f"⚠️ 当前配置预估样本量({estimated_after_filter})不足{min_sample_count}，"
                 f"建议增加目标数量或减少关键词数量"
@@ -475,7 +465,6 @@ class ViralNoteCollector:
         self,
         query: str,
         target_count: int = 100,
-        viral_ratio: float = 0.5,
         note_type: int = 0,  # 0:不限 1:视频 2:图文
         time_range: int = 0,  # 0:不限 1:一天内 2:一周内 3:半年内
         progress_callback: Optional[Callable[[int, str], None]] = None
@@ -489,7 +478,6 @@ class ViralNoteCollector:
         Args:
             query: 搜索关键词
             target_count: 目标爬取总数量（三维度总和）
-            viral_ratio: 爆款比例 (0.5=前1/2, 0.33=前1/3, 0.25=前1/4)
             note_type: 笔记类型
             time_range: 时间范围
             progress_callback: 进度回调函数
@@ -500,7 +488,7 @@ class ViralNoteCollector:
         self.search_keyword = query
 
         logger.info(f"开始并行多维度爬取: {query}")
-        logger.info(f"目标数量: {target_count}, 爆款比例: {viral_ratio}")
+        logger.info(f"目标数量: {target_count}")
 
         # 三个爬取维度
         dimensions = [
@@ -604,13 +592,8 @@ class ViralNoteCollector:
         # 保留筛选前的全部笔记（供自动补采阶段1使用）
         self._all_notes_before_filter = viral_notes.copy()
 
-        # 按比例截取爆款
-        viral_count = max(1, int(len(viral_notes) * viral_ratio))
-
-        logger.info(f"按比例 {viral_ratio} 筛选出 {viral_count} 篇爆款笔记")
-
         if progress_callback:
-            progress_callback(100, f"完成！共{len(viral_notes)}篇，筛选出{viral_count}篇爆款")
+            progress_callback(100, f"完成！共采集 {len(viral_notes)} 篇笔记")
 
         self.collected_notes = viral_notes[:viral_count]
         return self.collected_notes
@@ -618,13 +601,20 @@ class ViralNoteCollector:
     async def _search_notes_async(self, **kwargs) -> List[Dict]:
         """异步搜索笔记（封装同步方法）"""
         loop = asyncio.get_event_loop()
+        _dbg_query = kwargs['query']
+        _dbg_page = kwargs['page']
+        _dbg_sort = kwargs.get('sort_type', 2)
+        logger.info(
+            f"[search_note] query={_dbg_query!r} page={_dbg_page} sort={_dbg_sort} "
+            f"cookie_len={len(self.cookies_str)}"
+        )
         result = await loop.run_in_executor(
             None,
             lambda: self.client.search_note(
-                query=kwargs['query'],
-                cookies_str=self.cookies_str,  # 添加 cookies_str 参数
-                page=kwargs['page'],
-                sort_type_choice=kwargs.get('sort_type', 2),
+                query=_dbg_query,
+                cookies_str=self.cookies_str,
+                page=_dbg_page,
+                sort_type_choice=_dbg_sort,
                 note_type=kwargs.get('note_type', 0),
                 note_time=kwargs.get('time_range', 0),
                 note_range=0,
@@ -637,9 +627,33 @@ class ViralNoteCollector:
         if isinstance(result, tuple) and len(result) == 3:
             success, msg, res_json = result
             logger.info(f"搜索API返回: success={success}, msg={msg[:100] if msg else 'None'}")
+            # 诊断：打印完整顶层结构
+            if res_json:
+                _top_keys = list(res_json.keys())
+                logger.info(f"搜索响应顶层keys={_top_keys} success={success}")
+                # 如有 code / subCode 等字段也打印
+                for _k in ("code", "subCode", "errorCode", "error", "loginRequired"):
+                    if _k in res_json:
+                        logger.warning(f"  └ {_k}={res_json[_k]!r}")
             if success and res_json and 'data' in res_json:
+                # 诊断：打印 data 层级的 key 和 items 原始数量
+                _raw_data = res_json.get('data') or {}
+                _raw_items = _raw_data.get('items', [])
+                logger.info(
+                    f"搜索data结构: keys={list(_raw_data.keys())} "
+                    f"items原始数量={len(_raw_items)} "
+                    f"has_more={_raw_data.get('has_more')} "
+                    + (f"首条keys={list(_raw_items[0].keys())}" if _raw_items else "items为空")
+                )
+                if not _raw_data:
+                    logger.warning(
+                        "⚠️ XHS 返回 data:{} (软封禁/soft-block)。"
+                        "常见原因: cookie 缺少 web_session 字段、web_session 已过期、"
+                        "或当前 IP 被 XHS 临时限流。"
+                        "解决方案: 到「设置→数据源授权」重新粘贴包含 web_session 的完整 cookie。"
+                    )
                 # 返回笔记列表
-                items = res_json.get('data', {}).get('items', [])
+                items = _raw_items
                 notes = []
                 non_note_count = 0
                 for item in items:
@@ -1256,7 +1270,6 @@ class ViralNoteCollector:
         search_mode: str = "ratio",
         # 比例模式参数
         target_count: int = 100,
-        viral_ratio: float = 0.5,
         min_sample_count: int = 50,
         # 阈值模式参数
         min_interaction: int = 5000,
@@ -1277,7 +1290,6 @@ class ViralNoteCollector:
             keywords: 搜索关键词列表
             search_mode: 搜索模式（ratio/threshold）
             target_count: 目标采集数量（比例模式）
-            viral_ratio: 爆款比例（比例模式）
             min_sample_count: 最低样本量（比例模式）
             min_interaction: 互动量阈值（阈值模式）
             max_collect_count: 最大采集数量（阈值模式）
@@ -1303,7 +1315,6 @@ class ViralNoteCollector:
             return await self.search_viral_notes_multi_keywords(
                 keywords=keywords,
                 target_count=target_count,
-                viral_ratio=viral_ratio,
                 note_type=note_type,
                 time_range=time_range,
                 min_sample_count=min_sample_count,
