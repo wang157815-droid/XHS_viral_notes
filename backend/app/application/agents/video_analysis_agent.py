@@ -59,8 +59,10 @@ from .prompts import prompt_registry
 
 _MAX_VIDEOS = int(os.getenv("VIDEO_ANALYSIS_MAX_COUNT", "30"))
 _HARD_MAX = int(os.getenv("VIDEO_ANALYSIS_HARD_MAX", "80"))
-_CONCURRENCY = int(os.getenv("VIDEO_ANALYSIS_CONCURRENCY", "5"))
+_CONCURRENCY = int(os.getenv("VIDEO_ANALYSIS_CONCURRENCY", "2"))
 _PER_VIDEO_TIMEOUT = int(os.getenv("VIDEO_ANALYSIS_PER_TIMEOUT", "60"))
+# 限流重试退避基准（秒），遇到 429 后等待 _RATE_LIMIT_BACKOFF * (attempt+1)
+_RATE_LIMIT_BACKOFF = float(os.getenv("VIDEO_ANALYSIS_RATE_LIMIT_BACKOFF", "10"))
 
 
 # 标注字段名(对齐 ViralNote 的 7 个标注字段)
@@ -312,7 +314,14 @@ class VideoAnalysisAgent(BaseAgent):
                 if attempt == 1:
                     await self.emit_log(task_id, "warn", f"视频 {note_id} 分析超时")
             except ModelInvocationError as exc:
-                if attempt == 1:
+                if exc.code == "MODEL_RATE_LIMIT":
+                    wait = _RATE_LIMIT_BACKOFF * (attempt + 1)
+                    await self.emit_log(
+                        task_id, "info",
+                        f"视频 {note_id} 触发限流，{wait:.0f}s 后重试(attempt={attempt})"
+                    )
+                    await asyncio.sleep(wait)
+                elif attempt == 1:
                     await self.emit_log(
                         task_id, "warn", f"视频 {note_id} 模型降级:{exc.code}"
                     )
