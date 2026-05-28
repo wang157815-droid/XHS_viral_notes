@@ -65,6 +65,18 @@ class ModelGateway:
         self.profiles = cfg.profiles
         self.providers = cfg.providers
         self._audit_log: List[ModelAuditRecord] = []
+        # 全局 per-modality 并发信号量：所有 agent 共享，统一限制对同类模型的并发调用数
+        # 避免 ImageAgent(3) + VideoAgent(2) 同时打爆 multimodal API 的 RPM 限额
+        import os as _os
+        _mm_limit = int(_os.getenv("GATEWAY_MULTIMODAL_CONCURRENCY", "2"))
+        _text_limit = int(_os.getenv("GATEWAY_TEXT_CONCURRENCY", "10"))
+        self._modality_semaphores: Dict[str, asyncio.Semaphore] = {
+            "multimodal": asyncio.Semaphore(_mm_limit),
+            "text": asyncio.Semaphore(_text_limit),
+        }
+        logger.info(
+            f"[ModelGateway] 全局并发限制: multimodal={_mm_limit}, text={_text_limit}"
+        )
 
     async def chat(
         self,
@@ -84,9 +96,16 @@ class ModelGateway:
         profile, provider = self._resolve(agent_id, modality)
         params = self._merge_params(profile, overrides)
 
+        # 全局并发限制：同 modality 的所有 agent 共享信号量，防止集中爆 RPM
+        semaphore = self._modality_semaphores.get(modality)
+
         start = time.monotonic()
         try:
-            content, usage = await self._invoke_chat(provider, profile, messages, params)
+            if semaphore:
+                async with semaphore:
+                    content, usage = await self._invoke_chat(provider, profile, messages, params)
+            else:
+                content, usage = await self._invoke_chat(provider, profile, messages, params)
             duration_ms = int((time.monotonic() - start) * 1000)
             self._record_audit(
                 task_id=task_id,
@@ -343,10 +362,17 @@ class ModelGateway:
                 )
                 choice = response.choices[0]
                 content = (choice.message.content or "").strip() if choice.message else ""
-                # 注意：对于 DeepSeek-v4-pro 等思考型模型，reasoning_content 是思考过程，
-                # content 才是正式输出（JSON）。不应将 reasoning_content 作为 content 兜底，
-                # 否则会把思考文字当作 LLM 输出返回，导致 JSON 解析失败。
-                # 若 content 为空，保持空字符串，上层调用方应重试或跳过。
+                # 对于思考型模型（如 deepseek-v4-pro），若未禁用 thinking 且 max_tokens 不足，
+                # thinking tokens 会耗尽 budget 导致 content 为空。
+                # 调用方应通过 extra_body={"enable_thinking": False} 关闭思考模式。
+                # reasoning_content 是中间思维链，不作为 content 兜底，避免把思考文字当输出。
+                if not content and choice.message:
+                    rc = getattr(choice.message, "reasoning_content", None)
+                    if rc:
+                        logger.warning(
+                            f"[ModelGateway] content 为空但 reasoning_content 非空（模型={profile.model_name}），"
+                            "请在调用时传 extra_body={{\"enable_thinking\": False}} 关闭思考模式"
+                        )
                 usage = {
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
                     "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
