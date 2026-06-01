@@ -173,10 +173,18 @@ class XhsCredentialResolver:
     # ----- 内部辅助 -----
 
     def _try_live_cookie(self, owner_user_id: Optional[str]) -> Optional[ResolvedCookie]:
-        """尝试从活浏览器取最新 cookie（同步包装，内部用 asyncio.run_coroutine_threadsafe）。
+        """尝试从活浏览器取最新 cookie。
 
-        仅当 LIVE_COOKIE_ENABLED=true 且能找到 username/cookies_path 时生效。
+        仅当 LIVE_COOKIE_ENABLED=true 且 browser_data/<username> 存在时生效。
         任何失败均静默返回 None，调用方继续走后续解析步骤。
+
+        死锁修复：原先用 run_coroutine_threadsafe(loop) + future.result(timeout=35)，
+        当 resolve() 被 async 函数同步调用时，当前线程就是事件循环线程，
+        阻塞它会导致协程永远无法执行，最终耗尽 35s 超时。
+        现改为：
+          1. 同步前置检查 browser_data/<username> 是否存在，不存在立即返回 None；
+          2. 若存在，用 ThreadPoolExecutor 在独立线程内运行新的 asyncio.run，
+             彻底与当前事件循环隔离，不再死锁。
         """
         import os as _os
         if _os.environ.get("LIVE_COOKIE_ENABLED", "false").lower() not in ("1", "true", "yes"):
@@ -187,26 +195,35 @@ class XhsCredentialResolver:
             return None
 
         try:
-            # 找到 username 和 cookies_path
             username, cookies_path_str = self._resolve_username_and_cookies_path(owner)
             if not username or not cookies_path_str:
                 return None
 
+            # ── 同步前置检查：browser_data/<username> 不存在则立即跳过 ──
+            # 避免进入异步流程白耗 35s 超时
+            browser_dir = REPO_ROOT / "browser_data" / username
+            if not browser_dir.exists():
+                logger.debug(
+                    "[xhs_auth] browser_data/{} 不存在，跳过 LiveCookie（请先扫码登录）",
+                    username,
+                )
+                return None
+
             cookies_path = _resolve_path(cookies_path_str)
 
-            # 异步调用：在当前事件循环中 await，或新建事件循环
             import asyncio as _asyncio
-            from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
+            import concurrent.futures
+
+            def _run_in_new_loop() -> Optional[str]:
+                """在独立线程中创建全新事件循环运行协程，与外部 loop 完全隔离。"""
+                return _asyncio.run(_live_get(username, cookies_path))
 
             try:
-                loop = _asyncio.get_running_loop()
-                # 已有事件循环（async 上下文）：用 run_coroutine_threadsafe 在新线程跑
-                import concurrent.futures
-                future = _asyncio.run_coroutine_threadsafe(
-                    _live_get(username, cookies_path),
-                    loop,
-                )
-                cookie_str = future.result(timeout=35)
+                _asyncio.get_running_loop()
+                # 当前处于事件循环线程：必须在独立线程运行，否则死锁
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
+                    fut = _pool.submit(_run_in_new_loop)
+                    cookie_str = fut.result(timeout=35)
             except RuntimeError:
                 # 无事件循环（同步上下文）：直接 asyncio.run
                 cookie_str = _asyncio.run(_live_get(username, cookies_path))
