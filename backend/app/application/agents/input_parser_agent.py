@@ -219,6 +219,7 @@ class InputParserAgent(BaseAgent):
         overrides = {
             "temperature": 0.2,
             "max_tokens": 800,
+            "response_format": {"type": "json_object"},
         }
         for attempt in range(1, max_attempts + 1):
             try:

@@ -232,7 +232,9 @@ class ImageAnalysisAgent(BaseAgent):
                         task_id=task_id,
                         overrides={
                             "temperature": 0.2,
-                            "max_tokens": 400,
+                            # MiMo 使用 max_completion_tokens（Qwen/DeepSeek 也接受此字段）
+                            "max_tokens": None,
+                            "max_completion_tokens": 400,
                             "response_format": {"type": "json_object"},
                         },
                     ),

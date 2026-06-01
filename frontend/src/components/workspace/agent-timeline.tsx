@@ -10,6 +10,14 @@ interface AgentTimelineProps {
 }
 
 const XHS_AUTH_NOT_BOUND_CODE = "AUTH_XHS_NOT_BOUND";
+const XHS_CAPTCHA_CODE = "CRAWLER_CAPTCHA";
+const XHS_COOKIE_EXPIRED_CODE = "AUTH_COOKIE_EXPIRED";
+
+const XHS_AUTH_REQUIRED_CODES = new Set([
+  XHS_AUTH_NOT_BOUND_CODE,
+  XHS_CAPTCHA_CODE,
+  XHS_COOKIE_EXPIRED_CODE,
+]);
 
 export const AGENT_STEPS: Array<{
   id: string;
@@ -124,7 +132,7 @@ export function AgentTimeline({ state, taskId }: AgentTimelineProps) {
         <div className="mt-2 rounded-xl border border-[#E8CFC8] bg-[#FFFBFA] px-3 py-2.5 text-[12px] leading-relaxed text-[#9A5558]">
           <div className="font-semibold">{state.error.code}</div>
           <div>{state.error.message || "任务执行失败，请查看日志后重试。"}</div>
-          {state.error.code === XHS_AUTH_NOT_BOUND_CODE ? (
+          {XHS_AUTH_REQUIRED_CODES.has(state.error.code) ? (
             <a
               href="/settings#xhs-credential"
               className="mt-2 inline-flex rounded-full bg-obsidian px-3 py-1.5 text-[11px] font-semibold text-papyrus"
@@ -407,7 +415,7 @@ function VideoAsyncBadge({ value }: { value: TaskStreamState["videoAsyncState"] 
 
 function pickErrorStepId(state: TaskStreamState): string | null {
   if (state.status !== "failed" && !state.error) return null;
-  if (state.error?.code === XHS_AUTH_NOT_BOUND_CODE) return "XhsAuthAgent";
+  if (state.error?.code && XHS_AUTH_REQUIRED_CODES.has(state.error.code)) return "XhsAuthAgent";
   const lastAgentId = state.logs
     .slice()
     .reverse()

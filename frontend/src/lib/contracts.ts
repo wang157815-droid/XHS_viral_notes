@@ -322,3 +322,7 @@ export interface ApiError {
 }
 
 export type ApiResponse<T = Record<string, unknown>> = ApiSuccess<T> | ApiError;
+
+// XHS 反风控错误码常量（与 backend/app/domain/error_codes.py 保持一致）
+export const XHS_CAPTCHA_CODE = "CRAWLER_CAPTCHA";
+export const XHS_COOKIE_EXPIRED_CODE = "AUTH_COOKIE_EXPIRED";

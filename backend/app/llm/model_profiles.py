@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from threading import RLock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -27,6 +27,8 @@ class ModelProfile:
     timeout_seconds: int = 60
     max_retries: int = 2
     extra_params: Dict[str, Any] = field(default_factory=dict)
+    # 备用 profile 列表：主供应商失败时依次尝试（仅 chat/multimodal 生效）
+    fallback_profile_ids: List[str] = field(default_factory=list)
 
 
 class ModelProfileRegistry:
@@ -51,6 +53,34 @@ class ModelProfileRegistry:
         )
 
         multimodal_model = os.getenv("MULTIMODAL_MODEL_NAME", "qwen3-vl-plus").strip() or "qwen3-vl-plus"
+
+        # Xiaomi MiMo 备用多模态 profile（仅在配置了 MULTIMODAL_FALLBACK_* 时注册）
+        xiaomi_base = os.getenv("MULTIMODAL_FALLBACK_API_BASE", "").strip()
+        xiaomi_key = os.getenv("MULTIMODAL_FALLBACK_API_KEY", "").strip()
+        # 默认使用 mimo-v2.5：API 平台唯一支持图/音/视频多模态的模型
+        # mimo-v2.5-pro 为纯文本模型，MiMo-VL-7B-RL 为 HuggingFace 本地模型，均不适用
+        xiaomi_model = os.getenv("MULTIMODAL_FALLBACK_MODEL_NAME", "mimo-v2.5").strip() or "mimo-v2.5"
+        fallback_ids: List[str] = []
+        if xiaomi_base and xiaomi_key:
+            self.register(
+                ModelProfile(
+                    profile_id="multimodal_xiaomi",
+                    provider="xiaomi_multimodal",
+                    model_name=xiaomi_model,
+                    modality="multimodal",
+                    temperature=0.3,
+                    max_tokens=2048,
+                    timeout_seconds=120,
+                    max_retries=1,
+                    # MiMo 关闭 thinking 的方式与 Qwen 不同：
+                    # Qwen 用 extra_body={"enable_thinking": False}（DashScope 专有）
+                    # MiMo 用 extra_body={"thinking": {"type": "disabled"}}（官方文档要求）
+                    # 注意：mimo-v2.5-pro/v2.5 的 thinking 默认开启，关闭后可自定义 temperature
+                    extra_params={"extra_body": {"thinking": {"type": "disabled"}}},
+                )
+            )
+            fallback_ids = ["multimodal_xiaomi"]
+
         self.register(
             ModelProfile(
                 profile_id="multimodal_default",
@@ -66,6 +96,7 @@ class ModelProfileRegistry:
                 # 2) 与 response_format=json_object 不兼容
                 # 因此显式关闭 thinking,保证 JSON 结构化输出正常工作
                 extra_params={"extra_body": {"enable_thinking": False}},
+                fallback_profile_ids=fallback_ids,
             )
         )
 

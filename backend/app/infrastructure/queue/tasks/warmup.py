@@ -50,7 +50,7 @@ except ImportError:
 
 _DEFAULT_MAX_KEYWORDS = 30  # hot_keywords_top_n 未配置时的兜底
 _INTER_KEYWORD_SLEEP_SEC = 30.0
-_PER_KEYWORD_TARGET = 50  # 与前端 DEFAULT_ADVANCED sample_count="50" 对齐
+_PER_KEYWORD_TARGET = 200  # 每关键词采集目标数
 
 # ── 品类词横向语义扩词 Prompt ──────────────────────────────────────────────
 _CATEGORY_EXPANSION_SYSTEM = """你是小红书内容营销数据分析专家，专门负责"品类词横向语义扩词"任务。
@@ -184,6 +184,8 @@ async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str
                 "started_at": start.isoformat(),
             }
         )
+        # 即使无关键词也要写下次执行时间，否则每小时探针都会触发本次逻辑
+        await _write_next_run_at(start)
         return {"status": "skipped", "reason": "no_keywords", "trigger": trigger}
 
     keywords = keywords[:max_keywords]
@@ -344,17 +346,24 @@ def _find_warmup_user_id() -> str:
     2. 从 XhsCredentialStore 找最近验证过的 active 凭据（credential store 路径）。
     3. 都没有时返回空字符串，resolver 会尝试 .env COOKIES 兜底。
     """
-    # ---- 路径 1: 从最近任务获取 owner_user_id（与正常任务完全一致）----
+    # ---- 路径 1: 从最近任务获取 owner_user_id，并验证该 ID 确实有可用凭据 ----
     try:
         from ....infrastructure.repository.task_repository import task_repository
+        from ....services.xhs_auth import get_credential_store
 
-        # list_all 或 list_for_user 取最近几条，选有 owner_user_id 的
+        cred_store = get_credential_store()
         all_tasks = task_repository.list_for_user("", include_all=True, limit=20)
         for task in all_tasks:
             uid = getattr(task, "owner_user_id", None) or ""
-            if uid:
+            if not uid:
+                continue
+            # 验证该 owner_user_id 在 XhsCredentialStore 中有对应凭据，避免使用无效 ID
+            cred = cred_store.get_by_redmuse_user_id(uid)
+            if cred and cred.cookies_path:
                 logger.info(f"[warmup] 使用最近任务的 owner_user_id: {uid!r} (task={task.task_id})")
                 return uid
+            else:
+                logger.debug(f"[warmup] 跳过任务 owner {uid!r}：无匹配凭据，继续查找")
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"[warmup] 从任务仓库获取 owner 失败: {exc}")
 
@@ -455,7 +464,7 @@ async def _warmup_one_keyword(keyword: str, target: int = _PER_KEYWORD_TARGET) -
     # ── 步骤 1：主采集（品类词，dimension="warmup"）──
     try:
         primary_raw = await _collect_one_dimension(
-            cookies_str, [keyword], target, runtime_cfg
+            cookies_str, [keyword], target, runtime_cfg, owner_user_id
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[warmup] 主采集 {keyword} 失败: {exc}")
@@ -478,7 +487,7 @@ async def _warmup_one_keyword(keyword: str, target: int = _PER_KEYWORD_TARGET) -
                 await asyncio.sleep(5.0)  # 扩词间隔，避免触发反爬
                 try:
                     exp_raw = await _collect_one_dimension(
-                        cookies_str, [exp_kw], per_target, exp_runtime_cfg
+                        cookies_str, [exp_kw], per_target, exp_runtime_cfg, owner_user_id
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"[warmup] 扩词采集 '{exp_kw}' 失败: {exc}")
@@ -529,7 +538,12 @@ async def _expand_category_keywords(primary_kw: str) -> List[str]:
         result = await gw.chat(
             "WarmupKeywordExpander",
             messages,
-            overrides={"temperature": 0.7, "max_tokens": 300},
+            overrides={
+                "temperature": 0.7,
+                # 关闭思考模式：避免 thinking tokens 耗尽 max_tokens 导致 content 为空
+                "extra_body": {"enable_thinking": False},
+                "response_format": {"type": "json_object"},
+            },
         )
         raw_text = ""
         if isinstance(result, str):
@@ -563,10 +577,10 @@ async def _expand_category_keywords(primary_kw: str) -> List[str]:
 async def _next_run_at_reached(now: datetime) -> bool:
     """读取 Redis crawler:next_run_at，判断是否到了执行时间。
 
-    - 不存在（首次部署）→ True（立即执行）
+    - 不存在（首次部署/key 已过期）→ True（立即执行）
     - now >= next_run_at  → True
     - now < next_run_at   → False
-    - Redis 故障          → True（放行，避免永不执行）
+    - Redis 故障          → False（保守跳过，避免 Redis 抖动造成反复触发）
     """
     try:
         from ...cache.redis_client import get_redis
@@ -574,6 +588,8 @@ async def _next_run_at_reached(now: datetime) -> bool:
         client = await get_redis()
         raw = await client.get("crawler:next_run_at")
         if not raw:
+            # key 不存在 → 首次部署或上一次 skip 路径遗漏写入，放行执行
+            logger.info("[warmup] crawler:next_run_at 不存在，视为首次执行，放行")
             return True
         raw_str = raw.decode() if isinstance(raw, bytes) else str(raw)
         next_run = datetime.fromisoformat(raw_str.replace("Z", "+00:00"))
@@ -584,8 +600,10 @@ async def _next_run_at_reached(now: datetime) -> bool:
         remaining_h = (next_run - now).total_seconds() / 3600
         logger.info(f"[warmup] 距下次执行还有 {remaining_h:.1f}h（{next_run.isoformat()}）")
         return False
-    except Exception:  # noqa: BLE001
-        return True
+    except Exception as exc:  # noqa: BLE001
+        # Redis 故障时保守跳过，避免每小时探针因连接抖动而反复触发采集
+        logger.warning(f"[warmup] 读取 next_run_at 失败，本次跳过: {exc}")
+        return False
 
 
 async def _write_next_run_at(now: datetime) -> None:

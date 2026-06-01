@@ -923,7 +923,8 @@ class ViralModelAgent(BaseAgent):
                 self.chat_stream_and_emit(
                     task_id,
                     messages,
-                    overrides={"temperature": 0.1, "max_tokens": 400, "timeout": 300},
+                    overrides={"temperature": 0.1, "max_tokens": 1000, "timeout": 300,
+                               "response_format": {"type": "json_object"}},
                 ),
                 timeout=_NORMALIZE_TIMEOUT,
             )
@@ -1007,7 +1008,10 @@ class ViralModelAgent(BaseAgent):
         Returns:
             解析结果（list / dict），全部失败时返回 None。
         """
-        overrides = stream_overrides or {"temperature": 0.1, "max_tokens": 8000, "timeout": 600}
+        _json_fmt = {"type": "json_object"}
+        overrides = dict(stream_overrides or {"temperature": 0.1, "max_tokens": 8000, "timeout": 600})
+        # 强制启用 DeepSeek JSON mode，确保输出合法 JSON（官方要求同时 prompt 含 json 字样）
+        overrides.setdefault("response_format", _json_fmt)
 
         for attempt in range(1, max_retries + 1):
             if attempt == 1:
@@ -1036,7 +1040,8 @@ class ViralModelAgent(BaseAgent):
                             self.agent_id,
                             retry_msgs,
                             task_id=task_id,
-                            overrides={"temperature": 0.1, "max_tokens": 3000, "timeout": 120},
+                            overrides={"temperature": 0.1, "max_tokens": 3000, "timeout": 120,
+                                       "response_format": _json_fmt},
                         ),
                         timeout=150,
                     )

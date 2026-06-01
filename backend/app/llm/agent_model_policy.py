@@ -65,6 +65,9 @@ class AgentModelPolicy:
             ("CommentPipeline.NoteClassifier", "text", "text_default"),
             ("CommentPipeline.CommentClassifier", "text", "text_default"),
             ("CommentPipeline.Summarizer", "text", "text_default"),
+            # 评论采集两级语义过滤
+            ("CommentPipeline.Tier1Filter", "text", "text_default"),
+            ("CommentPipeline.Tier2Filter", "text", "text_default"),
         ]
         for agent_id, modality, profile_id in defaults:
             self.set(agent_id, modality, profile_id)

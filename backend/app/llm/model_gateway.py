@@ -65,18 +65,6 @@ class ModelGateway:
         self.profiles = cfg.profiles
         self.providers = cfg.providers
         self._audit_log: List[ModelAuditRecord] = []
-        # 全局 per-modality 并发信号量：所有 agent 共享，统一限制对同类模型的并发调用数
-        # 避免 ImageAgent(3) + VideoAgent(2) 同时打爆 multimodal API 的 RPM 限额
-        import os as _os
-        _mm_limit = int(_os.getenv("GATEWAY_MULTIMODAL_CONCURRENCY", "2"))
-        _text_limit = int(_os.getenv("GATEWAY_TEXT_CONCURRENCY", "10"))
-        self._modality_semaphores: Dict[str, asyncio.Semaphore] = {
-            "multimodal": asyncio.Semaphore(_mm_limit),
-            "text": asyncio.Semaphore(_text_limit),
-        }
-        logger.info(
-            f"[ModelGateway] 全局并发限制: multimodal={_mm_limit}, text={_text_limit}"
-        )
 
     async def chat(
         self,
@@ -88,57 +76,141 @@ class ModelGateway:
         overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        通用 chat 调用。
+        通用 chat 调用，支持多 Provider fallback。
 
         messages 约定 OpenAI Chat Completion 格式：
         [{"role": "user", "content": "..."}]
+
+        当主 Provider 失败时，会自动按 profile.fallback_profile_ids 依次尝试备用 Provider。
+        若主 Provider 未配置（MULTIMODAL_API_BASE 等变量未设置），也会自动降级到可用的备用 Provider。
         """
-        profile, provider = self._resolve(agent_id, modality)
-        params = self._merge_params(profile, overrides)
-
-        # 全局并发限制：同 modality 的所有 agent 共享信号量，防止集中爆 RPM
-        semaphore = self._modality_semaphores.get(modality)
-
-        start = time.monotonic()
+        # 先尝试标准解析（主 provider 可用时走快路径）
         try:
-            if semaphore:
-                async with semaphore:
-                    content, usage = await self._invoke_chat(provider, profile, messages, params)
-            else:
-                content, usage = await self._invoke_chat(provider, profile, messages, params)
-            duration_ms = int((time.monotonic() - start) * 1000)
-            self._record_audit(
-                task_id=task_id,
-                agent_id=agent_id,
-                profile=profile,
-                provider=provider,
-                duration_ms=duration_ms,
-                input_tokens=usage.get("prompt_tokens", self._estimate_tokens_from_messages(messages)),
-                output_tokens=usage.get("completion_tokens", self._estimate_tokens(content)),
-                ok=True,
-            )
-            return {
-                "content": content,
-                "profile_id": profile.profile_id,
-                "model_name": profile.model_name,
-                "provider": profile.provider,
-                "duration_ms": duration_ms,
-                "usage": usage,
-            }
-        except ModelInvocationError as exc:
-            duration_ms = int((time.monotonic() - start) * 1000)
-            self._record_audit(
-                task_id=task_id,
-                agent_id=agent_id,
-                profile=profile,
-                provider=provider,
-                duration_ms=duration_ms,
-                input_tokens=self._estimate_tokens_from_messages(messages),
-                output_tokens=0,
-                ok=False,
-                error_code=exc.code,
-            )
-            raise
+            profile, provider = self._resolve(agent_id, modality)
+            candidates = self._build_fallback_chain(profile, provider)
+        except ModelInvocationError as resolve_err:
+            if resolve_err.code != "MODEL_PROVIDER_UNAVAILABLE":
+                raise
+            # 主 provider 未配置/不可用，尝试直接从 fallback profile 构建候选链
+            candidates = self._build_fallback_chain_from_policy(agent_id, modality)
+            if not candidates:
+                raise ModelInvocationError(
+                    "MODEL_PROVIDER_UNAVAILABLE",
+                    f"agent={agent_id} modality={modality} 的所有供应商均未配置或不可用（主供应商: {resolve_err}）",
+                    details={"agent": agent_id, "modality": modality},
+                ) from resolve_err
+
+        last_error: Optional[ModelInvocationError] = None
+        for idx, (curr_profile, curr_provider) in enumerate(candidates):
+            params = self._merge_params(curr_profile, overrides)
+            start = time.monotonic()
+            try:
+                content, usage = await self._invoke_chat(curr_provider, curr_profile, messages, params)
+                duration_ms = int((time.monotonic() - start) * 1000)
+                if idx > 0:
+                    logger.info(
+                        "[ModelGateway] 备用供应商 {} (model={}) 调用成功（主供应商 {} 失败: {}）",
+                        curr_profile.provider,
+                        curr_profile.model_name,
+                        candidates[0][0].provider,
+                        last_error.code if last_error else "unknown",
+                    )
+                self._record_audit(
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    profile=curr_profile,
+                    provider=curr_provider,
+                    duration_ms=duration_ms,
+                    input_tokens=usage.get("prompt_tokens", self._estimate_tokens_from_messages(messages)),
+                    output_tokens=usage.get("completion_tokens", self._estimate_tokens(content)),
+                    ok=True,
+                )
+                return {
+                    "content": content,
+                    "profile_id": curr_profile.profile_id,
+                    "model_name": curr_profile.model_name,
+                    "provider": curr_profile.provider,
+                    "duration_ms": duration_ms,
+                    "usage": usage,
+                }
+            except ModelInvocationError as exc:
+                duration_ms = int((time.monotonic() - start) * 1000)
+                self._record_audit(
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    profile=curr_profile,
+                    provider=curr_provider,
+                    duration_ms=duration_ms,
+                    input_tokens=self._estimate_tokens_from_messages(messages),
+                    output_tokens=0,
+                    ok=False,
+                    error_code=exc.code,
+                )
+                last_error = exc
+                if idx < len(candidates) - 1:
+                    logger.warning(
+                        "[ModelGateway] 供应商 {} (model={}) 失败: {} {}，尝试备用供应商 {} ...",
+                        curr_profile.provider,
+                        curr_profile.model_name,
+                        exc.code,
+                        exc,
+                        candidates[idx + 1][0].provider,
+                    )
+                    continue
+
+        assert last_error is not None
+        raise last_error
+
+    def _build_fallback_chain(
+        self,
+        profile: "ModelProfile",
+        provider: "ProviderConfig",
+    ) -> List[tuple["ModelProfile", "ProviderConfig"]]:
+        """构建 (profile, provider) 候选链：主 + fallback_profile_ids 中可用的备用。"""
+        chain: List[tuple["ModelProfile", "ProviderConfig"]] = [(profile, provider)]
+        for fb_id in (profile.fallback_profile_ids or []):
+            try:
+                fb_profile = self.profiles.require(fb_id)
+                fb_provider = self.providers.get(fb_profile.provider)
+                if fb_provider and fb_provider.is_usable():
+                    chain.append((fb_profile, fb_provider))
+                else:
+                    logger.debug("[ModelGateway] fallback profile={} provider={} 不可用，跳过", fb_id, fb_profile.provider)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[ModelGateway] 构建 fallback chain 时跳过 profile={}: {}", fb_id, exc)
+        return chain
+
+    def _build_fallback_chain_from_policy(
+        self,
+        agent_id: str,
+        modality: str,
+    ) -> List[tuple["ModelProfile", "ProviderConfig"]]:
+        """主 provider 未配置时，直接从 fallback_profile_ids 中构建可用候选链。
+
+        场景：用户注释掉阿里云配置（MULTIMODAL_API_BASE 等），只保留小米配置。
+        此时主 profile 的 provider 不可用，但 fallback profile 可用，应直接使用备用供应商。
+        """
+        chain: List[tuple["ModelProfile", "ProviderConfig"]] = []
+        try:
+            profile_id = self.policy.resolve(agent_id, modality)
+            profile = self.profiles.require(profile_id)
+        except Exception:  # noqa: BLE001
+            return chain
+
+        for fb_id in (profile.fallback_profile_ids or []):
+            try:
+                fb_profile = self.profiles.require(fb_id)
+                fb_provider = self.providers.get(fb_profile.provider)
+                if fb_provider and fb_provider.is_usable():
+                    chain.append((fb_profile, fb_provider))
+                    logger.debug(
+                        "[ModelGateway] 主供应商不可用，使用 fallback profile={} provider={}",
+                        fb_id, fb_profile.provider,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[ModelGateway] fallback profile={} 不可用: {}", fb_id, exc)
+
+        return chain
 
     async def chat_with_tools(
         self,
@@ -649,24 +721,42 @@ class ModelGateway:
     def _classify_error(exc: Optional[BaseException]) -> tuple[str, str]:
         if exc is None:
             return "MODEL_UNKNOWN", "模型调用失败"
+
         # asyncio.TimeoutError / asyncio.CancelledError 的 str() 是空字符串，需要先按类型判断
         if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
             return "MODEL_TIMEOUT", f"模型调用超时: {type(exc).__name__}"
+
+        # ── 优先：从 OpenAI SDK 异常对象提取 HTTP 状态码 ──────────────────────────────
+        # openai.APIStatusError 及其子类（BadRequestError/AuthenticationError/...）均带 status_code
+        http_status: Optional[int] = getattr(exc, "status_code", None)
+        if http_status:
+            # 将官方 HTTP 数字码直接作为错误码，方便对照供应商文档排查
+            code = f"MODEL_HTTP_{http_status}"
+            _HTTP_DESC = {
+                400: "请求参数错误(400)",
+                401: "认证失败(401)",
+                402: "账户余额不足(402)",
+                403: "访问被拒绝(403)",
+                404: "端点或模型不支持该功能(404)",
+                421: "内容审核拦截(421)",
+                429: "请求过于频繁(429)",
+                500: "服务端内部错误(500)",
+                503: "服务过载(503)",
+            }
+            desc = _HTTP_DESC.get(http_status, f"HTTP {http_status} 错误")
+            return code, f"模型 {desc}: {exc}"
+
+        # ── 兜底：文本匹配（无 status_code 的网络层错误）───────────────────────────────
         text = str(exc).lower()
-        if "timeout" in text or "timed out" in text or "504" in text or "gateway timeout" in text:
+        if "timeout" in text or "timed out" in text or "gateway timeout" in text:
             return "MODEL_TIMEOUT", f"模型调用超时: {exc}"
-        if "rate limit" in text or "429" in text:
+        if "rate limit" in text or "too many requests" in text:
             return "MODEL_RATE_LIMIT", f"模型限流: {exc}"
         if (
-            "401" in text
-            or "403" in text
-            or "unauthorized" in text
-            or "forbidden" in text
+            "unauthorized" in text
             or "access denied" in text
             or "invalid api" in text
             or "invalid key" in text
-            or "api key" in text
-            or "apikey" in text
             or "incorrect api key" in text
             or "invalid token" in text
             or "authentication" in text

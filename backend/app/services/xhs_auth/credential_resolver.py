@@ -3,8 +3,10 @@
 调用方（CrawlerAgent / cookie_health_service / 其它需要 Cookie 的代码）唯一
 入口，避免重复实现回退逻辑。
 
-解析顺序（Phase 1）：
+解析顺序（Phase 1 + LiveCookie 增强）：
 
+0. :class:`LiveCookieProvider`（活浏览器实时取）— 仅当 ``LIVE_COOKIE_ENABLED=true``
+   且能找到 username/cookies_path 时生效；失败时静默跌落至下一步。
 1. ``XHS_COOKIES_OVERRIDE`` 环境变量（调试 / 应急）
 2. :class:`XhsCredentialStore` 中以 ``redmuse_user_id`` 命中的记录
    → 读取 ``cookies_path`` 指向的 ``cookies.json``
@@ -14,6 +16,8 @@
 5. ``COOKIES`` / ``COOKIE`` 环境变量（兼容旧 viral_app .env）
 
 注意：
+- 第 0 步（LiveCookie）只在 ``LIVE_COOKIE_ENABLED=true`` 且 browser_data/<username>
+  存在时生效；Playwright 不可用或 browser_data 未建立时会静默跌落，不影响已有逻辑。
 - 第 3 步只是为了让 Phase 1 不破坏既有任务（旧任务 ``owner_user_id`` 是 XHS
   数字 ID，identity_store 仍能找到），但默认 emit 一条 deprecation log。
 - 第 4 步默认关闭，避免多 RedMuse 用户互相串号。
@@ -41,7 +45,7 @@ class ResolvedCookie:
     """一次解析的结果，含来源说明便于排查。"""
 
     cookies_str: str
-    source: str  # "credential" | "legacy_username" | "admin_fallback" | "env_override" | "env_compat"
+    source: str  # "live_browser" | "credential" | "legacy_username" | "admin_fallback" | "env_override" | "env_compat"
     cookies_path: Optional[str] = None
     redmuse_user_id: Optional[str] = None
     xhs_user_id: Optional[str] = None
@@ -87,6 +91,11 @@ class XhsCredentialResolver:
         return self._store or get_credential_store()
 
     def resolve(self, owner_user_id: Optional[str]) -> ResolvedCookie:
+        # 0. 活浏览器实时取（LIVE_COOKIE_ENABLED=true 时优先）
+        live_result = self._try_live_cookie(owner_user_id)
+        if live_result is not None:
+            return live_result
+
         # 1. 调试 / 应急覆盖
         override = (os.getenv("XHS_COOKIES_OVERRIDE") or "").strip()
         if override:
@@ -162,6 +171,87 @@ class XhsCredentialResolver:
         return ResolvedCookie(cookies_str="", source="not_found")
 
     # ----- 内部辅助 -----
+
+    def _try_live_cookie(self, owner_user_id: Optional[str]) -> Optional[ResolvedCookie]:
+        """尝试从活浏览器取最新 cookie（同步包装，内部用 asyncio.run_coroutine_threadsafe）。
+
+        仅当 LIVE_COOKIE_ENABLED=true 且能找到 username/cookies_path 时生效。
+        任何失败均静默返回 None，调用方继续走后续解析步骤。
+        """
+        import os as _os
+        if _os.environ.get("LIVE_COOKIE_ENABLED", "false").lower() not in ("1", "true", "yes"):
+            return None
+
+        owner = (owner_user_id or "").strip()
+        if not owner:
+            return None
+
+        try:
+            # 找到 username 和 cookies_path
+            username, cookies_path_str = self._resolve_username_and_cookies_path(owner)
+            if not username or not cookies_path_str:
+                return None
+
+            cookies_path = _resolve_path(cookies_path_str)
+
+            # 异步调用：在当前事件循环中 await，或新建事件循环
+            import asyncio as _asyncio
+            from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
+
+            try:
+                loop = _asyncio.get_running_loop()
+                # 已有事件循环（async 上下文）：用 run_coroutine_threadsafe 在新线程跑
+                import concurrent.futures
+                future = _asyncio.run_coroutine_threadsafe(
+                    _live_get(username, cookies_path),
+                    loop,
+                )
+                cookie_str = future.result(timeout=35)
+            except RuntimeError:
+                # 无事件循环（同步上下文）：直接 asyncio.run
+                cookie_str = _asyncio.run(_live_get(username, cookies_path))
+
+            if cookie_str:
+                logger.info(
+                    "[xhs_auth] live_browser cookie 命中 username={} cookie_len={}",
+                    username, len(cookie_str),
+                )
+                return ResolvedCookie(
+                    cookies_str=cookie_str,
+                    source="live_browser",
+                    cookies_path=cookies_path_str,
+                    redmuse_user_id=owner if owner.startswith("u_") else None,
+                )
+        except Exception as exc:
+            logger.warning("[xhs_auth] LiveCookie 失败，跌落静态 cookie: {}", exc)
+
+        return None
+
+    def _resolve_username_and_cookies_path(self, owner: str) -> tuple[str, str]:
+        """从 owner_user_id 找到 (username, cookies_path)，找不到返回 ('', '')。"""
+        # RedMuse 用户路径
+        if _looks_like_redmuse_user_id(owner):
+            credential = self.store.get_by_redmuse_user_id(owner)
+            if credential and credential.cookies_path:
+                username = str(getattr(credential, "username", "") or "").strip()
+                if not username:
+                    # 从 cookies_path 反推 username
+                    import re
+                    m = re.search(r"datas/users/([^/]+)/cookies\.json", credential.cookies_path)
+                    username = m.group(1) if m else ""
+                return username, credential.cookies_path
+
+        # 兼容旧路径：XHS 数字 ID
+        if owner and not _looks_like_redmuse_user_id(owner):
+            cookie_str, path = self._lookup_legacy_username_cookie(owner)
+            if path:
+                import re
+                m = re.search(r"datas/users/([^/]+)/cookies\.json", path)
+                username = m.group(1) if m else ""
+                return username, path
+
+        return "", ""
+
     @staticmethod
     def _lookup_legacy_username_cookie(xhs_user_id: str) -> tuple[str, Optional[str]]:
         try:
@@ -187,6 +277,13 @@ def _admin_fallback_enabled() -> bool:
         "true",
         "yes",
     )
+
+
+async def _live_get(username: str, cookies_path: Path) -> Optional[str]:
+    """协程：获取 LiveCookieProvider 并取 fresh cookie。"""
+    from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
+    provider = await LiveCookieProvider.get_for_identity(username, cookies_path)
+    return await provider.get_fresh_cookies()
 
 
 _default_resolver: Optional[XhsCredentialResolver] = None

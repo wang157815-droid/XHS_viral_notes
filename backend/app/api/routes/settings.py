@@ -260,12 +260,14 @@ async def trigger_crawler_now(current_user: dict = Depends(get_current_user)):
     _ = current_user
     triggered_at = datetime.now(timezone.utc).isoformat()
     try:
-        from ...infrastructure.queue.client import enqueue_job
+        from ...infrastructure.queue.client import enqueue_job_replace_queued
 
         # force=True: 用户意图明确，不受 interval 节流限制
-        # 固定 job_id 保证幂等：多次点击只入队一次，避免并发写 next_run_at 导致顺序混乱
-        job_id = await enqueue_job("scheduled_warmup", force=True, _job_id="warmup:manual")
-        if job_id:
+        # enqueue_job_replace_queued: 若旧任务还在排队则踢掉重新入队，保证手动触发最高优先级
+        job_id, enqueue_status = await enqueue_job_replace_queued(
+            "scheduled_warmup", force=True, _job_id="warmup:manual"
+        )
+        if enqueue_status == "enqueued":
             return ok(
                 {
                     "triggered_at": triggered_at,
@@ -273,13 +275,14 @@ async def trigger_crawler_now(current_user: dict = Depends(get_current_user)):
                     "message": "已下发到 ARQ 队列，请稍后在此页查看预热结果",
                 }
             )
-        # job_id 为 None 说明同名任务已在队列中，直接告知用户
-        return ok(
-            {
-                "triggered_at": triggered_at,
-                "message": "采集任务已在队列中，请稍等",
-            }
-        )
+        if enqueue_status == "in_progress":
+            return ok(
+                {
+                    "triggered_at": triggered_at,
+                    "message": "采集任务正在执行中，即将完成，请稍等片刻",
+                }
+            )
+        # failed: 落到下方 in-process 兜底
     except Exception:  # noqa: BLE001
         pass
 

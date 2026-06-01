@@ -395,6 +395,21 @@ def _assemble_workbook(
 
 
 # ==================================================================
+# URL 标准化（国际站 → 国内站，供业务人员直接点开）
+# ==================================================================
+def _to_xhs_url(url: str) -> str:
+    """将笔记链接中的 rednote.com 替换为 xiaohongshu.com。
+
+    采集时可能走国际站（webapi.rednote.com / www.rednote.com），
+    但业务人员无法访问国际站，两个域名内容完全互通，直接替换即可。
+    """
+    if not url:
+        return url
+    return url.replace("www.rednote.com", "www.xiaohongshu.com") \
+              .replace("webapi.rednote.com", "edith.xiaohongshu.com")
+
+
+# ==================================================================
 # 图片 URL 收集
 # ==================================================================
 def _collect_image_urls(
@@ -1045,7 +1060,7 @@ def _sample_write_row(
                 note, ann, task_keywords=task_keywords or []
             )
         elif key == "url":
-            value = str(note.get("url") or note.get("note_url") or "")
+            value = _to_xhs_url(str(note.get("url") or note.get("note_url") or ""))
         elif key == "interaction_formula":
             # =G+H+I 三列合计,需要依赖 likes/collects/comments 所在列
             # 用 Python 预先算出固定值,避免依赖列位置

@@ -197,7 +197,11 @@ export function reduceTaskEvent(
     }
     case "done": {
       next.progress = Math.max(next.progress, 100);
-      if (next.status === "running") next.status = "completed";
+      // 任何非终态（pending/queued/running）均视为完成，避免 comment_pipeline 等
+      // 不经过 "running" 状态的流水线在 done 事件后按钮无法恢复
+      if (!["completed", "failed", "cancelled"].includes(next.status)) {
+        next.status = "completed";
+      }
       // 标记所有已知 agent 为 done
       const merged: Record<string, AgentStatusEntry> = {};
       for (const [aid, entry] of Object.entries(state.agentStatus)) {

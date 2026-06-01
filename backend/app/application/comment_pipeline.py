@@ -208,14 +208,20 @@ def _llm_parse_json_robust(text: str) -> Optional[Dict]:
     return None
 
 
-async def _llm_chat(agent_id: str, system: str, user: str, max_tokens: int = 600) -> str:
+async def _llm_chat(
+    agent_id: str, system: str, user: str,
+    max_tokens: int = 600, json_mode: bool = False,
+) -> str:
     """调用 LLM，返回文本内容。失败时返回空字符串。"""
     try:
+        overrides: dict = {"temperature": 0.3, "max_tokens": max_tokens}
+        if json_mode:
+            overrides["response_format"] = {"type": "json_object"}
         result = await model_gateway.chat(
             agent_id,
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             modality="text",
-            overrides={"temperature": 0.3, "max_tokens": max_tokens},
+            overrides=overrides,
         )
         if isinstance(result, dict):
             return str(result.get("content") or "").strip()
@@ -223,6 +229,111 @@ async def _llm_chat(agent_id: str, system: str, user: str, max_tokens: int = 600
     except Exception as exc:
         logger.warning(f"[comment_pipeline] LLM 调用失败 agent={agent_id}: {exc}")
         return ""
+
+
+async def _tier1_brief_filter(user_query: str, briefs: list) -> list:
+    """Tier1 粗过滤：每页 briefs 批量一次 LLM 调用，宽松淘汰明显不相关条目。
+
+    fail-open：LLM 或解析失败时原样返回 briefs，不丢弃任何条目。
+    """
+    if not briefs:
+        return briefs
+    try:
+        id_map = {b["note_id"]: b for b in briefs if b.get("note_id")}
+        if not id_map:
+            return briefs
+        items_text = "\n".join(
+            "note_id={} 标题={} 标签={}".format(
+                b["note_id"],
+                b.get("display_title") or b.get("title", ""),
+                "|".join(t.get("name", "") for t in (b.get("tag_list") or [])),
+            )
+            for b in briefs if b.get("note_id")
+        )
+        system = (
+            "你是小红书笔记相关性初筛专家。你的任务是：根据用户的搜索意图，对一批笔记做「粗粒度」相关性判断。\n\n"
+            "## 判断标准\n"
+            "只需排除「核心品类/话题完全不符」的笔记，允许通过以下类型：\n"
+            "- 同品类的不同角度：评测、种草、使用心得、教程、避坑、好物推荐等\n"
+            "- 同品类的横向延伸：相关场景、人群、功效、使用方式\n"
+            "- 标题/标签信息不足、无法确定时：默认通过（宁可放过不误杀）\n\n"
+            "## 必须淘汰的情况\n"
+            "- 关键词相同但品类完全不同（例：用户搜「燕麦奶」食品，笔记是「燕麦奶色系穿搭」）\n"
+            "- 关键词仅作为修饰词出现，笔记主体是另一品类（例：用户搜「助眠精油」，笔记核心是「助眠冥想音频」）\n\n"
+            "## 重要原则\n"
+            "本轮是粗筛，判断依据仅为标题和标签，信息有限，请保持宽松，遇到模糊情况一律通过。\n\n"
+            '输出合法 JSON，格式：{"results": [{"note_id": "...", "pass": true}]}'
+        )
+        user_msg = f"{user_query}\n\n待判断笔记：\n{items_text}"
+        raw = await _llm_chat(
+            "CommentPipeline.Tier1Filter", system, user_msg,
+            max_tokens=800, json_mode=True,
+        )
+        parsed = _llm_parse_json(raw) or {}
+        results = parsed.get("results", [])
+        all_seen_ids = {r["note_id"] for r in results if "note_id" in r}
+        pass_ids = {r["note_id"] for r in results if r.get("pass", True)}
+        # 未出现在 LLM 结果中的 note_id 默认通过，避免误杀
+        pass_ids |= (set(id_map) - all_seen_ids)
+        filtered = [b for b in briefs if not b.get("note_id") or b["note_id"] in pass_ids]
+        logger.info(
+            f"[Tier1Filter] 过滤前 {len(briefs)} 条 → 过滤后 {len(filtered)} 条"
+            f"（淘汰 {len(briefs) - len(filtered)} 条）"
+        )
+        return filtered
+    except Exception as exc:
+        logger.warning(f"[Tier1Filter] 过滤失败，fail-open 返回原始 briefs: {exc}")
+        return briefs
+
+
+async def _tier2_detail_filter(user_query: str, note: dict) -> bool:
+    """Tier2 精判：对单条 note 详情判断核心主题是否符合用户意图。
+
+    fail-open：LLM 或解析失败时返回 True（通过），不误杀。
+    兼容 handle_note_info 正常返回（tags: List[str]）和降级 note_card（tag_list）两种格式。
+    """
+    try:
+        title = note.get("title") or note.get("display_title", "")
+        desc = note.get("desc", "")
+        # 兼容两种格式：正常为 tags: List[str]，降级为 tag_list: [{"name": "..."}]
+        tags = note.get("tags") or [
+            t.get("name", "") for t in (note.get("tag_list") or [])
+        ]
+        tags_str = " | ".join(str(t) for t in tags if t)
+        system = (
+            "你是小红书笔记相关性精判专家。你的任务是：根据用户的搜索意图，对单条笔记的完整内容做「精细」相关性判断。\n\n"
+            "## 判断标准\n"
+            "笔记的核心话题必须与用户意图属于同一品类/领域，以下情况判定为通过：\n"
+            "- 内容角度不同但品类相同：评测/种草/使用教程/成分分析/对比/避坑/推荐清单等\n"
+            "- 场景/人群/功效/使用方式不同，但核心品类一致\n"
+            "- 笔记提及多个产品，但主要讨论的品类与用户意图一致\n\n"
+            "## 必须淘汰的情况\n"
+            "- 关键词相同但实际品类不同（例：用户搜「燕麦奶」食品类，笔记讲的是「燕麦奶色系穿搭/家居」）\n"
+            "- 用户意图有明确约束（如「个护产品」），而笔记属于完全不同领域（如「音乐/影视/穿搭」）\n"
+            "- 笔记仅在标签中带有关键词，但正文核心内容与用户意图无关\n\n"
+            "## 判断要点\n"
+            "重点看笔记的「核心受众」和「核心诉求」是否与用户意图匹配，而不是字面关键词是否出现。\n\n"
+            '输出合法 JSON，格式：{"pass": true, "reason": "一句话说明判断依据"}'
+        )
+        user_msg = (
+            f"{user_query}\n\n"
+            f"笔记内容：\n标题：{title}\n描述：{desc[:300]}\n标签：{tags_str}"
+        )
+        raw = await _llm_chat(
+            "CommentPipeline.Tier2Filter", system, user_msg,
+            max_tokens=200, json_mode=True,
+        )
+        parsed = _llm_parse_json(raw) or {}
+        result = bool(parsed.get("pass", True))
+        if not result:
+            logger.debug(
+                f"[Tier2Filter] 淘汰 note_id={note.get('note_id','?')} "
+                f"reason={parsed.get('reason','')}"
+            )
+        return result
+    except Exception as exc:
+        logger.warning(f"[Tier2Filter] 过滤失败，fail-open 返回 True: {exc}")
+        return True
 
 
 # ── 步骤实现 ─────────────────────────────────────────────────────────────────
@@ -305,18 +416,30 @@ async def _step1_crawl_notes(
     *,
     time_range: int = 0,
     min_interaction: int = 0,
+    user_query: str = "",
+    owner_user_id: str = "",
 ) -> List[Dict[str, Any]]:
-    """步骤 1：爬取笔记，返回 dict 列表，按互动量降序。"""
+    """步骤 1：爬取笔记，返回 dict 列表，按互动量降序。
+
+    user_query 非空时，将两级语义过滤闭包注入 runtime_cfg，
+    由 _collect_one_dimension → ViralNoteCollector 在采集过程中调用。
+    过滤函数定义在本文件（comment_pipeline.py），可直接访问 model_gateway。
+    """
     from ..application.agents.crawler_agent import _collect_one_dimension
 
-    runtime_cfg = {
+    runtime_cfg: Dict[str, Any] = {
         "target_count": target_count,
         "note_type": 0,
         "time_range": time_range,
         "min_interaction": min_interaction,
     }
+    if user_query:
+        _uq = user_query  # 显式捕获，避免闭包引用变量被覆盖
+        runtime_cfg["tier1_filter"] = lambda b: _tier1_brief_filter(_uq, b)
+        runtime_cfg["tier2_filter"] = lambda n: _tier2_detail_filter(_uq, n)
+
     try:
-        raw = await _collect_one_dimension(cookies_str, keywords, target_count, runtime_cfg)
+        raw = await _collect_one_dimension(cookies_str, keywords, target_count, runtime_cfg, owner_user_id or None)
         notes = [_note_to_dict(n) for n in (raw or [])]
         notes.sort(key=_interaction_score, reverse=True)
         return notes
@@ -684,6 +807,7 @@ async def run_comment_pipeline(
     # ── 任务状态：running ──
     try:
         task_repository.update(task_id, status=TaskStatus.RUNNING.value, progress=5)
+        await _emit(task_id, TaskEventType.TASK_STATUS, {"status": TaskStatus.RUNNING.value, "progress": 5})
     except Exception:
         pass
 
@@ -748,7 +872,10 @@ async def run_comment_pipeline(
             # 缓存未命中：正常爬取
             crawl_target = max(top_notes * 3, _CRAWL_TARGET_PER_KW) if top_notes > 0 else _CRAWL_TARGET_PER_KW
             notes_raw = await _step1_crawl_notes(
-                keywords, cookies_str, crawl_target, time_range=time_range, min_interaction=min_interaction
+                keywords, cookies_str, crawl_target,
+                time_range=time_range, min_interaction=min_interaction,
+                user_query=raw_input,
+                owner_user_id=owner_user_id,
             )
             # top_notes=0 表示不限，直接用全部爬取结果
             top_notes_list = notes_raw[:top_notes] if top_notes > 0 else notes_raw
@@ -902,6 +1029,12 @@ async def run_comment_pipeline(
             f"[comment_pipeline] 完成 task={task_id} "
             f"notes={len(notes_with_comments)} comments={total_comment_count} elapsed={elapsed}s"
         )
+
+    except asyncio.CancelledError:
+        # 任务被 execution_coordinator.cancel() 取消（用户点击终止按钮）。
+        # cancel_task API 已将状态写为 CANCELLED 并推送 DONE 事件，此处只记录日志，不重复写状态。
+        logger.info(f"[comment_pipeline] task={task_id} 已被取消，pipeline 中止")
+        raise  # 必须 re-raise，让 execution_coordinator 感知 asyncio.Task 已结束
 
     except Exception as exc:
         logger.error(f"[comment_pipeline] 失败 task={task_id}: {type(exc).__name__}: {exc}")

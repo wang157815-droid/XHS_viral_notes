@@ -4,11 +4,14 @@ import re
 import urllib
 from urllib.parse import parse_qs
 import requests
+import time
 from xhs_utils.xhs_util import (
     splice_str,
     splice_str_get_xhs,
     generate_request_params,
     generate_x_b3_traceid,
+    generate_search_id,
+    generate_x_rap_param,
     get_common_headers,
     get_request_headers_template,
     xhs_api_base_url,
@@ -18,6 +21,18 @@ from loguru import logger
 
 # 默认请求超时时间（秒）
 DEFAULT_TIMEOUT = 10
+
+
+class CaptchaError(Exception):
+    """XHS 返回 471/461 人机验证码，需触发 Cookie 刷新流程。"""
+
+
+class SoftBlockError(Exception):
+    """XHS 返回 success=True 但 data:{} 为空，表示软封禁（IP 或 Cookie 临时限流）。"""
+
+
+class RetryableError(Exception):
+    """XHS 服务端 5xx 或超时，可安全重试。"""
 
 """
     获小红书的api
@@ -386,10 +401,16 @@ class XHS_Apis():
                 "xsec_source": query_params.get('xsec_source', ['pc_search'])[0],
                 "xsec_token": query_params.get('xsec_token', [''])[0]
             }
+            data_dict = data  # 保留原始 dict 供 x-rap-param 签名使用
             headers, cookies, data = generate_request_params(cookies_str, api, data)
+            headers['x-rap-param'] = generate_x_rap_param(api, data_dict)
             response = requests.post(self.base_url + api, headers=headers, data=data, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
+            if response.status_code in (471, 461):
+                raise CaptchaError(f"XHS CAPTCHA 触发, status={response.status_code}")
             res_json = response.json()
             success, msg = res_json.get("success"), res_json.get("msg")
+        except CaptchaError:
+            raise  # CaptchaError 必须向外传播，不能被吞掉
         except Exception as e:
             success = False
             msg = str(e)
@@ -474,7 +495,7 @@ class XHS_Apis():
                 "keyword": query,
                 "page": page,
                 "page_size": 20,
-                "search_id": generate_x_b3_traceid(21),
+                "search_id": generate_search_id(),
                 "sort": "general",
                 "note_type": 0,
                 "ext_flags": [],
@@ -517,10 +538,24 @@ class XHS_Apis():
                     "avif"
                 ]
             }
+            data_dict = data  # 保留原始 dict 供 x-rap-param 签名使用
             headers, cookies, data = generate_request_params(cookies_str, api, data)
+            headers['x-rap-param'] = generate_x_rap_param(api, data_dict)
             response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
+            if response.status_code in (471, 461):
+                logger.warning(f"[xhs_api] CAPTCHA status={response.status_code} api={api}")
+                raise CaptchaError(f"XHS CAPTCHA 触发, status={response.status_code}")
+            if response.status_code >= 500:
+                logger.warning(f"[xhs_api] SERVER_ERROR status={response.status_code} api={api}")
+                raise RetryableError(f"XHS 服务端错误 {response.status_code}")
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
+            # soft-block 检测：success=True 但 data:{} 为空
+            if success and not (res_json.get("data") or {}):
+                logger.warning(f"[xhs_api] SOFT_BLOCK data={{}} api={api} — cookie可能过期或IP被限流")
+                raise SoftBlockError(f"XHS soft-block: data={{}} api={api}")
+        except (CaptchaError, SoftBlockError, RetryableError):
+            raise  # 风控类异常必须向上传播，不能被吞掉
         except Exception as e:
             success = False
             msg = str(e)
@@ -575,17 +610,22 @@ class XHS_Apis():
             data = {
                 "search_user_request": {
                     "keyword": query,
-                    "search_id": "2dn9they1jbjxwawlo4xd",
+                    "search_id": generate_search_id(),
                     "page": page,
                     "page_size": 15,
                     "biz_type": "web_search_user",
-                    "request_id": "22471139-1723999898524"
+                    "request_id": f"{int(time.time() * 1000)}-{generate_search_id()}"
                 }
             }
             headers, cookies, data = generate_request_params(cookies_str, api, data)
             response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
+            if response.status_code in (471, 461):
+                logger.warning(f"[xhs_api] CAPTCHA status={response.status_code} api={api}")
+                raise CaptchaError(f"XHS CAPTCHA 触发, status={response.status_code}")
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
+        except CaptchaError:
+            raise
         except Exception as e:
             success = False
             msg = str(e)
@@ -645,8 +685,13 @@ class XHS_Apis():
                 cookies_str, splice_api, "", method="GET"
             )
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
+            if response.status_code in (471, 461):
+                logger.warning(f"[xhs_api] CAPTCHA status={response.status_code} api={api}")
+                raise CaptchaError(f"XHS CAPTCHA 触发, status={response.status_code}")
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
+        except CaptchaError:
+            raise
         except Exception as e:
             success = False
             msg = str(e)
@@ -706,8 +751,13 @@ class XHS_Apis():
                 cookies_str, splice_api, "", method="GET"
             )
             response = requests.get(self.base_url + splice_api, headers=headers, cookies=cookies, proxies=proxies, timeout=DEFAULT_TIMEOUT)
+            if response.status_code in (471, 461):
+                logger.warning(f"[xhs_api] CAPTCHA status={response.status_code} api={api}")
+                raise CaptchaError(f"XHS CAPTCHA 触发, status={response.status_code}")
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
+        except CaptchaError:
+            raise
         except Exception as e:
             success = False
             msg = str(e)
@@ -954,7 +1004,7 @@ class XHS_Apis():
         video_addr = None
         try:
             headers = get_common_headers()
-            url = f"https://www.xiaohongshu.com/explore/{note_id}"
+            url = f"{xhs_web_origin()}/explore/{note_id}"
             response = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
             res = response.text
             video_addr = re.findall(r'<meta name="og:video" content="(.*?)">', res)[0]

@@ -42,10 +42,12 @@ env 开关:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 from typing import Any, Dict, List, Optional
 
+import httpx
 from loguru import logger
 
 from ...domain.task_context import TaskContextWriter
@@ -63,6 +65,16 @@ _CONCURRENCY = int(os.getenv("VIDEO_ANALYSIS_CONCURRENCY", "2"))
 _PER_VIDEO_TIMEOUT = int(os.getenv("VIDEO_ANALYSIS_PER_TIMEOUT", "60"))
 # 限流重试退避基准（秒），遇到 429 后等待 _RATE_LIMIT_BACKOFF * (attempt+1)
 _RATE_LIMIT_BACKOFF = float(os.getenv("VIDEO_ANALYSIS_RATE_LIMIT_BACKOFF", "10"))
+
+# 视频源模式：
+#   url   - 直接把 XHS CDN URL 传给 AI（默认，但 XHS 防盗链导致大多数 URL 无法被 AI 访问）
+#   proxy - 本地下载视频再转 base64 传给 AI（推荐，绕过防盗链）
+_VIDEO_SOURCE_MODE = os.getenv("VIDEO_SOURCE_MODE", "proxy").lower()
+# proxy 模式最大原始视频大小（MiMo base64 限制 50MB，base64 膨胀约 1.35x，取 35MB 保留余量）
+_PROXY_MAX_BYTES = int(os.getenv("VIDEO_MAX_SIZE_MB", "35")) * 1024 * 1024
+# XHS CDN 下载时使用的 Referer（防盗链需要）
+_XHS_REFERER = os.getenv("XHS_WEB_ORIGIN", "https://www.xiaohongshu.com")
+_DOWNLOAD_TIMEOUT = int(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "60"))
 
 
 # 标注字段名(对齐 ViralNote 的 7 个标注字段)
@@ -227,6 +239,70 @@ class VideoAnalysisAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     @staticmethod
+    async def _download_video_for_proxy(video_url: str) -> Optional[str]:
+        """下载视频并转 base64 Data URL，供 proxy 模式使用。
+
+        返回 ``data:{mime};base64,{b64}`` 字符串，失败时返回 None。
+        MiMo base64 限制 50MB；原始视频限制由 _PROXY_MAX_BYTES 控制（默认 35MB）。
+        """
+        _MIME_MAP = {"mp4": "video/mp4", "mov": "video/quicktime",
+                     "avi": "video/x-msvideo", "wmv": "video/x-ms-wmv"}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": _XHS_REFERER + "/",
+            "Accept": "*/*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        }
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=httpx.Timeout(_DOWNLOAD_TIMEOUT),
+            ) as client:
+                # HEAD 预检大小，避免下载超大视频
+                try:
+                    head = await client.head(video_url, headers=headers)
+                    cl = int(head.headers.get("content-length", 0))
+                    if cl > _PROXY_MAX_BYTES:
+                        logger.warning(
+                            "[VideoAgent] proxy HEAD 预估 {:.1f}MB > {}MB，跳过下载回退 URL 模式",
+                            cl / 1024 / 1024, _PROXY_MAX_BYTES // 1024 // 1024,
+                        )
+                        return None
+                except Exception:
+                    pass  # HEAD 失败忽略，继续尝试 GET
+
+                resp = await client.get(video_url, headers=headers)
+                resp.raise_for_status()
+
+                data = resp.content
+                if len(data) > _PROXY_MAX_BYTES:
+                    logger.warning(
+                        "[VideoAgent] proxy GET {:.1f}MB > {}MB，超限回退 URL 模式",
+                        len(data) / 1024 / 1024, _PROXY_MAX_BYTES // 1024 // 1024,
+                    )
+                    return None
+
+                # 探测 MIME 类型
+                ct = resp.headers.get("content-type", "").split(";")[0].strip()
+                if not ct or "octet-stream" in ct:
+                    ext = video_url.lower().split("?")[0].rsplit(".", 1)[-1]
+                    ct = _MIME_MAP.get(ext, "video/mp4")
+
+                b64 = base64.b64encode(data).decode("ascii")
+                logger.debug(
+                    "[VideoAgent] proxy 下载成功 {:.1f}MB → base64 {:.1f}MB mime={}",
+                    len(data) / 1024 / 1024, len(b64) / 1024 / 1024, ct,
+                )
+                return f"data:{ct};base64,{b64}"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[VideoAgent] proxy 下载失败: {}", exc)
+            return None
+
+    @staticmethod
     def _pick_best_video_url(note: Dict[str, Any]) -> str:
         """从 note 的 video_url / video_urls 中选出最适合传给 AI 模型的 URL。
 
@@ -268,6 +344,22 @@ class VideoAnalysisAgent(BaseAgent):
                 f"[VideoAgent] {note_id} 主URL是m3u8，已切换到备用直链: {video_url[:80]}..."
             )
 
+        # proxy 模式：本地下载视频转 base64，绕过 XHS CDN 防盗链
+        # XHS CDN 对外部 IP（如 MiMo 服务器）会返回 403/400；本地下载后 base64 传给 AI 可绕过
+        use_base64 = False
+        actual_video_url = video_url
+        if _VIDEO_SOURCE_MODE == "proxy":
+            b64_data_url = await self._download_video_for_proxy(video_url)
+            if b64_data_url:
+                actual_video_url = b64_data_url
+                use_base64 = True
+                logger.debug("[VideoAgent] {} 使用 proxy base64 模式", note_id)
+            else:
+                logger.warning(
+                    "[VideoAgent] {} proxy 下载失败，回退 URL 直传模式（可能触发防盗链 400）",
+                    note_id,
+                )
+
         user_text = (
             f"【视频标题】{note.get('title', '')}\n"
             f"【点赞】{note.get('likes', 0)} · 评论 {note.get('comments', 0)} · "
@@ -275,12 +367,23 @@ class VideoAnalysisAgent(BaseAgent):
             f"【文案摘要】{(note.get('desc') or '')[:300]}\n\n"
             "请对这条视频按上面 6 要素 + pain + direction 做结构化标注,严格 JSON 输出。"
         )
+
+        # base64 模式下无需 fps/media_resolution（视频字节直传，不涉及服务端采样配置）
+        # URL 模式下保留 fps/media_resolution，遵循 MiMo 官方文档格式
+        video_content_part: Dict[str, Any] = {
+            "type": "video_url",
+            "video_url": {"url": actual_video_url},
+        }
+        if not use_base64:
+            video_content_part["fps"] = 2
+            video_content_part["media_resolution"] = "default"
+
         messages = [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
-                    {"type": "video_url", "video_url": {"url": video_url}},
+                    video_content_part,
                     {"type": "text", "text": user_text},
                 ],
             },
@@ -297,7 +400,9 @@ class VideoAnalysisAgent(BaseAgent):
                         task_id=task_id,
                         overrides={
                             "temperature": 0.2,
-                            "max_tokens": 400,
+                            # MiMo 使用 max_completion_tokens（Qwen/DeepSeek 也接受此字段）
+                            "max_tokens": None,
+                            "max_completion_tokens": 400,
                             "response_format": {"type": "json_object"},
                         },
                     ),

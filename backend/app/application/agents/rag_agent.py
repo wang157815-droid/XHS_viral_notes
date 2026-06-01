@@ -125,6 +125,7 @@ class RAGAgent(BaseAgent):
         _overrides = {
             "temperature": 0.2,
             "max_tokens": 600,
+            "response_format": {"type": "json_object"},
         }
 
         for attempt in range(1, 3):

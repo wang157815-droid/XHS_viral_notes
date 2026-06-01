@@ -97,8 +97,61 @@ async def enqueue_job(
     return job.job_id
 
 
+async def enqueue_job_replace_queued(
+    function_name: str,
+    *args: Any,
+    _job_id: Optional[str] = None,
+    _defer_by_seconds: Optional[float] = None,
+    **kwargs: Any,
+) -> tuple[Optional[str], str]:
+    """入队任务，手动触发专用——最高优先级语义。
+
+    - 若同名 job 仍在排队（queued/deferred）：先从队列中删除，再重新入队
+    - 若同名 job 正在执行（in_progress）：返回 (None, 'in_progress')，不重复入队
+    - 否则正常入队
+
+    Returns:
+        (job_id_or_None, status) —— status: 'enqueued' | 'in_progress' | 'failed'
+    """
+    try:
+        pool = await get_arq_pool()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[ARQ.enqueue_job_replace_queued] ARQ 未就绪: {exc}")
+        return None, "failed"
+
+    if _job_id:
+        try:
+            from arq.jobs import Job, JobStatus  # noqa: PLC0415
+
+            existing = Job(_job_id, pool)
+            status = await existing.status()
+            if status in (JobStatus.queued, JobStatus.deferred):
+                # 还在排队，踢掉旧的，让本次手动触发优先
+                await pool.zrem(b"arq:queue", _job_id)
+                logger.info(f"[ARQ] 已移除排队中的旧任务 '{_job_id}'，重新入队以保证手动触发优先")
+            elif status == JobStatus.in_progress:
+                logger.info(f"[ARQ] 任务 '{_job_id}' 正在执行中，跳过重复入队")
+                return None, "in_progress"
+            # complete / not_found：直接走下面正常入队
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[ARQ] 检查任务状态失败，将直接尝试入队: {exc}")
+
+    job = await pool.enqueue_job(
+        function_name,
+        *args,
+        _job_id=_job_id,
+        _defer_by=_defer_by_seconds,
+        **kwargs,
+    )
+    if job is None:
+        logger.warning(f"[ARQ.enqueue_job_replace_queued] 入队失败: {function_name}")
+        return None, "failed"
+    return job.job_id, "enqueued"
+
+
 __all__ = [
     "enqueue_job",
+    "enqueue_job_replace_queued",
     "get_arq_pool",
     "close_arq_pool",
     "get_arq_redis_settings",

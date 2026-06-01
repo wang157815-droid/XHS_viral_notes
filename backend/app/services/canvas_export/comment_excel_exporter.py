@@ -19,6 +19,14 @@ from openpyxl.styles import Alignment, Border, Font, Side
 
 _TEMPLATE_PATH = Path(__file__).parent / "templates" / "comment_report_template.xlsx"
 
+
+def _to_xhs_url(url: str) -> str:
+    """将笔记链接中的 rednote.com 替换为 xiaohongshu.com，供业务人员直接访问。"""
+    if not url:
+        return url
+    return url.replace("www.rednote.com", "www.xiaohongshu.com") \
+              .replace("webapi.rednote.com", "edith.xiaohongshu.com")
+
 _THIN = Side(style="thin")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _WRAP_ALIGN = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -87,7 +95,7 @@ def _write_sheet2(ws, comments: List[Dict[str, Any]]) -> None:
         _cell_write(ws, r, 2, c.get("comment_type") or "", center=True)
         _cell_write(ws, r, 3, c.get("content") or "")
         _cell_write(ws, r, 4, c.get("like_count") or 0, center=True)
-        _cell_write(ws, r, 5, c.get("note_url") or c.get("note_id") or "")
+        _cell_write(ws, r, 5, _to_xhs_url(c.get("note_url") or c.get("note_id") or ""))
         ws.row_dimensions[r].height = _METRIC_ROW_HEIGHT
 
 
@@ -97,7 +105,7 @@ def _write_sheet3(ws, notes: List[Dict[str, Any]]) -> None:
     """
     for data_row_idx, n in enumerate(notes, start=2):
         r = data_row_idx
-        _cell_write(ws, r, 1, n.get("url") or "")
+        _cell_write(ws, r, 1, _to_xhs_url(n.get("url") or ""))
         _cell_write(ws, r, 2, n.get("publish_time") or "", center=True)
         _cell_write(ws, r, 3, n.get("title") or "")
         _cell_write(ws, r, 4, n.get("interaction_score") or 0, center=True)

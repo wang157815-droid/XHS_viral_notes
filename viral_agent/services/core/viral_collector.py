@@ -41,36 +41,92 @@ class DimensionResult:
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from apis.xhs_pc_apis import XHS_Apis
+import json
+import random
+import re
+import requests
+from apis.xhs_pc_apis import XHS_Apis, CaptchaError, SoftBlockError
 from viral_agent.models.viral_note import ViralNote
 from viral_agent.utils import parse_chinese_number
 from xhs_utils.cookie_util import trans_cookies
 from xhs_utils.data_util import handle_note_info
-from xhs_utils.xhs_util import xhs_web_origin
+from xhs_utils.xhs_util import xhs_web_origin, BROWSER_UA
+
+# ── 采集节奏参数（可通过环境变量覆盖）─────────────────────────────────────────
+_COLLECTOR_PAGE_SLEEP_MIN = float(os.getenv("COLLECTOR_PAGE_SLEEP_MIN", "1.5"))
+_COLLECTOR_PAGE_SLEEP_MAX = float(os.getenv("COLLECTOR_PAGE_SLEEP_MAX", "4.0"))
+_COLLECTOR_DIM_SLEEP = float(os.getenv("COLLECTOR_DIM_SLEEP", "5.0"))
+_COLLECTOR_NOTE_SLEEP_MIN = float(os.getenv("COLLECTOR_NOTE_SLEEP_MIN", "1.0"))
+_COLLECTOR_NOTE_SLEEP_MAX = float(os.getenv("COLLECTOR_NOTE_SLEEP_MAX", "2.0"))
+# 重试参数
+_CAPTCHA_RETRY_WAITS = [
+    float(x) for x in os.getenv("COLLECTOR_RETRY_WAITS", "5,15,45").split(",")
+]
+# 周期刷新 cookie 间隔（秒），0 表示不启用周期刷新
+_COOKIE_REFRESH_INTERVAL = float(os.getenv("COLLECTOR_COOKIE_REFRESH_INTERVAL", "360"))  # 6 分钟
+# 并发信号量
+_SEMAPHORE_SIZE = int(os.getenv("COLLECTOR_SEMAPHORE", "2"))
+
+
+def _extract_initial_state_json(html: str) -> Optional[str]:
+    """从 HTML 中提取 window.__INITIAL_STATE__ 的完整 JSON 字符串。
+
+    使用栈计数器匹配嵌套括号，避免非贪婪 regex 在嵌套 JSON 时提前截断。
+    参考：cloudy-sfu/MCP-rednote-assistant xhshow_contrib.py
+    """
+    marker = "window.__INITIAL_STATE__="
+    idx = html.find(marker)
+    if idx == -1:
+        return None
+    start = html.find("{", idx + len(marker))
+    if start == -1:
+        return None
+    stack = []
+    for i in range(start, len(html)):
+        ch = html[i]
+        if ch == "{":
+            stack.append(ch)
+        elif ch == "}":
+            stack.pop()
+            if not stack:
+                return html[start: i + 1]
+    return None
 
 
 class ViralNoteCollector:
     """爆款笔记采集器（支持暂停/恢复/取消）"""
 
-    def __init__(self, cookies_str: str):
+    def __init__(self, cookies_str: str, owner_user_id: Optional[str] = None):
         """
         初始化采集器
 
         Args:
-            cookies_str: Cookie字符串
+            cookies_str: Cookie字符串（初始值，长任务中会被 LiveCookieProvider 周期刷新）
+            owner_user_id: RedMuse 用户 ID，用于 LiveCookieProvider 周期刷新
         """
         self.cookies_str = cookies_str
         self.cookies = trans_cookies(cookies_str)
-        self.client = XHS_Apis()  # XHS_Apis 不需要参数
+        self.client = XHS_Apis()
         self.collected_notes: List[ViralNote] = []
-        self.search_keyword: str = ""  # 存储搜索关键词
+        self.search_keyword: str = ""
+
+        # cookie 周期刷新
+        self._owner_user_id: Optional[str] = owner_user_id
+        self._last_cookie_refresh: float = time.time()
 
         # 任务控制支持
         self._control_signal: Optional["TaskControlSignal"] = None
         self._checkpoint: Optional["TaskCheckpoint"] = None
         self._current_keyword_index: int = 0
         self._current_dimension_index: int = 0
-        self._current_page_index: int = 1  # 当前页码（独立跟踪，确保首次暂停也能保存）
+        self._current_page_index: int = 1
+
+        # 语义过滤（由外部注入，默认 None 表示不过滤）
+        self.tier1_filter = None
+        self.tier2_filter = None
+
+        # 采集信号量（控制并发搜索维度数）
+        self._semaphore = asyncio.Semaphore(_SEMAPHORE_SIZE)
 
     def set_control_signal(self, signal: "TaskControlSignal") -> None:
         """设置控制信号（用于暂停/取消控制）"""
@@ -100,6 +156,128 @@ class ViralNoteCollector:
             collected_note_ids=collected_ids,
             timestamp=datetime.now().isoformat()
         )
+
+    async def _maybe_refresh_cookie(self) -> None:
+        """周期性从 LiveCookieProvider 取最新 cookie（仅当 LIVE_COOKIE_ENABLED=true）。
+
+        每 _COOKIE_REFRESH_INTERVAL 秒刷新一次；失败时保留当前 cookie 继续运行。
+        """
+        if _COOKIE_REFRESH_INTERVAL <= 0 or not self._owner_user_id:
+            return
+        if time.time() - self._last_cookie_refresh < _COOKIE_REFRESH_INTERVAL:
+            return
+
+        try:
+            from backend.app.services.xhs_auth.credential_resolver import get_credential_resolver
+            resolved = get_credential_resolver().resolve(self._owner_user_id)
+            if resolved.found and resolved.source == "live_browser":
+                self.cookies_str = resolved.cookies_str
+                self.cookies = trans_cookies(self.cookies_str)
+                self._last_cookie_refresh = time.time()
+                logger.info(
+                    "[collector] cookie 周期刷新成功 source=live_browser cookie_len={}",
+                    len(self.cookies_str),
+                )
+            else:
+                logger.debug("[collector] cookie 周期刷新：LiveCookie 未启用，跳过")
+        except Exception as exc:
+            logger.warning("[collector] cookie 周期刷新失败，保持当前 cookie: {}", exc)
+
+    async def _search_with_captcha_retry(
+        self,
+        query: str,
+        page: int,
+        sort: int,
+        **kwargs,
+    ):
+        """带退避重试的 search_note 包装器。
+
+        遇到 CaptchaError / SoftBlockError 时：
+        1. 先尝试刷新 cookie（LiveCookieProvider）
+        2. 指数退避等待（5s / 15s / 45s）
+        3. 超过最大重试次数后 raise，由上层决策
+        """
+        loop = asyncio.get_event_loop()
+        last_exc: Optional[Exception] = None
+
+        for attempt, wait_sec in enumerate([0.0] + _CAPTCHA_RETRY_WAITS):
+            if attempt > 0:
+                logger.warning(
+                    "[collector] search_note 风控重试 attempt={} wait={:.0f}s query={!r} page={}",
+                    attempt, wait_sec, query, page,
+                )
+                await self._maybe_refresh_cookie()
+                await asyncio.sleep(wait_sec)
+
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.search_note(
+                        query=query,
+                        cookies_str=self.cookies_str,
+                        page=page,
+                        sort_type_choice=sort,
+                        note_type=kwargs.get("note_type", 0),
+                        note_time=kwargs.get("time_range", 0),
+                        note_range=0,
+                        pos_distance=0,
+                        geo="",
+                    ),
+                )
+                return result
+            except (CaptchaError, SoftBlockError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "[collector] {} attempt={} query={!r} page={}: {}",
+                    type(exc).__name__, attempt, query, page, exc,
+                )
+                continue
+            except Exception:
+                raise  # 非风控异常直接上抛
+
+        # 重试耗尽
+        logger.error(
+            "[collector] search_note 重试耗尽 query={!r} page={} last_exc={}",
+            query, page, last_exc,
+        )
+        raise RuntimeError(
+            f"CRAWLER_CAPTCHA: 重试 {len(_CAPTCHA_RETRY_WAITS)} 次后仍触发风控: {last_exc}"
+        ) from last_exc
+
+    async def _preflight_cookie_check(self) -> None:
+        """采集前 Cookie 有效性预检。
+
+        调用 get_user_self_info 接口，失败则直接抛出 RuntimeError，
+        让 Agent 层将 AUTH_COOKIE_EXPIRED / CRAWLER_CAPTCHA 错误码传给前端。
+        """
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.client.get_user_self_info(self.cookies_str)
+            )
+            success = result[0] if isinstance(result, tuple) else (result or {}).get("success")
+            if not success:
+                logger.warning("⚠️ Cookie 预检失败（get_user_self_info 返回 success=false）")
+                raise RuntimeError("AUTH_COOKIE_EXPIRED: Cookie 已失效，请前往「设置→数据源授权」重新授权")
+        except CaptchaError as e:
+            # 预检阶段触发 CAPTCHA：先刷新 cookie 再重试一次
+            logger.warning("[collector] Cookie 预检触发 CAPTCHA，尝试刷新 cookie 后重试: {}", e)
+            await self._maybe_refresh_cookie()
+            await asyncio.sleep(_CAPTCHA_RETRY_WAITS[0])
+            try:
+                result2 = await loop.run_in_executor(
+                    None, lambda: self.client.get_user_self_info(self.cookies_str)
+                )
+                success2 = result2[0] if isinstance(result2, tuple) else (result2 or {}).get("success")
+                if not success2:
+                    raise RuntimeError("AUTH_COOKIE_EXPIRED: Cookie 预检刷新后仍失败")
+            except CaptchaError as e2:
+                raise RuntimeError(f"CRAWLER_CAPTCHA: 触发人机验证，请稍后重试或重新授权") from e2
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.warning("[collector] Cookie 预检异常（跳过预检，继续采集）: {}", e)
 
     async def _check_pause_point(self) -> bool:
         """
@@ -198,6 +376,9 @@ class ViralNoteCollector:
         keywords = keywords[:5]
         self.search_keywords = keywords  # 保存多关键词列表
 
+        # Cookie 有效性预检（失败直接抛出，前端展示授权引导）
+        await self._preflight_cookie_check()
+
         # 智能调整参数：确保 min_sample_count 不超过合理范围
         original_min_sample = min_sample_count
 
@@ -291,8 +472,8 @@ class ViralNoteCollector:
                 if not await self._check_pause_point():
                     logger.info(f"任务被取消/暂停，停止在关键词 {i+1} 后")
                     break
-                logger.info("等待 5 秒后采集下一个关键词...")
-                await asyncio.sleep(5)
+                logger.info("等待 {:.1f} 秒后采集下一个关键词...", _COLLECTOR_DIM_SLEEP)
+                await asyncio.sleep(_COLLECTOR_DIM_SLEEP + random.uniform(0, 2))
 
         # 统计多关键词匹配数量
         multi_match_count = sum(
@@ -370,7 +551,7 @@ class ViralNoteCollector:
         estimated_after_dedup = int(estimated_total * 0.7)  # 考虑去重
         if estimated_after_dedup < min_sample_count:
             logger.warning(
-                f"⚠️ 当前配置预估样本量({estimated_after_filter})不足{min_sample_count}，"
+                f"⚠️ 当前配置预估样本量({estimated_after_dedup})不足{min_sample_count}，"
                 f"建议增加目标数量或减少关键词数量"
             )
 
@@ -451,10 +632,10 @@ class ViralNoteCollector:
                     if note_id and note_id not in all_notes:
                         all_notes[note_id] = note
 
-            # 维度间等待
+            # 维度间等待（参数化 + jitter）
             if not await self._check_pause_point():
                 break
-            await asyncio.sleep(2)
+            await asyncio.sleep(_COLLECTOR_DIM_SLEEP + random.uniform(0, 2))
 
         # 完成当前关键词后重置维度索引
         self._current_dimension_index = 0
@@ -554,8 +735,8 @@ class ViralNoteCollector:
             if i < len(dimensions) - 1:
                 if not await self._check_pause_point():
                     break
-                logger.info(f"等待 3 秒后爬取下一个维度...")
-                await asyncio.sleep(3)
+                logger.info("等待 {:.1f} 秒后爬取下一个维度...", _COLLECTOR_DIM_SLEEP)
+                await asyncio.sleep(_COLLECTOR_DIM_SLEEP + random.uniform(0, 2))
 
         # 合并结果并去重（使用 note_id 作为键）
         all_notes: Dict[str, Dict[str, Any]] = {}
@@ -599,28 +780,24 @@ class ViralNoteCollector:
         return self.collected_notes
 
     async def _search_notes_async(self, **kwargs) -> List[Dict]:
-        """异步搜索笔记（封装同步方法）"""
-        loop = asyncio.get_event_loop()
+        """异步搜索笔记（带风控退避重试）"""
         _dbg_query = kwargs['query']
         _dbg_page = kwargs['page']
         _dbg_sort = kwargs.get('sort_type', 2)
         logger.info(
-            f"[search_note] query={_dbg_query!r} page={_dbg_page} sort={_dbg_sort} "
-            f"cookie_len={len(self.cookies_str)}"
+            "[search_note] query={!r} page={} sort={} cookie_len={}",
+            _dbg_query, _dbg_page, _dbg_sort, len(self.cookies_str),
         )
-        result = await loop.run_in_executor(
-            None,
-            lambda: self.client.search_note(
-                query=_dbg_query,
-                cookies_str=self.cookies_str,
-                page=_dbg_page,
-                sort_type_choice=_dbg_sort,
-                note_type=kwargs.get('note_type', 0),
-                note_time=kwargs.get('time_range', 0),
-                note_range=0,
-                pos_distance=0,
-                geo=""
-            )
+
+        # 周期刷新 cookie（每 _COOKIE_REFRESH_INTERVAL 秒）
+        await self._maybe_refresh_cookie()
+
+        # 带退避重试的 search_note 调用
+        result = await self._search_with_captcha_retry(
+            query=_dbg_query,
+            page=_dbg_page,
+            sort=_dbg_sort,
+            **{k: v for k, v in kwargs.items() if k not in ("query", "page", "sort_type")},
         )
 
         # 解析返回值（返回的是元组：success, msg, res_json）
@@ -697,12 +874,47 @@ class ViralNoteCollector:
             return []
 
     async def _get_note_detail_async(self, note_url: str) -> Optional[Dict]:
-        """异步获取笔记详情（封装同步方法）"""
+        """异步获取笔记详情，带指数退避重试（与搜索接口保持一致）。"""
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self.client.get_note_info(note_url, self.cookies_str)
-        )
+        last_exc: Optional[Exception] = None
+        result = None
+
+        for attempt, wait_sec in enumerate([0.0] + _CAPTCHA_RETRY_WAITS):
+            if attempt > 0:
+                logger.warning(
+                    f"⚠️ 获取详情触发风控，第 {attempt} 次重试（等待 {wait_sec}s）: {note_url}"
+                )
+                await self._maybe_refresh_cookie()
+                await asyncio.sleep(wait_sec)
+
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.get_note_info(note_url, self.cookies_str)
+                )
+                # 成功拿到响应，跳出重试循环，后续统一解析
+                last_exc = None
+                break
+            except (CaptchaError, SoftBlockError) as e:
+                last_exc = e
+                continue
+            except Exception as e:
+                # 非风控异常不重试
+                logger.warning(f"获取详情异常（非风控）: {e}")
+                return None
+
+        if last_exc is not None:
+            # 重试耗尽，走 HTML 降级
+            logger.warning(f"⚠️ 获取详情重试 {len(_CAPTCHA_RETRY_WAITS)} 次仍触发风控，尝试 HTML 降级: {note_url}")
+            try:
+                html_detail = await self._html_fallback(note_url)
+                if html_detail:
+                    logger.info(f"✅ HTML 降级成功: url={note_url}")
+                    return html_detail
+            except Exception as fallback_exc:
+                logger.debug(f"HTML 降级异常: {fallback_exc}")
+            logger.error(f"⚠️ HTML 降级也失败，跳过该笔记")
+            return None
 
         # 解析返回值（返回的是元组：success, msg, res_json）
         if isinstance(result, tuple) and len(result) == 3:
@@ -722,13 +934,102 @@ class ViralNoteCollector:
                         return items[0].get('note_card', {})
                 else:
                     # items为空，可能是笔记被删除、xsec_token过期或风控
-                    logger.warning(f"笔记详情items为空: url={note_url}, msg={msg}")
+                    # 尝试 HTML 降级解析（P2 兜底）
+                    logger.warning(f"笔记详情items为空，尝试 HTML 降级: url={note_url}, msg={msg}")
+                    html_detail = await self._html_fallback(note_url)
+                    if html_detail:
+                        return html_detail
             else:
                 logger.warning(f"获取笔记详情失败: success={success}, msg={msg}, url={note_url}")
         else:
             logger.error(f"意外的返回格式: {type(result)}")
 
         return None
+
+    async def _html_fallback(self, note_url: str) -> Optional[Dict]:
+        """CAPTCHA 或 items 为空时，从笔记页面 HTML 的 window.__INITIAL_STATE__ 解析笔记详情。
+
+        XHS 网页端将完整的笔记数据内嵌到 HTML 中，无需额外签名即可读取。
+        注意：直接 GET 请求仅在 XHS 将数据内嵌静态 HTML 时有效；
+        SPA 动态加载场景下 __INITIAL_STATE__ 可能为空，此时返回 None 属正常降级。
+        """
+        loop = asyncio.get_event_loop()
+        web_origin = xhs_web_origin()
+        headers = {
+            "User-Agent": BROWSER_UA,
+            "Cookie": self.cookies_str,
+            "Referer": f"{web_origin}/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Upgrade-Insecure-Requests": "1",
+        }
+        try:
+            # note_url 形如 {xhs_web_origin()}/explore/{note_id}?xsec_token=...
+            # 保留 xsec_token 参数，有助于正确返回笔记数据
+            page_url = note_url
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.get(page_url, headers=headers, timeout=15)
+            )
+            if resp.status_code in (471, 461):
+                raise CaptchaError(f"HTML 降级触发 CAPTCHA, status={resp.status_code}")
+
+            html = resp.text
+
+            # Debug: 记录响应关键信息，方便诊断
+            has_initial_state = "window.__INITIAL_STATE__" in html
+            has_note_detail = "noteDetailMap" in html
+            logger.debug(
+                f"HTML 降级响应: status={resp.status_code} len={len(html)} "
+                f"has_initial_state={has_initial_state} has_noteDetailMap={has_note_detail} "
+                f"url={page_url}"
+            )
+            if not has_initial_state:
+                # 记录响应开头，便于判断是登录页/空白页/CAPTCHA 页
+                logger.warning(
+                    f"HTML 降级：页面无 __INITIAL_STATE__，"
+                    f"响应前200字符: {html[:200]!r}, url={page_url}"
+                )
+                return None
+            if not has_note_detail:
+                logger.debug(f"HTML 降级：__INITIAL_STATE__ 存在但无 noteDetailMap（空状态），url={page_url}")
+                return None
+
+            # 用栈计数器正确提取完整的 JSON 对象（防止非贪婪截断嵌套括号）
+            js_str = _extract_initial_state_json(html)
+            if not js_str:
+                logger.debug(f"HTML 降级：提取 __INITIAL_STATE__ JSON 失败，url={page_url}")
+                return None
+
+            state = json.loads(
+                js_str
+                .replace(":undefined", ":null")
+                .replace(":Undefined", ":null")
+            )
+            note_id = note_url.split("?")[0].rstrip("/").split("/")[-1]
+            note = (
+                state.get("note", {})
+                .get("noteDetailMap", {})
+                .get(note_id, {})
+                .get("note")
+            )
+            if note:
+                logger.info(f"HTML 降级成功: note_id={note_id}")
+            else:
+                logger.debug(f"HTML 降级：state 中无 note_id={note_id}，available keys: {list(state.get('note', {}).get('noteDetailMap', {}).keys())}")
+            return note
+        except CaptchaError:
+            raise
+        except json.JSONDecodeError as exc:
+            logger.warning(f"HTML 降级 JSON 解析失败: {exc}, url={note_url}")
+            return None
+        except Exception as exc:
+            logger.debug(f"HTML 降级失败: {exc}, url={note_url}")
+            return None
 
     async def _fetch_dimension(
         self,
@@ -800,6 +1101,17 @@ class ViralNoteCollector:
                         f"| {first_url[:100]}"
                     )
 
+                # Tier1 粗过滤：批量过滤整页 briefs，减少无效详情请求
+                if self.tier1_filter and search_results:
+                    try:
+                        before_t1 = len(search_results)
+                        search_results = await self.tier1_filter(search_results)
+                        logger.debug(
+                            f"[{dimension_name}] Tier1 过滤: {before_t1} → {len(search_results)} 条"
+                        )
+                    except Exception as _e:
+                        logger.warning(f"[{dimension_name}] Tier1 过滤异常，跳过: {_e}")
+
                 # 获取笔记详情
                 page_success = 0
                 page_fail = 0
@@ -812,6 +1124,20 @@ class ViralNoteCollector:
                     try:
                         note_detail = await self._get_note_detail_async(note_url)
                         if note_detail:
+                            # Tier2 精判：逐条判断详情语义是否符合用户意图
+                            if self.tier2_filter:
+                                try:
+                                    if not await self.tier2_filter(note_detail):
+                                        logger.debug(
+                                            f"[{dimension_name}] Tier2 淘汰: "
+                                            f"{note_detail.get('note_id', '?')}"
+                                        )
+                                        page_fail += 1
+                                        continue  # 不 append，不计 page_success，不触发 break
+                                except Exception as _e:
+                                    logger.warning(
+                                        f"[{dimension_name}] Tier2 过滤异常，fail-open: {_e}"
+                                    )
                             notes.append(note_detail)
                             page_success += 1
                             if len(notes) >= target_per_dimension:
@@ -823,14 +1149,14 @@ class ViralNoteCollector:
                         page_fail += 1
                         continue
 
-                    await asyncio.sleep(1)  # 防止请求过快
+                    await asyncio.sleep(random.uniform(_COLLECTOR_NOTE_SLEEP_MIN, _COLLECTOR_NOTE_SLEEP_MAX))
 
                 logger.info(
                     f"[{dimension_name}] 第{page}页: 搜索{len(search_results)}条 "
                     f"→ 详情成功{page_success}条, 失败{page_fail}条, 累计{len(notes)}条"
                 )
                 page += 1
-                await asyncio.sleep(2)  # 页面间隔
+                await asyncio.sleep(random.uniform(_COLLECTOR_PAGE_SLEEP_MIN, _COLLECTOR_PAGE_SLEEP_MAX))
 
             logger.info(f"[{dimension_name}] 爬取完成: {len(notes)} 条")
 
@@ -1063,7 +1389,7 @@ class ViralNoteCollector:
             if i < total_keywords - 1:
                 if not await self._check_pause_point():
                     break
-                await asyncio.sleep(5)
+                await asyncio.sleep(_COLLECTOR_DIM_SLEEP + random.uniform(0, 2))
 
         logger.info(f"阈值采集完成: 共 {len(all_notes)} 篇符合条件")
         logger.info(f"各关键词采集数量: {keyword_stats}")
@@ -1146,7 +1472,7 @@ class ViralNoteCollector:
 
             if not await self._check_pause_point():
                 break
-            await asyncio.sleep(2)
+            await asyncio.sleep(_COLLECTOR_DIM_SLEEP + random.uniform(0, 2))
 
         return list(all_notes.values())
 
@@ -1234,14 +1560,14 @@ class ViralNoteCollector:
                         logger.debug(f"[{dimension_name}] 获取详情失败: {e}")
                         continue
 
-                    await asyncio.sleep(1)  # 防止请求过快
+                    await asyncio.sleep(random.uniform(_COLLECTOR_NOTE_SLEEP_MIN, _COLLECTOR_NOTE_SLEEP_MAX))
 
                 # 如果连续低于阈值，退出分页循环
                 if consecutive_below_threshold >= 10:
                     break
 
                 page += 1
-                await asyncio.sleep(2)
+                await asyncio.sleep(random.uniform(_COLLECTOR_PAGE_SLEEP_MIN, _COLLECTOR_PAGE_SLEEP_MAX))
 
             logger.info(f"[{dimension_name}] 阈值采集完成: {len(notes)} 条")
 

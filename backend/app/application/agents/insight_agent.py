@@ -299,6 +299,7 @@ class InsightAgent(BaseAgent):
         _overrides = {
             "temperature": 0.4,
             "max_tokens": 1000,
+            "response_format": {"type": "json_object"},
         }
         for attempt in range(2):
             try:
@@ -406,7 +407,7 @@ class InsightAgent(BaseAgent):
             f"轴名：{stats_axis_label}\n"
             "标签列表：\n"
             + "\n".join(label_lines)
-            + "\n\n请先写一句整体观察，再输出 JSON 数组，不要 markdown 代码块。"
+            + "\n\n请直接输出 JSON 对象，格式：{\"observation\":\"...\",\"items\":[...]}，不要 markdown 代码块。"
         )
 
         messages = [
@@ -419,7 +420,8 @@ class InsightAgent(BaseAgent):
                 self.chat_stream_and_emit(
                     task_id,
                     messages,
-                    overrides={"temperature": 0.3, "max_tokens": 2000, "timeout": 120},
+                    overrides={"temperature": 0.3, "max_tokens": 2000, "timeout": 120,
+                               "response_format": {"type": "json_object"}},
                 ),
                 timeout=90,
             )
@@ -518,10 +520,28 @@ PROMPT_TEMPLATE = "[deprecated] 使用 insight_summary.md"
 
 
 def _extract_pain_insight_array(text: str) -> Optional[List[Any]]:
-    """从 LLM 输出中提取痛点洞察 JSON 数组（容忍前置摘要文字）。"""
+    """从 LLM 输出中提取痛点洞察 JSON 数组。
+
+    支持两种格式（新/旧兼容）：
+    - 新（JSON mode）: {"observation": "...", "items": [...]}
+    - 旧（legacy）: 前置摘要文字 + JSON 数组
+    """
     if not text:
         return None
-    # 找到第一个 '[' 开始尝试解析
+    # 优先尝试 JSON object 格式（新格式，启用了 json_object mode）
+    for start in range(len(text)):
+        if text[start] != "{":
+            continue
+        try:
+            result, _ = json.JSONDecoder().raw_decode(text, start)
+            if isinstance(result, dict):
+                items = result.get("items")
+                if isinstance(items, list):
+                    return items
+        except (json.JSONDecodeError, ValueError):
+            continue
+        break
+    # 兼容旧格式：前置摘要文字 + JSON 数组
     for start in range(len(text)):
         if text[start] != "[":
             continue

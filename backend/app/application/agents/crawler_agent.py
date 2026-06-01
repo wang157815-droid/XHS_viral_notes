@@ -909,7 +909,7 @@ class CrawlerAgent(BaseAgent):
             kws = list(kw_tuple)
             try:
                 notes = await asyncio.wait_for(
-                    _collect_one_dimension(cookies_str, kws, per_group_target, runtime_cfg),
+                    _collect_one_dimension(cookies_str, kws, per_group_target, runtime_cfg, owner_user_id),
                     timeout=_PER_GROUP_TIMEOUT,
                 )
                 primary_dim = dim_list[0]
@@ -932,7 +932,7 @@ class CrawlerAgent(BaseAgent):
                     if retry_kws:
                         try:
                             retry_notes = await asyncio.wait_for(
-                                _collect_one_dimension(cookies_str, retry_kws, per_group_target, runtime_cfg),
+                                _collect_one_dimension(cookies_str, retry_kws, per_group_target, runtime_cfg, owner_user_id),
                                 timeout=_PER_GROUP_TIMEOUT,
                             )
                             if retry_notes:
@@ -1491,14 +1491,22 @@ async def _collect_one_dimension(
     keywords: List[str],
     target_count: int,
     runtime_cfg: Dict[str, Any],
+    owner_user_id: Optional[str] = None,
 ) -> List[Any]:
     """单维度采集：构造独立 collector 跑一次 multi_keywords。
 
     采集参数全部来自 runtime_cfg（前端高级配置），只在缺失时回落 env 默认。
+    语义过滤：由调用方（如 comment_pipeline）将预构建的异步闭包写入
+    runtime_cfg["tier1_filter"] 和 runtime_cfg["tier2_filter"]，此处直接注入
+    到 collector 实例属性，不感知过滤逻辑本身。
+    爆文任务不传这两个字段，则 collector 属性保持 None，过滤不启用。
     """
     from viral_agent.services.core.viral_collector import ViralNoteCollector
 
-    collector = ViralNoteCollector(cookies_str)
+    collector = ViralNoteCollector(cookies_str, owner_user_id=owner_user_id)
+    # 由调用方通过 runtime_cfg 注入过滤器；爆文任务不传则为 None，跳过过滤
+    collector.tier1_filter = runtime_cfg.get("tier1_filter")
+    collector.tier2_filter = runtime_cfg.get("tier2_filter")
     notes = await collector.search_viral_notes_multi_keywords(
         keywords=keywords[:_MAX_KWS_PER_DIM],
         target_count=target_count,

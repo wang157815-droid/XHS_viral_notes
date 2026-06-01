@@ -63,6 +63,19 @@ def _provider_configs_from_current_environ() -> list[ProviderConfig]:
                 api_key=emb_key,
             )
         )
+
+    # 小米 MiMo 备用多模态 Provider（MULTIMODAL_FALLBACK_* 配置时注册）
+    xiaomi_base = os.getenv("MULTIMODAL_FALLBACK_API_BASE", "").strip()
+    xiaomi_key = os.getenv("MULTIMODAL_FALLBACK_API_KEY", "").strip()
+    if xiaomi_base and xiaomi_key:
+        out.append(
+            ProviderConfig(
+                name="xiaomi_multimodal",
+                base_url=xiaomi_base,
+                api_key=xiaomi_key,
+            )
+        )
+
     return out
 
 

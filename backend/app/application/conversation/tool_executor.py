@@ -334,20 +334,25 @@ class ConversationToolExecutor:
 
         if result.created:
             from ..comment_pipeline import run_comment_pipeline
+            from ...infrastructure.execution.coordinator import execution_coordinator
             await self.task_event_bus.publish_event(
                 task_id=result.record.task_id,
                 type=TaskEventType.TASK_STATUS,
                 payload={"status": result.record.status.value, "progress": result.record.progress},
             )
-            asyncio.create_task(
-                run_comment_pipeline(
-                    task_id=result.record.task_id,
-                    keywords=keywords,
-                    raw_input=ctx.content,
-                    top_notes=top_notes,
-                    top_comments_per_note=top_comments,
-                )
+            _comment_task_id = result.record.task_id
+            _comment_kwargs = dict(
+                task_id=_comment_task_id,
+                keywords=keywords,
+                raw_input=ctx.content,
+                top_notes=top_notes,
+                top_comments_per_note=top_comments,
             )
+
+            async def _comment_runner(_handle: Any) -> None:
+                await run_comment_pipeline(**_comment_kwargs)
+
+            await execution_coordinator.run_task(_comment_task_id, _comment_runner)
 
         ctx.store.update_conversation(
             ctx.conversation_id,
