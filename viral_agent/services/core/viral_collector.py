@@ -106,13 +106,22 @@ class ViralNoteCollector:
         """
         self.cookies_str = cookies_str
         self.cookies = trans_cookies(cookies_str)
-        self.client = XHS_Apis()
+        self.client = XHS_Apis()          # HTTP 裸请求客户端（CDP 禁用时使用）
         self.collected_notes: List[ViralNote] = []
         self.search_keyword: str = ""
 
         # cookie 周期刷新
         self._owner_user_id: Optional[str] = owner_user_id
         self._last_cookie_refresh: float = time.time()
+
+        # CDP 客户端（CDP_DETAIL_ENABLED=true 时替代 HTTP 客户端）
+        from .playwright_detail_fetcher import cdp_detail_enabled
+        if cdp_detail_enabled() and owner_user_id:
+            from .xhs_cdp_client import XhsCdpClient
+            self._cdp_client: Optional["XhsCdpClient"] = XhsCdpClient(owner_user_id)
+            logger.info(f"[Collector] CDP 模式已启用 (user={owner_user_id!r})")
+        else:
+            self._cdp_client = None
 
         # 任务控制支持
         self._control_signal: Optional["TaskControlSignal"] = None
@@ -210,20 +219,31 @@ class ViralNoteCollector:
                 await asyncio.sleep(wait_sec)
 
             try:
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: self.client.search_note(
+                if self._cdp_client is not None:
+                    # ── CDP 模式：真实 Chrome 发请求，浏览器指纹完整 ──
+                    result = await self._cdp_client.search_note(
                         query=query,
-                        cookies_str=self.cookies_str,
                         page=page,
                         sort_type_choice=sort,
                         note_type=kwargs.get("note_type", 0),
                         note_time=kwargs.get("time_range", 0),
-                        note_range=0,
-                        pos_distance=0,
-                        geo="",
-                    ),
-                )
+                    )
+                else:
+                    # ── HTTP 模式（回退）──
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: self.client.search_note(
+                            query=query,
+                            cookies_str=self.cookies_str,
+                            page=page,
+                            sort_type_choice=sort,
+                            note_type=kwargs.get("note_type", 0),
+                            note_time=kwargs.get("time_range", 0),
+                            note_range=0,
+                            pos_distance=0,
+                            geo="",
+                        ),
+                    )
                 return result
             except (CaptchaError, SoftBlockError) as exc:
                 last_exc = exc
@@ -874,7 +894,12 @@ class ViralNoteCollector:
             return []
 
     async def _get_note_detail_async(self, note_url: str) -> Optional[Dict]:
-        """异步获取笔记详情，带指数退避重试（与搜索接口保持一致）。"""
+        """异步获取笔记详情，带指数退避重试（与搜索接口保持一致）。
+
+        优先级：
+          1. CDP 模式（CDP_DETAIL_ENABLED=true）：Playwright Chrome，浏览器指纹完整
+          2. HTTP 模式（回退）：签名 API 请求，可能被风控
+        """
         loop = asyncio.get_event_loop()
         last_exc: Optional[Exception] = None
         result = None
@@ -888,18 +913,21 @@ class ViralNoteCollector:
                 await asyncio.sleep(wait_sec)
 
             try:
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: self.client.get_note_info(note_url, self.cookies_str)
-                )
-                # 成功拿到响应，跳出重试循环，后续统一解析
+                if self._cdp_client is not None:
+                    # ── CDP 模式：真实 Chrome 导航笔记页，浏览器指纹完整 ──
+                    result = await self._cdp_client.get_note_info(note_url)
+                else:
+                    # ── HTTP 模式（回退）──
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: self.client.get_note_info(note_url, self.cookies_str)
+                    )
                 last_exc = None
                 break
             except (CaptchaError, SoftBlockError) as e:
                 last_exc = e
                 continue
             except Exception as e:
-                # 非风控异常不重试
                 logger.warning(f"获取详情异常（非风控）: {e}")
                 return None
 
@@ -947,12 +975,27 @@ class ViralNoteCollector:
         return None
 
     async def _html_fallback(self, note_url: str) -> Optional[Dict]:
-        """CAPTCHA 或 items 为空时，从笔记页面 HTML 的 window.__INITIAL_STATE__ 解析笔记详情。
+        """CAPTCHA 或 items 为空时，从笔记页面提取 window.__INITIAL_STATE__ 数据。
 
-        XHS 网页端将完整的笔记数据内嵌到 HTML 中，无需额外签名即可读取。
-        注意：直接 GET 请求仅在 XHS 将数据内嵌静态 HTML 时有效；
-        SPA 动态加载场景下 __INITIAL_STATE__ 可能为空，此时返回 None 属正常降级。
+        优先级：
+          1. CDP 模式（CDP_DETAIL_ENABLED=true）：Playwright Chrome 真实浏览器，
+             浏览器指纹完整，成功率最高。
+          2. 裸 HTTP 降级：直接 GET 笔记页面 HTML，仅在 XHS SSR 时有效。
         """
+        # ── 层级 1：CDP Playwright 模式 ─────────────────────────────────────
+        from .playwright_detail_fetcher import cdp_detail_enabled, PlaywrightDetailFetcher
+        if cdp_detail_enabled() and self._owner_user_id:
+            try:
+                fetcher = await PlaywrightDetailFetcher.get_for_identity(self._owner_user_id)
+                result = await fetcher.fetch(note_url)
+                if result:
+                    logger.info(f"[CDP] 详情获取成功: {note_url}")
+                    return result
+                logger.debug(f"[CDP] 未返回数据，回退裸 HTTP: {note_url}")
+            except Exception as exc:
+                logger.debug(f"[CDP] 异常，回退裸 HTTP: {exc}")
+
+        # ── 层级 2：裸 HTTP 降级 ────────────────────────────────────────────
         loop = asyncio.get_event_loop()
         web_origin = xhs_web_origin()
         headers = {
@@ -968,8 +1011,6 @@ class ViralNoteCollector:
             "Upgrade-Insecure-Requests": "1",
         }
         try:
-            # note_url 形如 {xhs_web_origin()}/explore/{note_id}?xsec_token=...
-            # 保留 xsec_token 参数，有助于正确返回笔记数据
             page_url = note_url
             resp = await loop.run_in_executor(
                 None,
@@ -980,7 +1021,6 @@ class ViralNoteCollector:
 
             html = resp.text
 
-            # Debug: 记录响应关键信息，方便诊断
             has_initial_state = "window.__INITIAL_STATE__" in html
             has_note_detail = "noteDetailMap" in html
             logger.debug(
@@ -989,17 +1029,15 @@ class ViralNoteCollector:
                 f"url={page_url}"
             )
             if not has_initial_state:
-                # 记录响应开头，便于判断是登录页/空白页/CAPTCHA 页
                 logger.warning(
                     f"HTML 降级：页面无 __INITIAL_STATE__，"
                     f"响应前200字符: {html[:200]!r}, url={page_url}"
                 )
                 return None
             if not has_note_detail:
-                logger.debug(f"HTML 降级：__INITIAL_STATE__ 存在但无 noteDetailMap（空状态），url={page_url}")
+                logger.debug(f"HTML 降级：__INITIAL_STATE__ 存在但无 noteDetailMap，url={page_url}")
                 return None
 
-            # 用栈计数器正确提取完整的 JSON 对象（防止非贪婪截断嵌套括号）
             js_str = _extract_initial_state_json(html)
             if not js_str:
                 logger.debug(f"HTML 降级：提取 __INITIAL_STATE__ JSON 失败，url={page_url}")
@@ -1020,7 +1058,10 @@ class ViralNoteCollector:
             if note:
                 logger.info(f"HTML 降级成功: note_id={note_id}")
             else:
-                logger.debug(f"HTML 降级：state 中无 note_id={note_id}，available keys: {list(state.get('note', {}).get('noteDetailMap', {}).keys())}")
+                logger.debug(
+                    f"HTML 降级：state 中无 note_id={note_id}，"
+                    f"available keys: {list(state.get('note', {}).get('noteDetailMap', {}).keys())}"
+                )
             return note
         except CaptchaError:
             raise
@@ -1178,6 +1219,15 @@ class ViralNoteCollector:
                 success=False,
                 error_message=str(e)
             )
+        finally:
+            # 维度结束后关闭 CDP 搜索会话（释放浏览器 Page）
+            if self._cdp_client is not None:
+                await self._cdp_client.close_session(
+                    query=query,
+                    sort_type_choice=int(sort_type),
+                    note_type=note_type,
+                    time_range=time_range,
+                )
 
     def filter_by_interaction(
         self,
@@ -1589,6 +1639,14 @@ class ViralNoteCollector:
                 success=False,
                 error_message=str(e)
             )
+        finally:
+            if self._cdp_client is not None:
+                await self._cdp_client.close_session(
+                    query=query,
+                    sort_type_choice=int(sort_type),
+                    note_type=note_type,
+                    time_range=time_range,
+                )
 
     async def search_viral_notes_unified(
         self,

@@ -148,3 +148,5 @@ tmp_pytest_review_base/
 # ============================
 db.sqlite3
 local_settings.py
+
+MediaCrawler/
