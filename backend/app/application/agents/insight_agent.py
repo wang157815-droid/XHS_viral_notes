@@ -303,18 +303,44 @@ class InsightAgent(BaseAgent):
         }
         for attempt in range(2):
             try:
-                text = await self.chat_stream_and_emit(
-                    task_id,
-                    _messages,
-                    overrides=_overrides,
-                )
+                if attempt == 0:
+                    # 第一次：流式 + 允许思考
+                    text = await self.chat_stream_and_emit(
+                        task_id,
+                        _messages,
+                        overrides=_overrides,
+                    )
+                else:
+                    # 第二次：无思考非流式重试
+                    await self.emit_log(
+                        task_id, "warn", "insight_summary 第1次解析失败，触发无思考重试…"
+                    )
+                    retry_msgs = list(_messages)
+                    last = retry_msgs[-1]
+                    retry_msgs[-1] = {
+                        "role": last["role"],
+                        "content": last["content"]
+                            + "\n\n【重要】请直接输出完整 JSON 对象，不要任何思考过程。",
+                    }
+                    resp = await self._gateway.chat(
+                        self.agent_id,
+                        retry_msgs,
+                        task_id=task_id,
+                        overrides={"temperature": 0.2, "max_tokens": 1000, "timeout": 120},
+                    )
+                    text = (resp.get("content") or "").strip()
+                    if "</think>" in text:
+                        text = text.split("</think>", 1)[1].strip()
+                    elif "<think>" in text:
+                        text = re.sub(r"<think>[\s\S]*", "", text, flags=re.IGNORECASE).strip()
+
                 text = text.strip()
                 parsed = extract_json_object(text)
                 if parsed:
                     return parsed
                 if attempt == 0:
                     await self.emit_log(
-                        task_id, "warn", "insight_summary 第 1 次解析失败,重试"
+                        task_id, "warn", "insight_summary 第1次 JSON 解析失败，触发无思考重试…"
                     )
             except ModelInvocationError as exc:
                 await self.emit_log(
@@ -323,8 +349,12 @@ class InsightAgent(BaseAgent):
                 if attempt == 1:
                     break
             except asyncio.TimeoutError:
+                await self.emit_log(
+                    task_id, "warn",
+                    f"insight_summary 第{attempt + 1}次超时{'，触发无思考重试…' if attempt == 0 else '，跳过'}",
+                )
                 if attempt == 1:
-                    await self.emit_log(task_id, "warn", "insight_summary 超时")
+                    break
         return {}
 
     # ------------------------------------------------------------------
@@ -394,7 +424,8 @@ class InsightAgent(BaseAgent):
     ) -> None:
         """为每条痛点标签生成「本质定义」和「核心诉求阐释」，原地回填到 pain_top。
 
-        失败时静默降级——pain_top 保持原有 {keyword, count} 结构，Excel J/K 列留空。
+        最多 2 次：第1次流式(含思考)，第2次无思考非流式重试。
+        两次均失败时静默降级——pain_top 保持原有 {keyword, count} 结构，Excel J/K 列留空。
         """
         system_prompt = prompt_registry.load("pain_point_insight.md")
 
@@ -415,49 +446,100 @@ class InsightAgent(BaseAgent):
             {"role": "user", "content": user_content},
         ]
 
-        try:
-            text = await asyncio.wait_for(
-                self.chat_stream_and_emit(
-                    task_id,
-                    messages,
-                    overrides={"temperature": 0.3, "max_tokens": 2000, "timeout": 120,
-                               "response_format": {"type": "json_object"}},
-                ),
-                timeout=90,
-            )
-        except (asyncio.TimeoutError, ModelInvocationError) as exc:
+        for attempt in range(2):
+            text: Optional[str] = None
+            try:
+                if attempt == 0:
+                    # 第一次：流式 + 允许思考
+                    text = await asyncio.wait_for(
+                        self.chat_stream_and_emit(
+                            task_id,
+                            messages,
+                            overrides={
+                                "temperature": 0.3,
+                                "max_tokens": 2000,
+                                "timeout": 120,
+                                "response_format": {"type": "json_object"},
+                            },
+                        ),
+                        timeout=90,
+                    )
+                else:
+                    # 第二次：无思考非流式重试
+                    await self.emit_log(
+                        task_id, "warn", "痛点洞察 第1次失败，触发无思考重试…"
+                    )
+                    retry_msgs = list(messages)
+                    last = retry_msgs[-1]
+                    retry_msgs[-1] = {
+                        "role": last["role"],
+                        "content": last["content"]
+                            + "\n\n【重要】请直接输出完整 JSON 对象，不要任何思考过程。",
+                    }
+                    resp = await self._gateway.chat(
+                        self.agent_id,
+                        retry_msgs,
+                        task_id=task_id,
+                        overrides={"temperature": 0.2, "max_tokens": 2000, "timeout": 120},
+                    )
+                    text = (resp.get("content") or "").strip()
+                    if "</think>" in text:
+                        text = text.split("</think>", 1)[1].strip()
+                    elif "<think>" in text:
+                        text = re.sub(r"<think>[\s\S]*", "", text, flags=re.IGNORECASE).strip()
+
+            except (asyncio.TimeoutError, ModelInvocationError) as exc:
+                await self.emit_log(
+                    task_id, "warn",
+                    f"痛点洞察 第{attempt + 1}次 超时/降级({type(exc).__name__})"
+                    f"{'，触发无思考重试…' if attempt == 0 else '，跳过'}",
+                )
+                if attempt == 1:
+                    return
+                continue
+
+            if not text:
+                if attempt == 0:
+                    await self.emit_log(task_id, "warn", "痛点洞察 第1次空响应，触发无思考重试…")
+                continue
+
+            text = text.strip()
+            parsed = _extract_pain_insight_array(text)
+            if not parsed:
+                await self.emit_log(
+                    task_id, "warn",
+                    f"痛点洞察 第{attempt + 1}次 JSON 解析失败"
+                    f"{'，触发无思考重试…' if attempt == 0 else '，跳过'}",
+                )
+                if attempt == 1:
+                    return
+                continue
+
+            # 成功：按 keyword 匹配回填
+            by_keyword = {item["keyword"]: item for item in pain_top if item.get("keyword")}
+            enriched_count = 0
+            for entry in parsed:
+                if not isinstance(entry, dict):
+                    continue
+                kw = entry.get("keyword") or ""
+                if kw not in by_keyword:
+                    continue
+                esdef = str(entry.get("essence_definition") or "").strip()
+                appeal = str(entry.get("core_appeal") or "").strip()
+                if esdef:
+                    by_keyword[kw]["essence_definition"] = esdef[:120]
+                if appeal:
+                    by_keyword[kw]["core_appeal"] = appeal[:160]
+                if esdef or appeal:
+                    enriched_count += 1
+
             await self.emit_log(
-                task_id, "warn", f"痛点洞察 LLM 超时/降级({type(exc).__name__})，跳过"
+                task_id, "info", f"痛点洞察回填完成: {enriched_count}/{len(pain_top)} 条"
             )
-            return
+            return  # 成功退出
 
-        text = text.strip()
-        parsed = _extract_pain_insight_array(text)
-        if not parsed:
-            await self.emit_log(task_id, "warn", "痛点洞察 JSON 解析失败，跳过")
-            return
-
-        # 按 keyword 匹配回填
-        by_keyword = {item["keyword"]: item for item in pain_top if item.get("keyword")}
-        enriched_count = 0
-        for entry in parsed:
-            if not isinstance(entry, dict):
-                continue
-            kw = entry.get("keyword") or ""
-            if kw not in by_keyword:
-                continue
-            esdef = str(entry.get("essence_definition") or "").strip()
-            appeal = str(entry.get("core_appeal") or "").strip()
-            if esdef:
-                by_keyword[kw]["essence_definition"] = esdef[:120]
-            if appeal:
-                by_keyword[kw]["core_appeal"] = appeal[:160]
-            if esdef or appeal:
-                enriched_count += 1
-
-        await self.emit_log(
-            task_id, "info", f"痛点洞察回填完成: {enriched_count}/{len(pain_top)} 条"
-        )
+        # 两次均失败，静默降级
+        await self.emit_log(task_id, "warn", "痛点洞察两次均失败，跳过回填")
 
 
 # ----------------------------------------------------------------------
