@@ -62,9 +62,18 @@ class AuthOrchestrator:
         try:
             from viral_agent.services.user_data_service import UserDataService
 
-            bootstrap_username = UserDataService.DEFAULT_USER
+            default_username = UserDataService.DEFAULT_USER
         except Exception:
-            bootstrap_username = "admin"
+            default_username = "admin"
+
+        # 用扫码发起者的真实 RedMuse username 命名 browser_data 目录（如 xhs_lance），
+        # 确保与 credential_resolver._resolve_username_and_cookies_path 的查找逻辑一致。
+        # 若无法解析则回退到 DEFAULT_USER ("admin")，保持向后兼容。
+        bootstrap_username = default_username
+        if creator_redmuse_user_id:
+            resolved = self._resolve_redmuse_username(creator_redmuse_user_id)
+            if resolved:
+                bootstrap_username = resolved
 
         qrcode_service = self._get_qrcode_service()
         session = await qrcode_service.create_session(
@@ -256,6 +265,18 @@ class AuthOrchestrator:
             failures.append(f"{label}_missing_user_id(payload_keys={payload_keys})")
 
         return "", "", "; ".join(failures) if failures else "selfinfo_empty"
+
+    @staticmethod
+    def _resolve_redmuse_username(redmuse_user_id: str) -> str:
+        """通过 RedMuse user_store 查用户名（如 'admin'、'lance'）；失败返回空串。"""
+        try:
+            from .redmuse_auth.user_store import get_user_store
+            user = get_user_store().get_by_user_id(redmuse_user_id)
+            if user and user.username:
+                return user.username.strip()
+        except Exception:
+            pass
+        return ""
 
     @classmethod
     def _extract_profile_fields(cls, payload: Any) -> tuple[str, str, str]:

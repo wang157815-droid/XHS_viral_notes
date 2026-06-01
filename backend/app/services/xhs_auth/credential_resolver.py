@@ -269,7 +269,17 @@ class XhsCredentialResolver:
                         for d in sorted(_browser_data_base.iterdir()):
                             if d.is_dir() and d.name.lower().startswith(prefix.lower()):
                                 return d.name, credential.cookies_path
-                    # 未找到目录但 username 确定，返回无 suffix 形式让 LiveCookieProvider 报明确错误
+                    # 步骤 2b：旧版扫码始终以 bootstrap_username="admin" 创建 profile，
+                    # 找不到 xhs_{redmuse_username} 时检查 xhs_admin 是否存在（向后兼容）。
+                    admin_dir = _browser_data_base / "xhs_admin"
+                    if admin_dir.exists():
+                        logger.debug(
+                            "[xhs_auth] browser_data/{} 不存在，回退到 xhs_admin profile（旧版兼容）",
+                            prefix,
+                        )
+                        return "xhs_admin", credential.cookies_path
+
+                    # 完全找不到：返回 prefix 让 LiveCookieProvider 报明确错误
                     return prefix, credential.cookies_path
 
                 # 步骤 3：兜底，从 cookies_path 反推目录段
