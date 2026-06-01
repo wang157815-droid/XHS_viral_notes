@@ -68,6 +68,42 @@ _COOKIE_REFRESH_INTERVAL = float(os.getenv("COLLECTOR_COOKIE_REFRESH_INTERVAL", 
 _SEMAPHORE_SIZE = int(os.getenv("COLLECTOR_SEMAPHORE", "2"))
 
 
+def _cdp_normalize_note(note: dict) -> None:
+    """将 CDP __INITIAL_STATE__ 返回的 camelCase 字段补全为 snake_case。
+
+    只补充下游代码会用到的关键字段，不做全量转换。原有 camelCase 字段保留，
+    避免破坏其他路径。
+    """
+    _map = {
+        "noteId":        "note_id",
+        "title":         "title",         # 同名，无需映射但列出便于维护
+        "desc":          "desc",
+        "type":          "type",
+        "userId":        "user_id",
+        "nickname":      "nickname",
+        "likedCount":    "liked_count",
+        "commentCount":  "comment_count",
+        "collectCount":  "collect_count",
+        "shareCount":    "share_count",
+        "videoUrl":      "video_url",
+        "imageList":     "image_list",
+        "tagList":       "tag_list",
+        "noteUrl":       "note_url",
+        "xsecToken":     "xsec_token",
+    }
+    for camel, snake in _map.items():
+        if snake not in note and camel in note:
+            note[snake] = note[camel]
+
+    # interact_info 展开（XHS __INITIAL_STATE__ 把互动数据嵌套在 interactInfo 里）
+    interact = note.get("interactInfo") or note.get("interact_info") or {}
+    if interact and "liked_count" not in note:
+        note["liked_count"]   = interact.get("likedCount") or interact.get("liked_count") or 0
+        note["comment_count"] = interact.get("commentCount") or interact.get("comment_count") or 0
+        note["collect_count"] = interact.get("collectedCount") or interact.get("collect_count") or 0
+        note["share_count"]   = interact.get("shareCount") or interact.get("share_count") or 0
+
+
 def _extract_initial_state_json(html: str) -> Optional[str]:
     """从 HTML 中提取 window.__INITIAL_STATE__ 的完整 JSON 字符串。
 
@@ -947,6 +983,13 @@ class ViralNoteCollector:
         # 解析返回值（返回的是元组：success, msg, res_json）
         if isinstance(result, tuple) and len(result) == 3:
             success, msg, res_json = result
+            # CDP 直接返回路径：__INITIAL_STATE__ 的 note（camelCase），跳过 handle_note_info
+            if success and isinstance(res_json, dict) and "_direct_note" in res_json:
+                note = res_json["_direct_note"]
+                # 补全 snake_case 字段，确保下游 note.get('note_id') 等能正常取值
+                _cdp_normalize_note(note)
+                logger.info(f"CDP 详情直接返回: note_id={note.get('note_id', '?')}")
+                return note
             if success and res_json and 'data' in res_json:
                 # 获取笔记详情
                 items = res_json.get('data', {}).get('items', [])

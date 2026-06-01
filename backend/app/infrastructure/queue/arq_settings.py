@@ -51,8 +51,35 @@ def _redis_settings():
 # --------------------------------------------------------------
 
 
+_STALE_JOB_IDS = ["warmup:manual"]
+"""Worker 重启时需要清理的已知僵尸 job ID 列表。
+
+这些 job 在上次进程被强杀后可能停留在 in_progress，导致下次「立即采集」
+被误判为「正在执行中」而跳过入队。Worker 重启即意味着上次任务已终止。
+"""
+
+
+async def _clear_stale_in_progress_jobs(pool: Any) -> None:
+    """清理因进程意外终止而残留的 in_progress 僵尸 job。"""
+    try:
+        from arq.jobs import Job, JobStatus  # noqa: PLC0415
+
+        for job_id in _STALE_JOB_IDS:
+            try:
+                job = Job(job_id, pool)
+                status = await job.status()
+                if status == JobStatus.in_progress:
+                    # 直接删除 ARQ 内部的 job key，让下次入队能正常执行
+                    await pool.delete(f"arq:job:{job_id}")
+                    logger.info(f"[arq.worker] 已清理僵尸 in_progress job: {job_id!r}")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[arq.worker] 清理 job {job_id!r} 时异常（可忽略）: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[arq.worker] 清理僵尸 job 失败: {exc}")
+
+
 async def on_startup(ctx: Dict[str, Any]) -> None:
-    """Worker 启动时：预热连接池 + pgvector schema。"""
+    """Worker 启动时：预热连接池 + pgvector schema + 清理僵尸 job。"""
     logger.info("[arq.worker] 启动中...")
 
     # Redis 单例
@@ -70,6 +97,12 @@ async def on_startup(ctx: Dict[str, Any]) -> None:
         await get_notes_vector_store().ensure_schema()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[arq.worker] pgvector schema 未就绪: {exc}")
+
+    # Worker 重启 = 上次所有任务已终止，清理残留的 in_progress 僵尸 job
+    # 避免「立即采集」被误判为「正在执行中」而无法触发
+    pool = ctx.get("redis")
+    if pool is not None:
+        await _clear_stale_in_progress_jobs(pool)
 
     logger.success("[arq.worker] 就绪")
 

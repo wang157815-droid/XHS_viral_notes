@@ -228,17 +228,37 @@ class XhsCredentialResolver:
         return None
 
     def _resolve_username_and_cookies_path(self, owner: str) -> tuple[str, str]:
-        """从 owner_user_id 找到 (username, cookies_path)，找不到返回 ('', '')。"""
-        # RedMuse 用户路径
+        """从 owner_user_id 找到 (browser_data_dirname, cookies_path)，找不到返回 ('', '')。
+
+        browser_data_dirname 是 LiveCookieProvider 用来拼 browser_data/<name> 的目录名。
+        QR 登录建目录时规则是 xhs_{redmuse_username}[_{suffix}]，因此：
+          1. 先通过 RedMuse user_store 查出 redmuse_username（如 "admin"）
+          2. 扫 browser_data/ 找第一个以 xhs_{username} 开头的目录
+          3. 兜底：从 cookies_path 里提取目录段（旧行为，可能得到 xhs_272529824448）
+        """
+        from pathlib import Path as _Path
+
+        _browser_data_base = REPO_ROOT / "browser_data"
+
         if _looks_like_redmuse_user_id(owner):
             credential = self.store.get_by_redmuse_user_id(owner)
             if credential and credential.cookies_path:
-                username = str(getattr(credential, "username", "") or "").strip()
-                if not username:
-                    # 从 cookies_path 反推 username
-                    import re
-                    m = re.search(r"datas/users/([^/]+)/cookies\.json", credential.cookies_path)
-                    username = m.group(1) if m else ""
+                # 步骤 1：通过 RedMuse user_store 查真实登录 username（如 "admin"）
+                redmuse_username = self._resolve_redmuse_username(owner)
+                if redmuse_username:
+                    # 步骤 2：扫 browser_data/ 找 xhs_{redmuse_username} 开头的目录
+                    prefix = f"xhs_{redmuse_username}"
+                    if _browser_data_base.exists():
+                        for d in sorted(_browser_data_base.iterdir()):
+                            if d.is_dir() and d.name.lower().startswith(prefix.lower()):
+                                return d.name, credential.cookies_path
+                    # 未找到目录但 username 确定，返回无 suffix 形式让 LiveCookieProvider 报明确错误
+                    return prefix, credential.cookies_path
+
+                # 步骤 3：兜底，从 cookies_path 反推目录段
+                import re
+                m = re.search(r"datas/users/([^/]+)/cookies\.json", credential.cookies_path)
+                username = m.group(1) if m else ""
                 return username, credential.cookies_path
 
         # 兼容旧路径：XHS 数字 ID
@@ -251,6 +271,18 @@ class XhsCredentialResolver:
                 return username, path
 
         return "", ""
+
+    @staticmethod
+    def _resolve_redmuse_username(redmuse_user_id: str) -> str:
+        """通过 RedMuse user_store 查用户名（如 'admin'）；失败返回空串。"""
+        try:
+            from ..redmuse_auth.user_store import get_user_store
+            user = get_user_store().get_by_user_id(redmuse_user_id)
+            if user and user.username:
+                return user.username.strip()
+        except Exception:
+            pass
+        return ""
 
     @staticmethod
     def _lookup_legacy_username_cookie(xhs_user_id: str) -> tuple[str, Optional[str]]:

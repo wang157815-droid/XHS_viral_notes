@@ -30,7 +30,8 @@ from typing import Dict, Optional
 from loguru import logger
 
 # ── 常量 ─────────────────────────────────────────────────────────────────────
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+# 文件位于 viral_agent/services/core/，parents[3] 才是项目根 XHS_viral_notes
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _STEALTH_JS_PATH = _REPO_ROOT / "libs" / "stealth.min.js"
 _USER_DATA_BASE_DIR = _REPO_ROOT / "browser_data"
 
@@ -132,17 +133,53 @@ class PlaywrightDetailFetcher:
     # ── 内部实现 ─────────────────────────────────────────────────────────────
 
     async def _get_context(self):
-        """优先复用 LiveCookieProvider 的 context；否则自建持久化 context。"""
-        # 方案 A：复用 LiveCookieProvider 的 context（stealth 已注入，cookies 共享）
-        try:
-            from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
-            provider = LiveCookieProvider._registry.get(self._username)
-            if provider and provider._context is not None:
-                return provider._context
-        except Exception:
-            pass
+        """优先复用 LiveCookieProvider 的 context；否则自建持久化 context。
 
-        # 方案 B：自建 context（LiveCookieProvider 未启动时的回退）
+        LiveCookieProvider._registry 键是 username，而 self._username 传入的可能是
+        owner_user_id（u_xxx）。优先尝试直接匹配，失败则通过 credential_resolver 映射。
+
+        LIVE_COOKIE_ENABLED=true 时，LiveCookieProvider 可能还在初始化中（竞争启动），
+        此时若立即自建 context 会与 LiveCookieProvider 争抢同一个 profile 目录，
+        导致 Chromium "browser has been closed" 报错。
+        因此 LIVE_COOKIE_ENABLED=true 时最多等待 10s 再决定是否自建。
+        """
+        import os as _os
+        live_cookie_enabled = _os.environ.get("LIVE_COOKIE_ENABLED", "false").lower() in ("1", "true", "yes")
+
+        # 方案 A：复用 LiveCookieProvider 的 context（stealth 已注入，cookies 共享）
+        # 若 LIVE_COOKIE_ENABLED=true 但 context 尚未就绪，则轮询等待，避免竞争 profile 目录
+        max_wait = 10.0 if live_cookie_enabled else 0.0
+        waited = 0.0
+        while True:
+            try:
+                from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
+                provider = LiveCookieProvider._registry.get(self._username)
+                if provider is None:
+                    resolved_username = _resolve_username_from_owner(self._username)
+                    if resolved_username and resolved_username != self._username:
+                        provider = LiveCookieProvider._registry.get(resolved_username)
+                if provider and provider._context is not None:
+                    return provider._context
+            except Exception:
+                pass
+
+            if waited >= max_wait:
+                break
+            await asyncio.sleep(0.5)
+            waited += 0.5
+
+        # 方案 B：自建 context（LiveCookieProvider 未启动/未启用时的回退）
+        # LIVE_COOKIE_ENABLED=true 且 profile 目录存在时跳过，避免与 LiveCookieProvider 抢目录
+        if live_cookie_enabled:
+            resolved_username = _resolve_username_from_owner(self._username)
+            profile_dir = _USER_DATA_BASE_DIR / (resolved_username or self._username)
+            if profile_dir.exists():
+                logger.warning(
+                    f"[CDP] LIVE_COOKIE_ENABLED=true 但等待 {max_wait}s 后 LiveCookieProvider 仍未就绪，"
+                    "跳过自建 context 避免抢占 profile 目录。CDP 本次不可用。"
+                )
+                return None
+
         async with self._lock:
             if self._own_context is not None:
                 return self._own_context
@@ -190,9 +227,8 @@ class PlaywrightDetailFetcher:
 
     async def _navigate_and_extract(self, page, note_url: str) -> Optional[Dict]:
         """导航到笔记页面并提取数据。"""
+        from apis.xhs_pc_apis import CaptchaError
         try:
-            # domcontentloaded 够用：__INITIAL_STATE__ 在 SSR HTML 里就已有
-            # networkidle 更稳但慢 2-3 秒，作为备选
             await page.goto(
                 note_url,
                 wait_until="domcontentloaded",
@@ -201,11 +237,11 @@ class PlaywrightDetailFetcher:
         except Exception as exc:
             logger.debug(f"[CDP] page.goto 超时/异常（继续尝试提取）: {exc}")
 
-        # 检查是否触发了 CAPTCHA 页面（XHS 的 461/471 会重定向到 captcha 页）
+        # 检查是否触发了 CAPTCHA 页面 → 抛 CaptchaError，触发上层退避重试
         current_url = page.url
         if "verify" in current_url or "captcha" in current_url.lower():
             logger.warning(f"[CDP] 页面重定向到验证页: {current_url}")
-            return None
+            raise CaptchaError(f"CDP detail: 页面跳转到验证页 {current_url}")
 
         # 方法 1：通过 JS 直接读取 window.__INITIAL_STATE__（最可靠）
         try:
@@ -290,3 +326,18 @@ def _is_server_mode() -> bool:
     if sys.platform in ("win32", "darwin"):
         return False
     return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _resolve_username_from_owner(owner_user_id: str) -> str:
+    """将 RedMuse owner_user_id 映射到 browser_data 使用的 username。
+
+    LiveCookieProvider._registry 键是 username，而调用方传入的可能是 u_xxx 格式的
+    RedMuse user_id。通过 credential_resolver 做一次映射；失败时返回原始值。
+    """
+    try:
+        from backend.app.services.xhs_auth.credential_resolver import get_credential_resolver
+        resolver = get_credential_resolver()
+        username, _ = resolver._resolve_username_and_cookies_path(owner_user_id)
+        return username or owner_user_id
+    except Exception:
+        return owner_user_id

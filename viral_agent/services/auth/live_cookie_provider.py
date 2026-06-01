@@ -27,7 +27,9 @@ from typing import Dict, Optional
 from loguru import logger
 
 # ── 常量（复用 qrcode_login_service 的设置）─────────────────────────────────
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+# 文件位于 viral_agent/services/auth/，parents[3] 才是项目根 XHS_viral_notes
+# （与 qrcode_login_service.py 保持一致；parents[4] 会指向上一级目录导致路径错误）
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _STEALTH_JS_PATH = _REPO_ROOT / "libs" / "stealth.min.js"
 _USER_DATA_BASE_DIR = _REPO_ROOT / "browser_data"
 

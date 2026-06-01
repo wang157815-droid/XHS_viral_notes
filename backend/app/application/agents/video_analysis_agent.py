@@ -67,9 +67,9 @@ _PER_VIDEO_TIMEOUT = int(os.getenv("VIDEO_ANALYSIS_PER_TIMEOUT", "60"))
 _RATE_LIMIT_BACKOFF = float(os.getenv("VIDEO_ANALYSIS_RATE_LIMIT_BACKOFF", "10"))
 
 # 视频源模式：
-#   url   - 直接把 XHS CDN URL 传给 AI（默认，但 XHS 防盗链导致大多数 URL 无法被 AI 访问）
-#   proxy - 本地下载视频再转 base64 传给 AI（推荐，绕过防盗链）
-_VIDEO_SOURCE_MODE = os.getenv("VIDEO_SOURCE_MODE", "proxy").lower()
+#   url   - 直接把 XHS CDN URL 传给 AI（默认；部分 AI 服务商服务器可直接访问 XHS CDN）
+#   proxy - 本地下载视频再转 base64 传给 AI（绕过防盗链，但有大小限制）
+_VIDEO_SOURCE_MODE = os.getenv("VIDEO_SOURCE_MODE", "url").lower()
 # proxy 模式最大原始视频大小（MiMo base64 限制 50MB，base64 膨胀约 1.35x，取 35MB 保留余量）
 _PROXY_MAX_BYTES = int(os.getenv("VIDEO_MAX_SIZE_MB", "35")) * 1024 * 1024
 # XHS CDN 下载时使用的 Referer（防盗链需要）
@@ -368,15 +368,20 @@ class VideoAnalysisAgent(BaseAgent):
             "请对这条视频按上面 6 要素 + pain + direction 做结构化标注,严格 JSON 输出。"
         )
 
-        # base64 模式下无需 fps/media_resolution（视频字节直传，不涉及服务端采样配置）
-        # URL 模式下保留 fps/media_resolution，遵循 MiMo 官方文档格式
         video_content_part: Dict[str, Any] = {
             "type": "video_url",
             "video_url": {"url": actual_video_url},
         }
+        # fps / media_resolution 是 MiMo 专用参数，其他供应商（阿里云等）不认这两个字段会返回 400
+        # 仅在使用 MiMo provider 且 URL 模式时注入
         if not use_base64:
-            video_content_part["fps"] = 2
-            video_content_part["media_resolution"] = "default"
+            try:
+                profile = self._gateway._registry.get("multimodal_default")
+                if profile and getattr(profile, "provider", "").startswith("xiaomi"):
+                    video_content_part["fps"] = 2
+                    video_content_part["media_resolution"] = "default"
+            except Exception:
+                pass
 
         messages = [
             {"role": "system", "content": system_prompt},

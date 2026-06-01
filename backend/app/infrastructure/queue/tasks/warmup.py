@@ -191,39 +191,74 @@ async def scheduled_warmup(ctx: Dict[str, Any], force: bool = False) -> Dict[str
     keywords = keywords[:max_keywords]
     logger.info(f"[arq.scheduled_warmup] 预热 {len(keywords)} 个关键词: {keywords}")
 
+    # 门控全部通过，写入 running 状态——进程意外中断时前端能看到正确提示
+    await _write_last_run(
+        {
+            "status": "running",
+            "trigger": trigger,
+            "started_at": start.isoformat(),
+            "total_keywords": len(keywords),
+        }
+    )
+
     results = {"ok": 0, "failed": 0, "skipped": 0, "per_keyword": []}
-    for idx, kw in enumerate(keywords):
-        try:
-            crawled = await _warmup_one_keyword(kw)
-            if crawled:
-                results["ok"] += 1
-                results["per_keyword"].append({"keyword": kw, "count": crawled, "status": "ok"})
-            else:
-                results["skipped"] += 1
-                results["per_keyword"].append({"keyword": kw, "count": 0, "status": "empty"})
-        except Exception as exc:  # noqa: BLE001
-            results["failed"] += 1
-            results["per_keyword"].append({"keyword": kw, "status": "error", "error": str(exc)})
-            logger.warning(f"[arq.scheduled_warmup] 预热 {kw} 失败: {exc}")
+    _completed_normally = False
+    try:
+        for idx, kw in enumerate(keywords):
+            try:
+                crawled = await _warmup_one_keyword(kw)
+                if crawled:
+                    results["ok"] += 1
+                    results["per_keyword"].append({"keyword": kw, "count": crawled, "status": "ok"})
+                else:
+                    results["skipped"] += 1
+                    results["per_keyword"].append({"keyword": kw, "count": 0, "status": "empty"})
+            except Exception as exc:  # noqa: BLE001
+                results["failed"] += 1
+                results["per_keyword"].append({"keyword": kw, "status": "error", "error": str(exc)})
+                logger.warning(f"[arq.scheduled_warmup] 预热 {kw} 失败: {exc}")
 
-        if idx < len(keywords) - 1:
-            await asyncio.sleep(_INTER_KEYWORD_SLEEP_SEC)
+            if idx < len(keywords) - 1:
+                await asyncio.sleep(_INTER_KEYWORD_SLEEP_SEC)
 
-    end = datetime.now(timezone.utc)
-    summary = {
-        "status": "ok" if results["ok"] > 0 else "empty",
-        "trigger": trigger,
-        "started_at": start.isoformat(),
-        "finished_at": end.isoformat(),
-        "duration_sec": (end - start).total_seconds(),
-        "total_keywords": len(keywords),
-        "ok_count": results["ok"],
-        "failed_count": results["failed"],
-        "skipped_count": results["skipped"],
-        "per_keyword": results["per_keyword"],
-    }
-    await _write_last_run(summary)
-    await _write_next_run_at(end)
+        _completed_normally = True
+    finally:
+        end = datetime.now(timezone.utc)
+        if _completed_normally:
+            summary = {
+                "status": "ok" if results["ok"] > 0 else "empty",
+                "trigger": trigger,
+                "started_at": start.isoformat(),
+                "finished_at": end.isoformat(),
+                "duration_sec": (end - start).total_seconds(),
+                "total_keywords": len(keywords),
+                "ok_count": results["ok"],
+                "failed_count": results["failed"],
+                "skipped_count": results["skipped"],
+                "per_keyword": results["per_keyword"],
+            }
+        else:
+            # 进程被 kill / asyncio.CancelledError / job_timeout 等中断
+            summary = {
+                "status": "interrupted",
+                "trigger": trigger,
+                "started_at": start.isoformat(),
+                "finished_at": end.isoformat(),
+                "duration_sec": (end - start).total_seconds(),
+                "total_keywords": len(keywords),
+                "ok_count": results["ok"],
+                "failed_count": results["failed"],
+                "skipped_count": results["skipped"],
+                "per_keyword": results["per_keyword"],
+                "reason": "process_interrupted",
+            }
+            logger.warning(
+                f"[arq.scheduled_warmup] 进程中断，写入 interrupted 终态 "
+                f"(ok={results['ok']} failed={results['failed']})"
+            )
+        await _write_last_run(summary)
+        await _write_next_run_at(end)
+
     logger.info(f"[arq.scheduled_warmup] 完成: trigger={trigger} ok={results['ok']} failed={results['failed']}")
     return summary
 

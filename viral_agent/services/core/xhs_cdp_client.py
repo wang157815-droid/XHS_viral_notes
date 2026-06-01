@@ -31,7 +31,7 @@ from urllib.parse import quote
 from loguru import logger
 
 from apis.xhs_pc_apis import CaptchaError, SoftBlockError
-from xhs_utils.common_util import xhs_web_origin
+from xhs_utils.xhs_util import xhs_web_origin
 
 # ── 常量 ─────────────────────────────────────────────────────────────────────
 _SEARCH_API_PATH = "/api/sns/web/v1/search/notes"
@@ -98,7 +98,11 @@ class _SearchSession:
         time_str      = _NOTE_TIME_MAP.get(self._time_range, "不限")
 
         async def handle_search_route(route, request):
-            """拦截搜索 API：修改过滤参数后发出，捕获响应。"""
+            """拦截搜索 API：仅修改 POST body，让浏览器自己发请求。
+
+            不使用 route.fetch()，避免产生"代理请求"被服务端检测或触发 socket hang up。
+            响应由独立的 response 监听器捕获（见 handle_search_response）。
+            """
             if request.method.upper() != "POST":
                 await route.continue_()
                 return
@@ -107,7 +111,7 @@ class _SearchSession:
                 body: Dict[str, Any] = json.loads(raw)
 
                 # 注入我们的过滤参数
-                body["sort"] = "general"   # 固定 sort 字段，通过 filters 控制
+                body["sort"] = "general"
                 body["note_type"] = 0
                 filters = body.get("filters", [])
 
@@ -123,20 +127,25 @@ class _SearchSession:
                 _set_filter("filter_note_time", time_str)
                 body["filters"] = filters
 
-                # 用修改后的 body 发出请求
-                response = await route.fetch(post_data=json.dumps(body))
-                try:
-                    resp_json = await response.json()
-                    await self._response_queue.put(resp_json)
-                except Exception:
-                    pass
-                await route.fulfill(response=response)
+                # 让浏览器用修改后的 body 发请求，不用 route.fetch
+                await route.continue_(post_data=json.dumps(body))
             except Exception as exc:
-                logger.debug(f"[CDP search route] 处理异常，直接 continue: {exc}")
+                logger.debug(f"[CDP search route] 改写 body 异常，直接 continue: {exc}")
                 await route.continue_()
 
-        # 注册路由拦截（仅搜索接口）
+        async def handle_search_response(response):
+            """监听搜索 API 的原生响应，捕获到队列（避免 route.fetch 的 socket hang up）。"""
+            if _SEARCH_API_PATH not in response.url:
+                return
+            try:
+                resp_json = await response.json()
+                await self._response_queue.put(resp_json)
+            except Exception as exc:
+                logger.debug(f"[CDP search response] 解析响应异常: {exc}")
+
+        # 路由拦截只负责改写 body；响应由 on("response") 独立捕获
         await self._page.route(f"**{_SEARCH_API_PATH}**", handle_search_route)
+        self._page.on("response", handle_search_response)
 
         search_url = (
             f"{self._web_origin}/search_result"
@@ -298,18 +307,10 @@ class XhsCdpClient:
             fetcher = await PlaywrightDetailFetcher.get_for_identity(self._owner_user_id)
             note = await fetcher.fetch(url)
             if note:
-                note_id = url.split("?")[0].rstrip("/").split("/")[-1]
-                # 包装成 feed API 的响应格式，供 _get_note_detail_async 解析
-                res_json = {
-                    "success": True,
-                    "msg": "ok",
-                    "data": {
-                        "items": [
-                            {"id": note_id, "note_card": note}
-                        ]
-                    }
-                }
-                return True, "ok", res_json
+                # __INITIAL_STATE__ 的 note 是 camelCase，与 API note_card 结构不同。
+                # 用 _direct_note 标记通知 _get_note_detail_async 跳过 handle_note_info，
+                # 直接返回 note dict（与 _html_fallback 路径行为一致）。
+                return True, "ok", {"_direct_note": note}
             else:
                 return False, "CDP detail fetch returned None", None
         except CaptchaError:
@@ -339,20 +340,30 @@ class XhsCdpClient:
     # ── context ──────────────────────────────────────────────────────────────
 
     async def _get_context(self):
-        """获取 LiveCookieProvider 的 browser context（优先）或 PlaywrightDetailFetcher 的 context。"""
-        # 方案 A：复用 LiveCookieProvider 的已登录 context
-        try:
-            from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
-            provider = LiveCookieProvider._registry.get(self._owner_user_id)
-            if provider and provider._context is not None:
-                return provider._context
-        except Exception:
-            pass
+        """获取 LiveCookieProvider 的 browser context（优先）或 PlaywrightDetailFetcher 的 context。
 
-        # 方案 B：复用 PlaywrightDetailFetcher 的 context
+        关键：LiveCookieProvider._registry 的键是 **username**（如 "admin"），
+        而 self._owner_user_id 是 RedMuse user_id（如 "u_xxx"）。
+        必须先通过 credential_resolver 把 owner_user_id 映射到 username，再查 registry。
+        """
+        username = await self._resolve_username()
+
+        # 方案 A：复用 LiveCookieProvider 的已登录 context（通过 username 查）
+        if username:
+            try:
+                from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
+                provider = LiveCookieProvider._registry.get(username)
+                if provider and provider._context is not None:
+                    logger.debug(f"[CDP] 复用 LiveCookieProvider context (username={username!r})")
+                    return provider._context
+            except Exception:
+                pass
+
+        # 方案 B：复用 PlaywrightDetailFetcher 的 context（用 username 或 owner_user_id）
+        lookup_key = username or self._owner_user_id
         try:
             from viral_agent.services.core.playwright_detail_fetcher import PlaywrightDetailFetcher
-            fetcher = await PlaywrightDetailFetcher.get_for_identity(self._owner_user_id)
+            fetcher = await PlaywrightDetailFetcher.get_for_identity(lookup_key)
             ctx = await fetcher._get_context()
             if ctx is not None:
                 return ctx
@@ -360,8 +371,21 @@ class XhsCdpClient:
             pass
 
         logger.error(
-            f"[CDP] 无法获取 browser context for user={self._owner_user_id!r}. "
+            f"[CDP] 无法获取 browser context (owner={self._owner_user_id!r}, username={username!r}). "
             "请确保已通过扫码登录建立 browser_data/<username>/ 目录，"
             "并开启 LIVE_COOKIE_ENABLED=true"
         )
         return None
+
+    async def _resolve_username(self) -> str:
+        """将 owner_user_id 映射到 browser_data 目录使用的 username。"""
+        try:
+            from backend.app.services.xhs_auth.credential_resolver import get_credential_resolver
+            resolver = get_credential_resolver()
+            username, _ = resolver._resolve_username_and_cookies_path(self._owner_user_id)
+            if username:
+                return username
+        except Exception:
+            pass
+        # fallback：owner_user_id 本身可能就是 username（单用户场景）
+        return self._owner_user_id
