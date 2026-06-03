@@ -17,9 +17,10 @@ from functools import lru_cache
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Query, Request, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from ...core.config import settings
 from ...services.wxwork_crypto import WXBizMsgCrypt
@@ -435,3 +436,60 @@ async def wxwork_clear_history(
     _save_history(user_id, [])
     logger.info("[wxwork] 已清空用户 {} 的对话历史", user_id)
     return {"user_id": user_id, "cleared": True}
+
+
+# ------------------------------------------------------------------ #
+# 主动推送接口（手动触发 / 定时任务 / 前端调用 均走这里）
+# ------------------------------------------------------------------ #
+
+class PushRequest(BaseModel):
+    to_users: list[str]   # 目标用户ID列表，传 ["@all"] 表示全员广播
+    content: str = ""     # 直接发送的文本（use_ai=False 时必填）
+    use_ai: bool = False  # True：Minimax 生成内容再发；False：直接发 content
+    ai_prompt: str = ""   # use_ai=True 时给 Minimax 的指令
+
+
+@router.post("/push")
+async def wxwork_push(
+    body: PushRequest,
+    background_tasks: BackgroundTasks,
+    secret: str = Query(..., description="管理员密钥"),
+):
+    """
+    主动给企微用户发消息，支持三种用法：
+
+    1. 直接发固定文本：
+       {"to_users": ["zhangsan"], "content": "今日早报：..."}
+
+    2. AI 生成内容后发送（每个用户带各自的历史上下文）：
+       {"to_users": ["zhangsan", "lisi"], "use_ai": true,
+        "ai_prompt": "根据用户最近的问题，给他推送一条今日小红书运营技巧"}
+
+    3. 广播给所有人（企微限制：@all 仅限应用可见范围内的成员）：
+       {"to_users": ["@all"], "content": "系统公告：..."}
+    """
+    if secret != settings.wxwork_admin_secret:
+        raise HTTPException(status_code=403, detail="secret 错误")
+    if not body.to_users:
+        raise HTTPException(status_code=400, detail="to_users 不能为空")
+    if not body.use_ai and not body.content.strip():
+        raise HTTPException(status_code=400, detail="content 与 use_ai 至少指定一个")
+
+    background_tasks.add_task(_do_push, body.to_users, body.content, body.use_ai, body.ai_prompt)
+    return {"queued": True, "to_users": body.to_users, "use_ai": body.use_ai}
+
+
+async def _do_push(to_users: list[str], content: str, use_ai: bool, ai_prompt: str) -> None:
+    """后台执行推送，对每个用户独立生成内容（use_ai=True 时携带各自历史）"""
+    for user_id in to_users:
+        try:
+            if use_ai:
+                # 以 ai_prompt 为问题，携带该用户历史，让 Minimax 生成个性化内容
+                msg = await _call_minimax(user_id, ai_prompt)
+                _update_history(user_id, f"[系统推送指令] {ai_prompt}", msg)
+            else:
+                msg = content
+            await _send_wxwork_message(user_id, msg)
+            _append_log(user_id, f"[主动推送] {ai_prompt or content[:30]}", msg, True)
+        except Exception as exc:
+            logger.error("[wxwork] 推送失败 to={}: {}", user_id, exc)
