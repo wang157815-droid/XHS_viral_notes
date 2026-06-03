@@ -9,6 +9,7 @@ from .routes import (
     metrics,
     settings,
     tasks,
+    wxwork_aibot,
     wxwork_webhook,
     xhs_auth,
 )
@@ -23,6 +24,8 @@ api_router.include_router(history.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(metrics.router)
 api_router.include_router(settings.router)
-# 企业微信消息回调（不需要 JWT 鉴权）
+# 企业微信自建应用消息回调
 api_router.include_router(wxwork_webhook.router)
+# 企业微信智能机器人消息回调（数据与智能专区）
+api_router.include_router(wxwork_aibot.router)
 
