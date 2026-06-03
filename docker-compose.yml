@@ -42,6 +42,8 @@ services:
       - ./logs:/app/logs
       # 向量数据库持久化
       - ./viral_agent/storage/chromadb:/app/viral_agent/storage/chromadb
+      # 扫码登录持久化：容器重启后无需重新扫码
+      - ./browser_data:/app/browser_data
     env_file:
       - .env
     environment:
@@ -80,6 +82,8 @@ services:
       - ./datas:/app/datas
       - ./logs:/app/logs
       - ./viral_agent/storage/chromadb:/app/viral_agent/storage/chromadb
+      # 扫码登录持久化：与主服务共享同一个 browser_data 目录
+      - ./browser_data:/app/browser_data
     env_file:
       - .env
     environment:
