@@ -17,6 +17,37 @@ class Settings(BaseModel):
     conversation_os_enabled: bool = _env_bool("CONVERSATION_OS_ENABLED", True)
     conversation_knowledge_qa_enabled: bool = _env_bool("CONVERSATION_KNOWLEDGE_QA_ENABLED", True)
 
+    # ------------------------------------------------------------------ #
+    # 企业微信回调配置
+    # ------------------------------------------------------------------ #
+    # 企微后台「开发者接口」→「接收消息」中填写的 Token
+    wxwork_token: str = os.getenv("WXWORK_TOKEN", "")
+    # 企微后台生成的 EncodingAESKey（43位，不含末尾'='）
+    wxwork_encoding_aes_key: str = os.getenv("WXWORK_ENCODING_AES_KEY", "")
+    # 企业 ID（企微后台「我的企业」→「企业ID」）
+    wxwork_corp_id: str = os.getenv("WXWORK_CORP_ID", "")
+    # 应用 AgentID（企微后台「应用管理」→ 对应应用）
+    wxwork_agent_id: int = int(os.getenv("WXWORK_AGENT_ID", "0"))
+    # 应用 Secret
+    wxwork_corp_secret: str = os.getenv("WXWORK_CORP_SECRET", "")
+    # 查看消息记录的管理密钥（自定义一个复杂字符串即可）
+    wxwork_admin_secret: str = os.getenv("WXWORK_ADMIN_SECRET", "")
+    # 每个用户保留的最大对话轮数（1轮 = 用户1条+AI1条），超出后裁剪最早的
+    wxwork_max_history_turns: int = int(os.getenv("WXWORK_MAX_HISTORY_TURNS", "10"))
+
+    # ------------------------------------------------------------------ #
+    # Minimax Chat API 配置
+    # ------------------------------------------------------------------ #
+    minimax_api_key: str = os.getenv("MINIMAX_API_KEY", "")
+    minimax_api_base: str = os.getenv("MINIMAX_API_BASE", "https://api.minimax.chat/v1")
+    minimax_model: str = os.getenv("MINIMAX_MODEL", "abab6.5s-chat")
+    minimax_max_tokens: int = int(os.getenv("MINIMAX_MAX_TOKENS", "1024"))
+    # 系统角色指令（可在 .env 中自定义）
+    minimax_system_prompt: str = os.getenv(
+        "MINIMAX_SYSTEM_PROMPT",
+        "你是一个专业的小红书内容运营助手，擅长爆文分析、内容策划和创作建议。请用简洁友好的中文回答用户问题。",
+    )
+
 
 settings = Settings()
 
