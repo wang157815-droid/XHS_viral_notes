@@ -675,6 +675,7 @@ class CrawlerAgent(BaseAgent):
                 runtime_cfg,
                 dims_limit=dims_limit,
                 keywords_by_dim_override=crawl_kw_override,
+                owner_user_id=owner_user_id,
             )
 
         for dim, prior in prior_cached_samples.items():
@@ -861,6 +862,7 @@ class CrawlerAgent(BaseAgent):
         runtime_cfg: Dict[str, Any],
         dims_limit: Optional[Set[str]] = None,
         keywords_by_dim_override: Optional[Dict[str, List[str]]] = None,
+        owner_user_id: Optional[str] = None,
     ) -> None:
         """按 keywords 去重并对不同组串行采集，规避 XHS 软反爬。
 

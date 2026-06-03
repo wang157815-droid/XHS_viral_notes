@@ -302,7 +302,10 @@ class XhsCdpClient:
         直接通过 PlaywrightDetailFetcher 导航笔记页提取数据，
         返回的 res_json 包装成与 XhsPcApis.get_note_info 兼容的格式。
         """
-        from viral_agent.services.core.playwright_detail_fetcher import PlaywrightDetailFetcher
+        from viral_agent.services.core.playwright_detail_fetcher import (
+            CDPContextUnavailableError,
+            PlaywrightDetailFetcher,
+        )
         try:
             fetcher = await PlaywrightDetailFetcher.get_for_identity(self._owner_user_id)
             note = await fetcher.fetch(url)
@@ -313,6 +316,11 @@ class XhsCdpClient:
                 return True, "ok", {"_direct_note": note}
             else:
                 return False, "CDP detail fetch returned None", None
+        except CDPContextUnavailableError as exc:
+            # browser_data 目录不存在（虚拟号登录用户）→ 与 search_note 保持一致的标签，
+            # 让上层 viral_collector 检测后禁用 CDP 并降级 HTTP。
+            logger.info(f"[CDP] context 不可用（虚拟号/无浏览器配置）: {exc}")
+            return False, "CDP context unavailable", None
         except CaptchaError:
             raise
         except Exception as exc:

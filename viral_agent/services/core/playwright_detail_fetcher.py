@@ -59,6 +59,17 @@ def cdp_detail_enabled() -> bool:
     return os.environ.get("CDP_DETAIL_ENABLED", "false").lower() in ("1", "true", "yes")
 
 
+class CDPContextUnavailableError(Exception):
+    """browser_data 目录不存在或 LiveCookieProvider 未就绪，CDP context 无法获取。
+
+    常见原因：
+    - 用户通过虚拟号（SMS）登录，没有 browser_data/<username> 持久化 Profile
+    - QR 扫码还未完成，browser_data 目录尚未创建
+    调用方应捕获此异常并降级为 HTTP 模式。
+    """
+    pass
+
+
 class PlaywrightDetailFetcher:
     """用真实 Chrome 获取笔记详情的单例 fetcher（per-identity）。"""
 
@@ -94,8 +105,10 @@ class PlaywrightDetailFetcher:
         async with semaphore:
             context = await self._get_context()
             if context is None:
-                logger.warning("[CDP] 无法获取 browser context，跳过 CDP 详情获取")
-                return None
+                raise CDPContextUnavailableError(
+                    f"无法获取 browser context（browser_data/{self._username} 不存在或 "
+                    "LiveCookieProvider 未就绪）。虚拟号/SMS 登录用户请使用 HTTP 模式。"
+                )
 
             page = None
             try:

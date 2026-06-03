@@ -264,6 +264,32 @@ class ViralNoteCollector:
                         note_type=kwargs.get("note_type", 0),
                         note_time=kwargs.get("time_range", 0),
                     )
+                    # 虚拟号/SMS 登录用户无 browser_data 目录，CDP context 不可用时自动降级 HTTP
+                    if (
+                        isinstance(result, tuple)
+                        and len(result) == 3
+                        and not result[0]
+                        and result[1] == "CDP context unavailable"
+                    ):
+                        logger.warning(
+                            "[collector] CDP context 不可用（虚拟号登录/无持久化浏览器配置文件），"
+                            "本次任务自动降级为 HTTP 模式并禁用 CDP"
+                        )
+                        self._cdp_client = None
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda: self.client.search_note(
+                                query=query,
+                                cookies_str=self.cookies_str,
+                                page=page,
+                                sort_type_choice=sort,
+                                note_type=kwargs.get("note_type", 0),
+                                note_time=kwargs.get("time_range", 0),
+                                note_range=0,
+                                pos_distance=0,
+                                geo="",
+                            ),
+                        )
                 else:
                     # ── HTTP 模式（回退）──
                     result = await loop.run_in_executor(
@@ -952,6 +978,22 @@ class ViralNoteCollector:
                 if self._cdp_client is not None:
                     # ── CDP 模式：真实 Chrome 导航笔记页，浏览器指纹完整 ──
                     result = await self._cdp_client.get_note_info(note_url)
+                    # 虚拟号/SMS 登录用户无 browser_data 目录，CDP context 不可用时自动降级 HTTP
+                    if (
+                        isinstance(result, tuple)
+                        and len(result) == 3
+                        and not result[0]
+                        and result[1] == "CDP context unavailable"
+                    ):
+                        logger.warning(
+                            "[collector] CDP context 不可用（虚拟号登录/无持久化浏览器配置文件），"
+                            "笔记详情自动降级为 HTTP 模式并禁用 CDP"
+                        )
+                        self._cdp_client = None
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda: self.client.get_note_info(note_url, self.cookies_str)
+                        )
                 else:
                     # ── HTTP 模式（回退）──
                     result = await loop.run_in_executor(
