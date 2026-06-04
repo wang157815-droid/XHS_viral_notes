@@ -16,7 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from loguru import logger
 
 from ...core.config import settings
-from ...services.wxwork_session_archive import FinanceSDKError, fetch_and_decrypt
+from ...services.wxwork_session_archive import FinanceSDKError, safe_fetch_and_decrypt as fetch_and_decrypt
 
 router = APIRouter(prefix="/wxwork/session", tags=["wxwork-session"])
 

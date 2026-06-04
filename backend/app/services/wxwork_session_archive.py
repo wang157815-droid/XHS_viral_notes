@@ -15,9 +15,11 @@
     放到 WXWORK_FINANCE_SDK_PATH 指定的路径（默认 /app/WeWorkFinanceSdk_C.so）
   - Python cryptography 库（pip install cryptography）
 """
+import asyncio
 import base64
 import ctypes
 import json
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -282,3 +284,51 @@ def fetch_and_decrypt(seq: int = 0, limit: int = 100) -> tuple[list[dict], int]:
         len(result.get("chatdata", [])), len(messages), max_seq,
     )
     return messages, max_seq
+
+
+# ------------------------------------------------------------------ #
+# 进程隔离封装：防止 SDK SIGSEGV 崩溃污染主进程
+# ------------------------------------------------------------------ #
+
+async def safe_fetch_and_decrypt(
+    seq: int = 0,
+    limit: int = 100,
+    timeout: int = 30,
+) -> tuple[list[dict], int]:
+    """
+    在独立子进程中调用 Finance SDK，安全获取并解密会话记录。
+
+    即使 SDK 因 SIGSEGV / free(): invalid pointer 崩溃，
+    也只会杀死子进程，主应用进程不受影响。
+
+    返回 (messages, max_seq)，与 fetch_and_decrypt 完全相同的语义。
+    """
+    worker_module = str(Path(__file__).parent / "sdk_worker.py")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, worker_module, str(seq), str(limit),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise FinanceSDKError(f"Finance SDK 子进程超时（{timeout}s）")
+
+    if proc.returncode not in (0, None):
+        err_text = stderr.decode("utf-8", errors="replace").strip()
+        raise FinanceSDKError(
+            f"Finance SDK 子进程崩溃 (exit={proc.returncode}): {err_text[:300]}"
+        )
+
+    raw = stdout.decode("utf-8").strip()
+    if not raw:
+        raise FinanceSDKError("Finance SDK 子进程无输出")
+
+    result = json.loads(raw)
+    if not result.get("ok"):
+        raise FinanceSDKError(result.get("error", "未知错误"))
+
+    return result["messages"], result["max_seq"]
