@@ -147,8 +147,8 @@ class WXWorkFinanceSDK:
                 ctypes.c_void_p(self._sdk_ptr),
                 ctypes.c_ulonglong(seq),
                 ctypes.c_uint(limit),
-                proxy.encode("utf-8") if proxy else b"",
-                passwd.encode("utf-8") if passwd else b"",
+                proxy.encode("utf-8") if proxy else None,   # NULL = 不使用代理
+                passwd.encode("utf-8") if passwd else None,  # NULL = 无密码
                 ctypes.c_int(timeout),
                 ctypes.c_void_p(slice_ptr),
             )
