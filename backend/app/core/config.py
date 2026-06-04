@@ -54,8 +54,6 @@ class Settings(BaseModel):
     minimax_api_base: str = os.getenv("MINIMAX_API_BASE", "https://api.minimax.chat/v1")
     minimax_model: str = os.getenv("MINIMAX_MODEL", "abab6.5s-chat")
     minimax_max_tokens: int = int(os.getenv("MINIMAX_MAX_TOKENS", "1024"))
-    # 意图识别专用模型（建议用非推理型模型，避免 think 标签干扰 JSON 解析）
-    minimax_intent_model: str = os.getenv("MINIMAX_INTENT_MODEL", "")
     # 系统角色指令（可在 .env 中自定义）
     minimax_system_prompt: str = os.getenv(
         "MINIMAX_SYSTEM_PROMPT",

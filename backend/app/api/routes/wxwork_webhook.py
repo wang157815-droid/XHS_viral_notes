@@ -279,15 +279,16 @@ async def _extract_intent(user_input: str) -> dict:
             "Authorization": f"Bearer {settings.minimax_api_key}",
             "Content-Type": "application/json",
         }
-        intent_model = settings.minimax_intent_model or settings.minimax_model
         payload = {
-            "model": intent_model,
+            "model": settings.minimax_model,
             "messages": [
                 {"role": "system", "content": _INTENT_SYSTEM},
                 {"role": "user", "content": user_input},
             ],
             "max_tokens": 128,
-            "temperature": 0.0,  # 确定性输出
+            "temperature": 0.0,
+            "enable_thinking": False,   # 关闭推理模式，确保直接输出 JSON
+            "thinking": {"type": "disabled"},  # DeepSeek / 部分兼容接口
         }
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
