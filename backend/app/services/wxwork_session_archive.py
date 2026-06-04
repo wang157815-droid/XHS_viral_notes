@@ -112,7 +112,7 @@ class WXWorkFinanceSDK:
 
         lib.DecryptData.restype = ctypes.c_int
         lib.DecryptData.argtypes = [
-            ctypes.c_char_p,  # encrypt_key（RSA 解密后再 base64 的随机密钥）
+            ctypes.c_void_p,  # encrypt_key（RSA 解密后的原始 AES 密钥字节）
             ctypes.c_char_p,  # encrypt_msg（encrypt_chat_msg 原始值）
             ctypes.c_void_p,  # msg (Slice_t*)
         ]
@@ -157,18 +157,20 @@ class WXWorkFinanceSDK:
         finally:
             self._lib.FreeSlice(ctypes.c_void_p(slice_ptr))
 
-    def decrypt_msg(self, aes_key_b64: str, encrypt_chat_msg: str) -> dict:
+    def decrypt_msg(self, aes_key: bytes, encrypt_chat_msg: str) -> dict:
         """
         解密单条会话内容。
 
-        aes_key_b64:    RSA 解密后的随机密钥再 base64 编码的字符串
+        aes_key:          RSA 私钥解密后的原始 AES 密钥字节（直接传给 DecryptData）
         encrypt_chat_msg: GetChatData 返回的 encrypt_chat_msg 字段原始值
-        返回:           明文消息 JSON（含 from/tolist/msgtype/text 等字段）
+        返回:             明文消息 JSON（含 from/tolist/msgtype/text 等字段）
         """
         slice_ptr = self._lib.NewSlice()
         try:
+            # 用 create_string_buffer 传递二进制密钥，避免 c_char_p 在遇到 \x00 时截断
+            key_buf = ctypes.create_string_buffer(aes_key, len(aes_key))
             ret = self._lib.DecryptData(
-                aes_key_b64.encode("utf-8"),
+                key_buf,
                 encrypt_chat_msg.encode("utf-8"),
                 ctypes.c_void_p(slice_ptr),
             )
@@ -216,18 +218,22 @@ def _load_private_key_pem() -> bytes:
     )
 
 
-def _rsa_decrypt_random_key(encrypt_random_key_b64: str) -> str:
+def _rsa_decrypt_random_key(encrypt_random_key_b64: str) -> bytes:
     """
-    用 RSA 私钥（PKCS1v15）解密 encrypt_random_key，
-    返回解密后内容的 base64 字符串（供 SDK DecryptData 使用）。
+    用 RSA 私钥（PKCS1v15）解密 encrypt_random_key。
+
+    流程（对应文档说明）：
+      a) base64 decode encrypt_random_key → 密文字节 str1
+      b) RSA PKCS1 私钥解密 str1 → 随机 AES 密钥原始字节 str2
+      c) 将 str2 直接传给 SDK DecryptData（不做 base64 二次编码）
     """
     pem = _load_private_key_pem()
     private_key = serialization.load_pem_private_key(
         pem, password=None, backend=default_backend()
     )
     encrypted_bytes = base64.b64decode(encrypt_random_key_b64)
-    decrypted = private_key.decrypt(encrypted_bytes, padding.PKCS1v15())
-    return base64.b64encode(decrypted).decode("utf-8")
+    # 直接返回原始字节，DecryptData 需要的就是这份裸字节
+    return private_key.decrypt(encrypted_bytes, padding.PKCS1v15())
 
 
 # ------------------------------------------------------------------ #
@@ -258,8 +264,8 @@ def fetch_and_decrypt(seq: int = 0, limit: int = 100) -> tuple[list[dict], int]:
         if item_seq > max_seq:
             max_seq = item_seq
         try:
-            aes_key_b64 = _rsa_decrypt_random_key(item["encrypt_random_key"])
-            msg = sdk.decrypt_msg(aes_key_b64, item["encrypt_chat_msg"])
+            aes_key = _rsa_decrypt_random_key(item["encrypt_random_key"])
+            msg = sdk.decrypt_msg(aes_key, item["encrypt_chat_msg"])
             msg["_seq"] = item_seq
             msg["_msgid"] = item.get("msgid", "")
             messages.append(msg)
