@@ -6,7 +6,7 @@ Finance SDK 子进程入口脚本
 不会杀死主应用进程。
 
 Usage:
-    python -m backend.app.services.sdk_worker <seq> <limit>
+    python <此文件路径> <seq> <limit>
 
 Output:
     JSON 写入 stdout：
@@ -14,7 +14,16 @@ Output:
       {"ok": false, "error": "错误描述"}
 """
 import json
+import os
 import sys
+from pathlib import Path
+
+# 把项目根目录加入 sys.path，确保 `from backend.app...` 可以找到
+# 本文件位于 <root>/backend/app/services/sdk_worker.py
+# parents: [0]=services, [1]=app, [2]=backend, [3]=<root>
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 
 def main() -> None:

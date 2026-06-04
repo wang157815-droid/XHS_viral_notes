@@ -304,10 +304,18 @@ async def safe_fetch_and_decrypt(
     返回 (messages, max_seq)，与 fetch_and_decrypt 完全相同的语义。
     """
     worker_module = str(Path(__file__).parent / "sdk_worker.py")
+    # 项目根目录：本文件在 <root>/backend/app/services/
+    project_root = str(Path(__file__).resolve().parents[3])
+    env = {
+        **__import__("os").environ,
+        "PYTHONPATH": project_root,
+    }
     proc = await asyncio.create_subprocess_exec(
         sys.executable, worker_module, str(seq), str(limit),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=project_root,
+        env=env,
     )
 
     try:
