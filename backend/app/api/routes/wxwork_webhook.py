@@ -245,18 +245,29 @@ def _strip_thinking(text: str) -> str:
 _INTENT_SYSTEM = """\
 你是企业微信机器人的意图提取助手。根据用户最新的一句话，判断是否需要执行以下动作之一：
 
-1. remind  — 用户希望在指定时间后收到提醒（如"30分钟后提醒我开会"）
-2. forward — 用户希望把一条消息发送给另一个企业成员（如"帮我告诉张三明天9点开会"）
-3. none    — 普通问答，不需要额外动作
+1. remind        — 在指定时间后给用户发提醒（如"30分钟后提醒我开会"）
+2. forward       — 把消息转发给另一个成员（如"帮我告诉张三明天9点开会"）
+3. broadcast     — 给所有人广播通知（如"广播通知：明天下午3点全体会议"）
+4. push_msg      — 推送指定内容给指定用户（如"给李四发：报告有问题"）
+5. session_sync  — 触发会话记录增量同步（如"同步一下会话记录"/"更新会话存档"）
+6. session_query — 查询会话存档（如"查看今天的会话"/"张三最近说了什么"）
+7. clear_history — 清空自己的对话历史（如"忘掉之前的内容"/"重置对话"/"清空历史"）
+8. none          — 普通问答，不需要额外动作
 
 只返回合法 JSON，不要加任何说明：
 - {"action":"remind","delay_minutes":30,"message":"提醒你：开会时间到了"}
 - {"action":"forward","to_user":"ZhangSan","message":"明天9点开会，请准时参加"}
+- {"action":"broadcast","message":"明天下午3点全体会议，请准时参加"}
+- {"action":"push_msg","to_user":"LiSi","message":"你的报告有问题，请重新提交"}
+- {"action":"session_sync"}
+- {"action":"session_query","user":"ZhangSan","date":"today"}
+- {"action":"clear_history"}
 - {"action":"none"}
 
 规则：
 - delay_minutes 必须是正整数，最小1，最大1440（24小时）
 - to_user 填企业微信的英文账号/userid，若用户只提了中文名则填该中文名
+- date 填 today / yesterday 或 YYYY-MM-DD，不确定时填 today
 - 若用户表达不明确，返回 {"action":"none"}
 """
 
@@ -289,11 +300,78 @@ async def _extract_intent(user_input: str) -> dict:
         # 容错：去掉可能包裹的 markdown 代码块
         raw = re.sub(r"^```[a-z]*\n?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
         intent = json.loads(raw)
-        if intent.get("action") in {"remind", "forward", "none"}:
+        _VALID_ACTIONS = {
+            "remind", "forward", "broadcast", "push_msg",
+            "session_sync", "session_query", "clear_history", "none",
+        }
+        if intent.get("action") in _VALID_ACTIONS:
             return intent
     except Exception as exc:
         logger.debug("[wxwork] 意图提取失败（忽略）: {}", exc)
     return {"action": "none"}
+
+
+# 会话存档本地目录（与 wxwork_session.py 保持一致）
+_SESSION_STORE_DIR = Path(__file__).resolve().parents[5] / "datas" / "wxwork_session"
+_SESSION_SEQ_FILE = _SESSION_STORE_DIR / "last_seq.txt"
+
+
+async def _query_session_for_bot(user: str, date_str: str, limit: int = 15) -> str:
+    """
+    为机器人意图查询本地会话存档，返回可读的纯文本摘要。
+    date_str 支持 today / yesterday / YYYY-MM-DD。
+    """
+    from datetime import timedelta
+
+    if date_str in ("today", ""):
+        target_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    elif date_str == "yesterday":
+        target_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    else:
+        target_date = date_str
+
+    log_file = _SESSION_STORE_DIR / f"{target_date}.jsonl"
+    if not log_file.exists():
+        return f"{target_date} 暂无本地会话存档，可发送「同步会话记录」先拉取数据。"
+
+    records = []
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if user:
+            if user != rec.get("from") and user not in rec.get("tolist", []):
+                continue
+        records.append(rec)
+
+    if not records:
+        suffix = f"（关键词：{user}）" if user else ""
+        return f"{target_date} 无匹配会话记录{suffix}。"
+
+    total = len(records)
+    records = records[-limit:]
+    lines = [f"[会话存档] {target_date}，最近 {len(records)}/{total} 条："]
+    for rec in records:
+        from_who = rec.get("from", "?")
+        to_list = "、".join(rec.get("tolist", []))
+        msgtype = rec.get("msgtype", "?")
+        if msgtype == "text":
+            text = rec.get("text", {}).get("content", "")[:50]
+        elif msgtype == "image":
+            text = "[图片]"
+        elif msgtype == "file":
+            text = f"[文件: {rec.get('file', {}).get('filename', '?')}]"
+        elif msgtype == "voice":
+            text = "[语音消息]"
+        else:
+            text = f"[{msgtype}]"
+        lines.append(f"  {from_who} → {to_list}: {text}")
+
+    return "\n".join(lines)
 
 
 async def _delayed_send(to_user: str, message: str, delay_seconds: int) -> None:
@@ -328,6 +406,50 @@ async def _execute_intent(intent: dict, from_user: str) -> str | None:
             await _send_wxwork_message(to_user, f"[来自机器人转发] {message}")
             logger.info("[wxwork] 消息已转发: to={}", to_user)
             return f"\n\n已转发给 {to_user}。"
+
+    if action == "broadcast":
+        message = intent.get("message", "").strip()
+        if message:
+            await _send_wxwork_message("@all", f"[全员通知] {message}")
+            logger.info("[wxwork] 已广播全员通知")
+            return "\n\n已向全体成员广播通知。"
+
+    if action == "push_msg":
+        to_user = intent.get("to_user", "").strip()
+        message = intent.get("message", "").strip()
+        if to_user and message:
+            await _send_wxwork_message(to_user, message)
+            logger.info("[wxwork] 意图推送: to={}", to_user)
+            return f"\n\n消息已发送给 {to_user}。"
+
+    if action == "session_sync":
+        try:
+            from .wxwork_session import _do_sync
+            result = await _do_sync(limit=100)
+            synced = result.get("synced", 0)
+            last_seq = result.get("last_seq", 0)
+            if synced:
+                return f"\n\n会话同步完成：新增 {synced} 条，当前进度 seq={last_seq}。"
+            return f"\n\n无新会话记录，当前进度 seq={last_seq}。"
+        except Exception as exc:
+            logger.error("[wxwork] 意图-会话同步失败: {}", exc)
+            return "\n\n会话同步失败，请确认 Finance SDK 已配置正确。"
+
+    if action == "session_query":
+        try:
+            summary = await _query_session_for_bot(
+                user=intent.get("user", ""),
+                date_str=intent.get("date", "today"),
+            )
+            return f"\n\n{summary}"
+        except Exception as exc:
+            logger.error("[wxwork] 意图-会话查询失败: {}", exc)
+            return "\n\n会话记录查询失败。"
+
+    if action == "clear_history":
+        _save_history(from_user, [])
+        logger.info("[wxwork] 意图-清空历史: user={}", from_user)
+        return "\n\n已清空你的对话历史，我们重新开始。"
 
     return None
 
