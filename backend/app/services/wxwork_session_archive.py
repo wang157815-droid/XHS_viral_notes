@@ -56,10 +56,26 @@ class WXWorkFinanceSDK:
         if not sdk_file.exists():
             raise FinanceSDKError(
                 f"SDK 文件不存在: {sdk_path}\n"
-                "请从企微开发者中心下载 libWeWorkFinanceSdk_C.so 并放到该路径"
+                "请从企微开发者中心下载 WeWorkFinanceSdk_C.so 及同目录所有 .so 并放到该路径"
             )
 
-        self._lib = ctypes.CDLL(str(sdk_file))
+        # 先把同目录其他 .so 以 RTLD_GLOBAL 预加载，满足 WeWorkFinanceSdk_C.so 的依赖
+        sdk_dir = sdk_file.parent
+        for companion in sorted(sdk_dir.glob("*.so*")):
+            if companion.resolve() != sdk_file.resolve():
+                try:
+                    ctypes.CDLL(str(companion), mode=ctypes.RTLD_GLOBAL)
+                    logger.debug("[wxwork-session] 预加载伴随库: {}", companion.name)
+                except Exception as e:
+                    logger.debug("[wxwork-session] 预加载 {} 失败（忽略）: {}", companion.name, e)
+
+        # RTLD_LAZY(1)|RTLD_GLOBAL(256)：延迟符号解析 + 全局可见
+        # 避免新版 SDK 因移除的旧符号（如 GetLenFromSlice）在加载时报 undefined symbol
+        _LOAD_FLAGS = 1 | 256  # RTLD_LAZY | RTLD_GLOBAL
+        try:
+            self._lib = ctypes.CDLL(str(sdk_file), mode=_LOAD_FLAGS)
+        except OSError as e:
+            raise FinanceSDKError(f"无法加载 SDK: {e}")
         self._setup_func_types()
 
         self._sdk_ptr = self._lib.NewSdk()
@@ -98,8 +114,8 @@ class WXWorkFinanceSDK:
         lib.GetContentFromSlice.restype = ctypes.c_char_p
         lib.GetContentFromSlice.argtypes = [ctypes.c_void_p]
 
-        lib.GetLenFromSlice.restype = ctypes.c_uint
-        lib.GetLenFromSlice.argtypes = [ctypes.c_void_p]
+        # GetLenFromSlice 在新版 SDK（2025+）已移除，跳过声明
+        # lib.GetLenFromSlice.restype = ctypes.c_uint
 
         lib.GetChatData.restype = ctypes.c_int
         lib.GetChatData.argtypes = [
