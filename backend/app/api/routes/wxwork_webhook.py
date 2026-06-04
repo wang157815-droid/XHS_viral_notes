@@ -9,6 +9,7 @@
 采用「立即返回 success + 后台异步处理」方案，规避企微 5 秒超时限制。
 消息记录独立存储在 datas/wxwork_logs/YYYY-MM-DD.jsonl，与 RedMuse 会话系统无关。
 """
+import asyncio
 import json
 import re
 import time
@@ -238,18 +239,121 @@ def _strip_thinking(text: str) -> str:
 
 
 # ------------------------------------------------------------------ #
-# 后台任务：Minimax 推理 + 企微回复 + 记录日志
+# 意图检测：识别用户是否需要「定时提醒」或「转发消息」
+# ------------------------------------------------------------------ #
+
+_INTENT_SYSTEM = """\
+你是企业微信机器人的意图提取助手。根据用户最新的一句话，判断是否需要执行以下动作之一：
+
+1. remind  — 用户希望在指定时间后收到提醒（如"30分钟后提醒我开会"）
+2. forward — 用户希望把一条消息发送给另一个企业成员（如"帮我告诉张三明天9点开会"）
+3. none    — 普通问答，不需要额外动作
+
+只返回合法 JSON，不要加任何说明：
+- {"action":"remind","delay_minutes":30,"message":"提醒你：开会时间到了"}
+- {"action":"forward","to_user":"ZhangSan","message":"明天9点开会，请准时参加"}
+- {"action":"none"}
+
+规则：
+- delay_minutes 必须是正整数，最小1，最大1440（24小时）
+- to_user 填企业微信的英文账号/userid，若用户只提了中文名则填该中文名
+- 若用户表达不明确，返回 {"action":"none"}
+"""
+
+
+async def _extract_intent(user_input: str) -> dict:
+    """用轻量 LLM 调用识别用户意图，超时或解析失败时返回 none"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {settings.minimax_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.minimax_model,
+            "messages": [
+                {"role": "system", "content": _INTENT_SYSTEM},
+                {"role": "user", "content": user_input},
+            ],
+            "max_tokens": 128,
+            "temperature": 0.0,  # 确定性输出
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{settings.minimax_api_base}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+        resp.raise_for_status()
+        raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        raw = _strip_thinking(raw)
+        # 容错：去掉可能包裹的 markdown 代码块
+        raw = re.sub(r"^```[a-z]*\n?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        intent = json.loads(raw)
+        if intent.get("action") in {"remind", "forward", "none"}:
+            return intent
+    except Exception as exc:
+        logger.debug("[wxwork] 意图提取失败（忽略）: {}", exc)
+    return {"action": "none"}
+
+
+async def _delayed_send(to_user: str, message: str, delay_seconds: int) -> None:
+    """等待指定秒数后发送消息（用于定时提醒）"""
+    await asyncio.sleep(delay_seconds)
+    await _send_wxwork_message(to_user, message)
+    logger.info("[wxwork] 定时提醒已发送: to={} delay={}s", to_user, delay_seconds)
+
+
+async def _execute_intent(intent: dict, from_user: str) -> str | None:
+    """
+    执行意图动作，返回要追加到回复末尾的确认文案。
+    返回 None 表示无动作。
+    """
+    action = intent.get("action", "none")
+
+    if action == "remind":
+        delay_min = max(1, min(int(intent.get("delay_minutes", 1)), 1440))
+        message = intent.get("message", "你的提醒时间到了！")
+        delay_sec = delay_min * 60
+        # 不阻塞当前协程，后台独立运行
+        asyncio.get_event_loop().create_task(
+            _delayed_send(from_user, f"[定时提醒] {message}", delay_sec)
+        )
+        logger.info("[wxwork] 定时提醒已注册: to={} delay={}min", from_user, delay_min)
+        return f"\n\n已设置提醒，{delay_min} 分钟后我会再通知你。"
+
+    if action == "forward":
+        to_user = intent.get("to_user", "").strip()
+        message = intent.get("message", "").strip()
+        if to_user and message:
+            await _send_wxwork_message(to_user, f"[来自机器人转发] {message}")
+            logger.info("[wxwork] 消息已转发: to={}", to_user)
+            return f"\n\n已转发给 {to_user}。"
+
+    return None
+
+
+# ------------------------------------------------------------------ #
+# 后台任务：Minimax 推理 + 意图检测 + 企微回复 + 记录日志
 # ------------------------------------------------------------------ #
 
 async def _process_and_reply(from_user: str, user_input: str) -> None:
     logger.info("[wxwork] 收到消息 from={} content={!r}", from_user, user_input[:50])
     success = True
     try:
-        raw_reply = await _call_minimax(from_user, user_input)
+        # 主回复 + 意图检测并发执行，减少总耗时
+        raw_reply, intent = await asyncio.gather(
+            _call_minimax(from_user, user_input),
+            _extract_intent(user_input),
+        )
         reply = _strip_thinking(raw_reply)
         if not reply:
             reply = "（暂时无法回复，请稍后再试）"
-        # 回复成功后才更新历史，避免错误内容污染上下文
+
+        # 执行意图动作，将确认文案追加到回复末尾
+        action_note = await _execute_intent(intent, from_user)
+        if action_note:
+            reply += action_note
+
         _update_history(from_user, user_input, reply)
     except Exception as exc:
         logger.error("[wxwork] Minimax 调用失败: {}", exc)
