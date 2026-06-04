@@ -279,8 +279,9 @@ async def _extract_intent(user_input: str) -> dict:
             "Authorization": f"Bearer {settings.minimax_api_key}",
             "Content-Type": "application/json",
         }
+        intent_model = settings.minimax_intent_model or settings.minimax_model
         payload = {
-            "model": settings.minimax_model,
+            "model": intent_model,
             "messages": [
                 {"role": "system", "content": _INTENT_SYSTEM},
                 {"role": "user", "content": user_input},
@@ -295,19 +296,31 @@ async def _extract_intent(user_input: str) -> dict:
                 json=payload,
             )
         resp.raise_for_status()
-        raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        resp_data = resp.json()
+        raw = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "")
         raw = _strip_thinking(raw)
         # 容错：去掉可能包裹的 markdown 代码块
         raw = re.sub(r"^```[a-z]*\n?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        if not raw:
+            # 模型未返回内容（如仅有 thinking 被全部剥离），记录以便排查
+            logger.warning(
+                "[wxwork] 意图提取：模型返回空串，原始响应={}",
+                str(resp_data)[:200],
+            )
+            return {"action": "none"}
         intent = json.loads(raw)
         _VALID_ACTIONS = {
             "remind", "forward", "broadcast", "push_msg",
             "session_sync", "session_query", "clear_history", "none",
         }
         if intent.get("action") in _VALID_ACTIONS:
+            logger.debug("[wxwork] 识别意图: {}", intent)
             return intent
+        logger.warning("[wxwork] 意图 action 不在白名单: {}", intent)
+    except json.JSONDecodeError:
+        logger.warning("[wxwork] 意图提取：模型未返回合法 JSON，raw={!r}", raw if "raw" in dir() else "")
     except Exception as exc:
-        logger.debug("[wxwork] 意图提取失败（忽略）: {}", exc)
+        logger.warning("[wxwork] 意图提取失败: {}", exc)
     return {"action": "none"}
 
 
