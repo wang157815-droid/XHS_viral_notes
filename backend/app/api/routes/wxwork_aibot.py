@@ -15,6 +15,7 @@
   POST /wxwork/ai-callback —— 接收用户消息 → 调 Minimax → POST response_url 回复
 """
 import json
+import re
 import time
 import xml.etree.ElementTree as ET
 from functools import lru_cache
@@ -182,6 +183,21 @@ async def _reply_via_response_url(response_url: str, content: str) -> None:
 
 
 # ------------------------------------------------------------------ #
+# 工具：去除模型思考内容（<think>…</think> 等标签）
+# ------------------------------------------------------------------ #
+
+_THINK_PATTERN = re.compile(
+    r"<think(?:ing)?>\s*.*?\s*</think(?:ing)?>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_thinking(text: str) -> str:
+    cleaned = _THINK_PATTERN.sub("", text)
+    return cleaned.strip()
+
+
+# ------------------------------------------------------------------ #
 # 后台任务：完整处理流程
 # ------------------------------------------------------------------ #
 
@@ -189,7 +205,10 @@ async def _process_and_reply(from_user: str, user_input: str, response_url: str)
     logger.info("[wxwork-aibot] 收到消息 from={} content={!r}", from_user, user_input[:50])
     success = True
     try:
-        reply = await _call_minimax(from_user, user_input)
+        raw_reply = await _call_minimax(from_user, user_input)
+        reply = _strip_thinking(raw_reply)
+        if not reply:
+            reply = "（暂时无法回复，请稍后再试）"
         _update_history(from_user, user_input, reply)
     except Exception as exc:
         logger.error("[wxwork-aibot] Minimax 调用失败: {}", exc)
