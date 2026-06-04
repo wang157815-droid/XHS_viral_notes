@@ -10,6 +10,7 @@ from .routes import (
     settings,
     tasks,
     wxwork_aibot,
+    wxwork_session,
     wxwork_webhook,
     xhs_auth,
 )
@@ -28,4 +29,6 @@ api_router.include_router(settings.router)
 api_router.include_router(wxwork_webhook.router)
 # 企业微信智能机器人消息回调（数据与智能专区）
 api_router.include_router(wxwork_aibot.router)
+# 企业微信会话内容存档（拉取 + 解密 + 本地存储）
+api_router.include_router(wxwork_session.router)
 

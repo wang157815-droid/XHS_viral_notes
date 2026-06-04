@@ -36,6 +36,18 @@ class Settings(BaseModel):
     wxwork_max_history_turns: int = int(os.getenv("WXWORK_MAX_HISTORY_TURNS", "10"))
 
     # ------------------------------------------------------------------ #
+    # 企业微信会话内容存档配置
+    # ------------------------------------------------------------------ #
+    # 管理后台「管理工具 → 聊天内容存档」里的专用 Secret（与应用 Secret 不同）
+    wxwork_finance_secret: str = os.getenv("WXWORK_FINANCE_SECRET", "")
+    # 官方 C++ SDK .so 文件路径（Linux x86：libWeWorkFinanceSdk_C.so）
+    wxwork_finance_sdk_path: str = os.getenv("WXWORK_FINANCE_SDK_PATH", "/app/WeWorkFinanceSdk_C.so")
+    # RSA 私钥文件路径（与上传到企微后台的公钥配对）
+    wxwork_rsa_private_key_path: str = os.getenv("WXWORK_RSA_PRIVATE_KEY_PATH", "wxwork_private_key.pem")
+    # RSA 私钥内容（与 _PATH 二选一，内容中 \n 用 \\n 转义）
+    wxwork_rsa_private_key: str = os.getenv("WXWORK_RSA_PRIVATE_KEY", "")
+
+    # ------------------------------------------------------------------ #
     # Minimax Chat API 配置
     # ------------------------------------------------------------------ #
     minimax_api_key: str = os.getenv("MINIMAX_API_KEY", "")
