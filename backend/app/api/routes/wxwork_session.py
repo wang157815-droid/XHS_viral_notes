@@ -75,7 +75,7 @@ async def get_session_messages(
     """
     _check_secret(secret)
     try:
-        messages, max_seq = fetch_and_decrypt(seq=seq, limit=limit)
+        messages, max_seq = await fetch_and_decrypt(seq=seq, limit=limit)
     except FinanceSDKError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except ValueError as exc:
@@ -97,7 +97,7 @@ async def _do_sync(limit: int) -> dict:
     last_seq = _load_last_seq()
 
     try:
-        messages, max_seq = fetch_and_decrypt(seq=last_seq, limit=limit)
+        messages, max_seq = await fetch_and_decrypt(seq=last_seq, limit=limit)
     except (FinanceSDKError, ValueError) as exc:
         logger.error("[wxwork-session] 同步失败: {}", exc)
         raise
