@@ -40,6 +40,12 @@ _BROWSER_ARGS = [
     "--disable-infobars",
     "--disable-dev-shm-usage",
     "--lang=zh-CN",
+    # 防止 Chrome 在后台节流 / 冻结标签页（避免长时间运行后浏览器进程被杀）
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-networking",
+    "--disable-hang-monitor",
 ]
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -108,28 +114,52 @@ class LiveCookieProvider:
     # ── 内部实现 ─────────────────────────────────────────────────────────────
 
     def _on_context_close(self) -> None:
-        """浏览器进程崩溃或外部关闭时自动触发，重置 context 引用。"""
+        """浏览器进程崩溃或外部关闭时自动触发，只清 context 引用。
+
+        不停止 playwright server：playwright 进程仍然存活，
+        _ensure_context 直接用它启动新 context，避免 stop→start 导致文件锁冲突。
+        """
         logger.warning(
             "[LiveCookie] {} context 意外关闭（浏览器崩溃？），将在下次使用时自动重建",
             self._username,
         )
         self._context = None
-        # _playwright 也同步清理，避免复用已断开的 playwright 实例
-        self._playwright = None
 
     async def _ensure_context(self) -> None:
-        """确保持久化 context 已启动且存活。"""
+        """确保持久化 context 已启动且存活。
+
+        检测策略（不发任何 CDP 消息，避免干扰活跃的 route 拦截器）：
+        1. 同步检查 Playwright 内部 _impl_obj._closed 标志
+        2. 被动监听 on("close") 事件（context 崩溃时自动将 _context 置 None）
+        主动 context.cookies() 探活已移除 —— 它会与并发的 route handler 竞争
+        同一 WebSocket 连接，导致 route 超时进而触发 context 崩溃。
+        """
         if self._context is not None:
-            # 快速健康检查：若 Playwright 内部 transport 已断开则重建
+            # 同步检查 Playwright 内部 _closed 标志（零开销，不发 CDP 消息）
+            is_closed = False
             try:
-                _ = self._context.pages  # 同步属性，不发 CDP 消息，断连时会抛异常
-            except Exception as _probe_err:
-                logger.warning(
-                    "[LiveCookie] {} context 探活失败，重建: {}", self._username, _probe_err
-                )
-                await self._close_context()
-            else:
+                impl = self._context._impl_obj  # type: ignore[attr-defined]
+                is_closed = bool(getattr(impl, "_closed", False))
+            except Exception:
+                pass
+
+            if not is_closed:
                 return  # context 健在，直接返回
+
+            logger.warning("[LiveCookie] {} context 内部已关闭，重建", self._username)
+
+            # context 死掉：只关闭 context，保留 playwright server（不 stop）
+            dead_ctx = self._context
+            self._context = None
+            try:
+                await dead_ctx.close()
+            except Exception:
+                pass
+            # 等待 Chrome 进程完全退出并释放 user-data-dir 文件锁
+            logger.info("[LiveCookie] {} 等待旧 Chrome 进程释放文件锁...", self._username)
+            await asyncio.sleep(4.0)
+
+        # ── context 为 None，需要重建 ───────────────────────────────────────────
 
         try:
             from playwright.async_api import async_playwright
@@ -145,18 +175,40 @@ class LiveCookieProvider:
                 "请先通过扫码登录建立持久化 Profile，再启用 LIVE_COOKIE_ENABLED"
             )
 
+        # 启动 playwright server（如果之前被停止过）
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
+        # launch_persistent_context 带重试（profile lock 偶发，等待后重试可恢复）
         is_headless = _is_server_mode()
-        context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self._user_data_dir),
-            headless=is_headless,
-            viewport={"width": 1920, "height": 1080},
-            user_agent=_BROWSER_UA,
-            locale="zh-CN",
-            args=_BROWSER_ARGS + ([] if not is_headless else []),
-        )
+        last_exc: Exception = RuntimeError("launch_persistent_context 未尝试")
+        for _attempt in range(3):
+            try:
+                context = await self._playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self._user_data_dir),
+                    headless=is_headless,
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent=_BROWSER_UA,
+                    locale="zh-CN",
+                    args=_BROWSER_ARGS + ([] if not is_headless else []),
+                )
+                break  # 成功
+            except Exception as _launch_err:
+                last_exc = _launch_err
+                if _attempt < 2:
+                    logger.warning(
+                        "[LiveCookie] {} launch_persistent_context 第{}次失败（等待 4s 后重试）: {}",
+                        self._username, _attempt + 1, _launch_err,
+                    )
+                    await asyncio.sleep(4.0)
+                else:
+                    logger.error(
+                        "[LiveCookie] {} launch_persistent_context 3次均失败，放弃: {}",
+                        self._username, _launch_err,
+                    )
+                    raise last_exc
+        else:
+            raise last_exc  # for 循环正常结束但没有 break（不应发生）
 
         if _STEALTH_JS_PATH.exists():
             await context.add_init_script(path=str(_STEALTH_JS_PATH))
@@ -164,7 +216,7 @@ class LiveCookieProvider:
         else:
             logger.warning("[LiveCookie] stealth.min.js 不存在: {}", _STEALTH_JS_PATH)
 
-        # 注册崩溃自愈监听器：浏览器一挂就把 _context 置 None，下次自动重建
+        # 注册崩溃自愈监听器：浏览器一挂就把 _context 置 None，下次调用自动重建
         context.on("close", lambda: self._on_context_close())
 
         self._context = context
@@ -218,6 +270,7 @@ class LiveCookieProvider:
             logger.warning("[LiveCookie] {} 写回 cookies.json 失败: {}", self._username, exc)
 
     async def _close_context(self) -> None:
+        """关闭 context + playwright，释放全部浏览器资源（供公开 close() 调用）。"""
         ctx = self._context
         self._context = None
         if ctx:
@@ -232,6 +285,8 @@ class LiveCookieProvider:
                 await pw.stop()
             except Exception:
                 pass
+        if ctx or pw:
+            await asyncio.sleep(2.0)
 
 
 def _is_server_mode() -> bool:
