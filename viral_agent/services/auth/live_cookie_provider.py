@@ -107,10 +107,29 @@ class LiveCookieProvider:
 
     # ── 内部实现 ─────────────────────────────────────────────────────────────
 
+    def _on_context_close(self) -> None:
+        """浏览器进程崩溃或外部关闭时自动触发，重置 context 引用。"""
+        logger.warning(
+            "[LiveCookie] {} context 意外关闭（浏览器崩溃？），将在下次使用时自动重建",
+            self._username,
+        )
+        self._context = None
+        # _playwright 也同步清理，避免复用已断开的 playwright 实例
+        self._playwright = None
+
     async def _ensure_context(self) -> None:
-        """确保持久化 context 已启动。"""
+        """确保持久化 context 已启动且存活。"""
         if self._context is not None:
-            return
+            # 快速健康检查：若 Playwright 内部 transport 已断开则重建
+            try:
+                _ = self._context.pages  # 同步属性，不发 CDP 消息，断连时会抛异常
+            except Exception as _probe_err:
+                logger.warning(
+                    "[LiveCookie] {} context 探活失败，重建: {}", self._username, _probe_err
+                )
+                await self._close_context()
+            else:
+                return  # context 健在，直接返回
 
         try:
             from playwright.async_api import async_playwright
@@ -144,6 +163,9 @@ class LiveCookieProvider:
             logger.debug("[LiveCookie] {} stealth.min.js 已注入", self._username)
         else:
             logger.warning("[LiveCookie] stealth.min.js 不存在: {}", _STEALTH_JS_PATH)
+
+        # 注册崩溃自愈监听器：浏览器一挂就把 _context 置 None，下次自动重建
+        context.on("close", lambda: self._on_context_close())
 
         self._context = context
         logger.info("[LiveCookie] {} 持久化 context 已启动 headless={}", self._username, is_headless)

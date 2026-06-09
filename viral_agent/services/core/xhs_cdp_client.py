@@ -91,7 +91,14 @@ class _SearchSession:
 
     async def init(self) -> None:
         """打开页面，注册路由拦截，导航到搜索 URL。"""
-        self._page = await self._context.new_page()
+        try:
+            self._page = await self._context.new_page()
+        except Exception as exc:
+            # Playwright transport 断连（浏览器崩溃）：转换为可识别的异常供上层降级
+            from viral_agent.services.core.playwright_detail_fetcher import CDPContextUnavailableError
+            raise CDPContextUnavailableError(
+                f"CDP context 已断连，无法创建新页面（浏览器可能已崩溃）: {exc}"
+            ) from exc
 
         sort_str      = _SORT_MAP.get(self._sort_type_choice, "general")
         note_type_str = _NOTE_TYPE_MAP.get(self._note_type, "不限")
@@ -361,10 +368,17 @@ class XhsCdpClient:
             try:
                 from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
                 provider = LiveCookieProvider._registry.get(username)
-                if provider and provider._context is not None:
-                    logger.debug(f"[CDP] 复用 LiveCookieProvider context (username={username!r})")
-                    return provider._context
-            except Exception:
+                if provider:
+                    # 通过 _ensure_context 取 context：
+                    #   1. 会做存活探活（pages 属性）
+                    #   2. context 已死则自动重建
+                    #   3. 不会裸返回可能已断连的旧对象
+                    await provider._ensure_context()
+                    if provider._context is not None:
+                        logger.debug(f"[CDP] 复用 LiveCookieProvider context (username={username!r})")
+                        return provider._context
+            except Exception as _lcp_err:
+                logger.debug(f"[CDP] LiveCookieProvider context 获取失败: {_lcp_err}")
                 pass
 
         # 方案 B：复用 PlaywrightDetailFetcher 的 context（用 username 或 owner_user_id）
