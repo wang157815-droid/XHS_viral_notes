@@ -138,23 +138,58 @@ _GROUP_SUMMARY_SYSTEM = """你是小红书内容营销分析师。根据以下�
 
 不要输出多余内容。"""
 
-_INPUT_PARSER_SYSTEM = """你是搜索意图解析助手。请从用户的自然语言描述中提取小红书笔记搜索所需的结构化参数。
+_INPUT_PARSER_SYSTEM = """你是搜索意图解析助手。从用户的自然语言描述中提取小红书评论分析所需的结构化参数。
 
-提取规则：
-- keywords：核心搜索词，去掉「笔记」「评论区」「互动量」「近一周」等修饰词，只保留产品/品类名称，最多5个
-- time_range：时间范围（0=不限 1=一天内 2=一周内 3=半年内），默认0
-- min_interaction：互动量下限（数字，如1000），未提及则为0
-- top_notes：分析笔记数量上限，用户未明确指定则为0（表示不限，爬到多少用多少）
-- top_comments_per_note：每条笔记取评论数量，未提及则为5
+## 关键词提取铁则（最重要，禁止违反）
+
+**关键词 = 产品名 / 品牌名 / 品类名 / 品牌+型号。只填这些，不填任何其他内容。**
+
+✅ 正确：
+- "分析近半年雅马哈ydp165的评论区洞察" → keywords:["雅马哈ydp165"]（品牌+型号一起，"近半年"→time_range:3，"评论区/洞察"不入词）
+- "帮我看看防脱精华和防脱洗发水的高赞评论" → keywords:["防脱精华","防脱洗发水"]
+- "近一周格力空调互动量高的笔记评论" → keywords:["格力空调"]
+
+❌ 严禁：
+- 把时间词当关键词："近半年""最近一周""近一个月" → 只影响 time_range，绝不入 keywords
+- 把功能描述词当关键词："评论区""评论洞察""笔记""留言""高赞评论""洞察" → 一律不入 keywords
+- 把修饰词当关键词："热门的""互动量高""爆款" → 一律不入 keywords
+- 拆分品牌+型号："雅马哈ydp165" 绝不拆成 ["雅马哈","ydp165"]；"格力KFR-35"不拆成["格力","KFR-35"]
+- 拆分品牌+品类："雅马哈吉他"不拆成["雅马哈","吉他"]，"防脱精华"不拆成["防脱","精华"]
+
+## 参数说明
+- keywords：产品/品牌/品类/品牌+型号，最多5个，保持用户原词
+- time_range：0=不限 1=一天内 2=一周内 3=半年内，默认0
+  - "近半年/半年内/最近6个月" → 3；"近一周/最近7天" → 2；"近一天/今天" → 1；未提及 → 0
+- min_interaction：互动量下限（数字），未提及则为0
+- top_notes：笔记数量上限，未明确指定则为0
 
 示例：
+输入："帮我分析近半年雅马哈ydp165的笔记评论区洞察"
+输出：{"keywords":["雅马哈ydp165"],"time_range":3,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
+
 输入："近一周防脱精华、防脱洗发水互动量比较高的笔记评论区"
 输出：{"keywords":["防脱精华","防脱洗发水"],"time_range":2,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
 
 输入："帮我采集格力空调的高赞评论，只要最近半年的，取前30条笔记"
 输出：{"keywords":["格力空调"],"time_range":3,"min_interaction":0,"top_notes":30,"top_comments_per_note":5}
 
+输入："雅马哈吉他的评论分析"
+输出：{"keywords":["雅马哈吉他"],"time_range":0,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
+
+输入："分析索尼WH-1000XM5近一个月的评论"
+输出：{"keywords":["索尼WH-1000XM5"],"time_range":0,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
+
 严格输出 JSON，不要任何解释。"""
+
+# 仅提取过滤参数（不涉及关键词），供 hint_keywords 存在时使用
+_FILTER_ONLY_SYSTEM = """你是参数提取助手。从用户描述中提取搜索过滤条件，不要提取关键词（关键词已由用户单独指定）。
+
+参数说明：
+- time_range：时间范围（0=不限 1=一天内 2=一周内 3=半年内），未提及则为0
+- min_interaction：互动量下限（数字），未提及则为0
+- top_notes：笔记数量上限，未明确指定则为0
+
+严格输出 JSON，例：{"time_range":2,"min_interaction":1000,"top_notes":0}，不要任何解释。"""
 
 
 # ── v2 LLM Prompt ────────────────────────────────────────────────────────────
@@ -435,38 +470,64 @@ async def _step0_parse_input(
     raw_input: str,
     hint_keywords: List[str],
 ) -> Dict[str, Any]:
-    """Step 0：LLM 解析自然语言输入，提取干净的搜索关键词和配置参数。"""
-    _NOISE_WORDS = re.compile(
-        r"笔记|评论区|评论|互动量|点赞|热门|爆款|小红书|帮我|分析|采集|整理|汇总|查看|看看|高赞|留言"
-    )
+    """Step 0：解析自然语言输入，提取搜索关键词和配置参数。
 
-    def _is_clean(kw: str) -> bool:
-        return len(kw) <= 10 and not _NOISE_WORDS.search(kw)
+    策略：
+    - 有 hint_keywords（用户在前端明确输入的关键词标签）→ 直接信任，不再交给 LLM 修改；
+      只用 LLM 从 raw_input 里提取过滤参数（时间范围/互动量/笔记数量）。
+    - 无 hint_keywords → 完整调用 LLM 解析关键词 + 过滤参数。
+    """
+    # ── 路径 A：用户已明确指定关键词标签 ──────────────────────────────────────
+    if hint_keywords:
+        # 只去掉无信息量的纯功能后缀，保留品牌/型号/品类词
+        # 注意：这里用的是字符集正则，对英文/数字结尾的型号（ydp165）无影响
+        _SUFFIX_NOISE = re.compile(r"(?:的?(?:评论区|笔记|留言|洞察|高赞评论))+$")
+        cleaned_kws = []
+        for kw in hint_keywords:
+            ck = _SUFFIX_NOISE.sub("", kw.strip())
+            cleaned_kws.append(ck if len(ck) >= 2 else kw.strip())
+        keywords = [k for k in cleaned_kws if k][:5]
 
-    if hint_keywords and all(_is_clean(k) for k in hint_keywords):
+        # 用 LLM 仅解析过滤条件（时间/互动量/笔记数），不涉及关键词
+        filter_params: Dict[str, Any] = {}
+        if raw_input and raw_input.strip():
+            try:
+                raw_filter = await _llm_chat(
+                    "CommentPipeline.InputParser",
+                    _FILTER_ONLY_SYSTEM,
+                    raw_input.strip(),
+                    max_tokens=100,
+                )
+                filter_params = _llm_parse_json(raw_filter) or {}
+            except Exception as _fe:
+                logger.debug(f"[comment_pipeline] 过滤参数解析失败（忽略）: {_fe}")
+
+        logger.info(
+            f"[comment_pipeline] 使用用户指定关键词: {keywords}，"
+            f"过滤参数: time_range={filter_params.get('time_range', 0)} "
+            f"min_interaction={filter_params.get('min_interaction', 0)}"
+        )
         return {
-            "keywords": hint_keywords,
-            "time_range": 0,
-            "min_interaction": 0,
-            "top_notes": _DEFAULT_TOP_NOTES,
+            "keywords": keywords,
+            "time_range": int(filter_params.get("time_range") or 0),
+            "min_interaction": int(filter_params.get("min_interaction") or 0),
+            "top_notes": int(filter_params.get("top_notes") or _DEFAULT_TOP_NOTES),
             "top_comments_per_note": _DEFAULT_TOP_COMMENTS,
         }
 
-    user_msg = raw_input.strip()
-    if hint_keywords:
-        user_msg = f"用户输入：{raw_input}\n参考关键词提示（可能不准确）：{'、'.join(hint_keywords)}"
-
-    raw = await _llm_chat("CommentPipeline.InputParser", _INPUT_PARSER_SYSTEM, user_msg, max_tokens=200)
+    # ── 路径 B：纯自然语言输入，完整 LLM 解析 ─────────────────────────────────
+    raw = await _llm_chat(
+        "CommentPipeline.InputParser",
+        _INPUT_PARSER_SYSTEM,
+        raw_input.strip(),
+        max_tokens=200,
+    )
     parsed = _llm_parse_json(raw)
 
     if not parsed:
-        fallback_kw = [_NOISE_WORDS.sub("", k).strip() for k in hint_keywords]
-        fallback_kw = [k for k in fallback_kw if len(k) >= 2]
-        if not fallback_kw:
-            fallback_kw = hint_keywords[:3]
-        logger.warning(f"[comment_pipeline] InputParser LLM 失败，兜底 keywords={fallback_kw}")
+        logger.warning(f"[comment_pipeline] InputParser LLM 失败，无法解析: {raw_input!r}")
         return {
-            "keywords": fallback_kw,
+            "keywords": [],
             "time_range": 0,
             "min_interaction": 0,
             "top_notes": _DEFAULT_TOP_NOTES,
@@ -474,9 +535,7 @@ async def _step0_parse_input(
         }
 
     kw_list = [str(k).strip() for k in (parsed.get("keywords") or []) if str(k).strip()]
-    if not kw_list:
-        kw_list = hint_keywords[:3] or [""]
-
+    logger.info(f"[comment_pipeline] LLM 解析关键词: {kw_list}")
     return {
         "keywords": kw_list[:5],
         "time_range": int(parsed.get("time_range") or 0),
