@@ -68,6 +68,12 @@ class AgentModelPolicy:
             # 评论采集两级语义过滤
             ("CommentPipeline.Tier1Filter", "text", "text_default"),
             ("CommentPipeline.Tier2Filter", "text", "text_default"),
+            # 评论分析 v2 三维度分析 pipeline
+            ("CommentPipeline.Dim1Induct", "text", "text_default"),
+            ("CommentPipeline.Dim1Classifier", "text", "text_default"),
+            ("CommentPipeline.Dim1Finding", "text", "text_default"),
+            ("CommentPipeline.Dim2Analysis", "text", "text_default"),
+            ("CommentPipeline.Dim3Summary", "text", "text_default"),
         ]
         for agent_id, modality, profile_id in defaults:
             self.set(agent_id, modality, profile_id)

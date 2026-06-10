@@ -1589,12 +1589,12 @@ def _parse_advanced_config(config: Any) -> Dict[str, Any]:
     """
     import re
 
-    # 默认值（env 兜底；与前端 DEFAULT_ADVANCED 对齐：时间范围=半年内，互动量=1000+）
+    # 默认值（env 兜底；互动量默认不限，避免漏掉低互动但高质量的笔记）
     out: Dict[str, Any] = {
         "target_count": _DEFAULT_TARGET_PER_GROUP,
         "note_type": 0,
         "time_range": 3,    # 半年内
-        "min_interaction": 1000,
+        "min_interaction": 0,
     }
 
     if not isinstance(config, dict):
@@ -1751,7 +1751,7 @@ def _competitor_comment_max_notes_from_env() -> int:
     return _safe_env_int("CRAWLER_COMPETITOR_COMMENT_MAX_NOTES", 50)
 
 
-_TOP_INTERACTION_N = _safe_env_int("CRAWLER_TOP_INTERACTION_N", 50)
+_TOP_INTERACTION_N = _safe_env_int("CRAWLER_TOP_INTERACTION_N", 9999)
 _CRAWLER_COMMENT_HW_ENABLED = os.getenv(
     "CRAWLER_COMPETITOR_COMMENT_HOTWORDS", "true"
 ).strip().lower() in ("1", "true", "yes")

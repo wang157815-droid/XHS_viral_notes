@@ -126,16 +126,9 @@ class LiveCookieProvider:
         self._context = None
 
     async def _ensure_context(self) -> None:
-        """确保持久化 context 已启动且存活。
-
-        检测策略（不发任何 CDP 消息，避免干扰活跃的 route 拦截器）：
-        1. 同步检查 Playwright 内部 _impl_obj._closed 标志
-        2. 被动监听 on("close") 事件（context 崩溃时自动将 _context 置 None）
-        主动 context.cookies() 探活已移除 —— 它会与并发的 route handler 竞争
-        同一 WebSocket 连接，导致 route 超时进而触发 context 崩溃。
-        """
+        """确保持久化 context 已启动且存活。"""
         if self._context is not None:
-            # 同步检查 Playwright 内部 _closed 标志（零开销，不发 CDP 消息）
+            # 1. 检查 Playwright 内部 _closed 标志（同步，无 CDP 开销）
             is_closed = False
             try:
                 impl = self._context._impl_obj  # type: ignore[attr-defined]
@@ -144,11 +137,19 @@ class LiveCookieProvider:
                 pass
 
             if not is_closed:
-                return  # context 健在，直接返回
+                # 2. 真实 CDP 探活：context.cookies() 走 CDP round-trip
+                try:
+                    await asyncio.wait_for(self._context.cookies(), timeout=3.0)
+                    return  # context 存活，直接返回
+                except Exception as _probe_err:
+                    logger.warning(
+                        "[LiveCookie] {} context CDP 探活失败，重建: {}", self._username, _probe_err
+                    )
+            else:
+                logger.warning("[LiveCookie] {} context 内部已关闭，重建", self._username)
 
-            logger.warning("[LiveCookie] {} context 内部已关闭，重建", self._username)
-
-            # context 死掉：只关闭 context，保留 playwright server（不 stop）
+            # context 死掉：只关闭 context，保留 playwright server（不要 stop）
+            # stop playwright 会杀掉 Chrome 管理进程，再 launch 时 user-data-dir 可能还有锁
             dead_ctx = self._context
             self._context = None
             try:

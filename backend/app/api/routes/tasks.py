@@ -966,5 +966,59 @@ async def export_comment_excel(task_id: str, current_user: dict = Depends(get_cu
     )
 
 
+@router.get("/{task_id}/export/comment_md")
+async def export_comment_md(task_id: str, current_user: dict = Depends(get_current_user)):
+    """导出评论舆情分析报告 Markdown（CommentAnalysisSkill v2 专用）。
+
+    数据来源：TaskContext["comment_output"]["md_content"]。
+    """
+    record = resolve_task_record(task_id, current_user, action="export.comment_md")
+
+    from ...domain.task_context import task_context_store
+    ctx = task_context_store.require(task_id)
+    comment_output = ctx.get("comment_output")
+    if not comment_output:
+        raise HTTPException(
+            status_code=404,
+            detail=build_error(
+                ErrorCode.TASK_NOT_FOUND,
+                "评论分析结果不存在，请先完成评论分析任务后再导出",
+            )["error"],
+        )
+
+    md_content: str = comment_output.get("md_content") or ""
+    if not md_content:
+        raise HTTPException(
+            status_code=404,
+            detail=build_error(
+                ErrorCode.TASK_NOT_FOUND,
+                "MD 报告内容为空（该任务可能使用 v1 分析版本，不支持 MD 导出）",
+            )["error"],
+        )
+
+    try:
+        dt = datetime.fromisoformat(record.created_at.replace("Z", "+00:00")).astimezone(
+            timezone(timedelta(hours=8))
+        )
+        date_str = dt.strftime("%Y.%m.%d")
+    except Exception:
+        date_str = datetime.now().strftime("%Y.%m.%d")
+
+    keywords = comment_output.get("keywords") or record.keywords or []
+    subject = keywords[0] if keywords else record.task_id
+    subject = re.sub(r'[\\/:*?"<>|]', "", subject).strip() or record.task_id
+    filename = f"{date_str}-{subject}-评论舆情分析报告.md"
+
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", filename)
+    encoded_name = quote(filename, safe="")
+    cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+
+    return StreamingResponse(
+        io.BytesIO(md_content.encode("utf-8")),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": cd},
+    )
+
+
 # 审计访问以便追踪（防止未来新增 route 绕过）
 __all__ = ["router", "task_audit_log"]

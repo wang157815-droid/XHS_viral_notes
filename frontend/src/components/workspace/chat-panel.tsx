@@ -1453,7 +1453,12 @@ function renderInlineMarkdown(text: string): ReactNode[] {
               key={`link-${match.index}`}
               type="button"
               onClick={() => {
-                const filename = rawHref.split("/").pop()?.replace("comment_excel", "评论分析报告.xlsx") ?? "report.xlsx";
+                const rawSuffix = rawHref.split("/").pop() ?? "";
+                const filename = rawSuffix === "comment_excel"
+                  ? "评论分析报告.xlsx"
+                  : rawSuffix === "comment_md"
+                  ? "评论舆情分析报告.md"
+                  : rawSuffix.endsWith(".xlsx") ? rawSuffix : rawSuffix || "report.xlsx";
                 void downloadWithAuth(safeHref, filename);
               }}
               className="cursor-pointer text-[#c2716b] underline decoration-dew/50 underline-offset-2 bg-transparent border-0 p-0 font-inherit text-inherit"

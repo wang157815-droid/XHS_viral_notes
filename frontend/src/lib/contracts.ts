@@ -88,7 +88,7 @@ export const DEFAULT_ADVANCED: AdvancedConfig = {
   note_type: "不限",
   time_range: "半年内",
   sample_count: "50",
-  min_interaction: "1000+",
+  min_interaction: "不限",
 };
 
 export interface Conversation {

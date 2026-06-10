@@ -138,71 +138,54 @@ _GROUP_SUMMARY_SYSTEM = """你是小红书内容营销分析师。根据以下�
 
 不要输出多余内容。"""
 
-_INPUT_PARSER_SYSTEM = """你是搜索意图解析助手。从用户的自然语言描述中提取小红书评论分析所需的结构化参数。
+_INPUT_PARSER_SYSTEM = """你是搜索意图解析助手。请从用户的自然语言描述中提取小红书笔记搜索所需的结构化参数。
 
-## 关键词提取铁则（最重要，禁止违反）
-
-**关键词 = 产品名 / 品牌名 / 品类名 / 品牌+型号。只填这些，不填任何其他内容。**
-
-✅ 正确：
-- "分析近半年雅马哈ydp165的评论区洞察" → keywords:["雅马哈ydp165"]（品牌+型号一起，"近半年"→time_range:3，"评论区/洞察"不入词）
-- "帮我看看防脱精华和防脱洗发水的高赞评论" → keywords:["防脱精华","防脱洗发水"]
-- "近一周格力空调互动量高的笔记评论" → keywords:["格力空调"]
-
-❌ 严禁：
-- 把时间词当关键词："近半年""最近一周""近一个月" → 只影响 time_range，绝不入 keywords
-- 把功能描述词当关键词："评论区""评论洞察""笔记""留言""高赞评论""洞察" → 一律不入 keywords
-- 把修饰词当关键词："热门的""互动量高""爆款" → 一律不入 keywords
-- 拆分品牌+型号："雅马哈ydp165" 绝不拆成 ["雅马哈","ydp165"]；"格力KFR-35"不拆成["格力","KFR-35"]
-- 拆分品牌+品类："雅马哈吉他"不拆成["雅马哈","吉他"]，"防脱精华"不拆成["防脱","精华"]
-
-## 参数说明
-- keywords：产品/品牌/品类/品牌+型号，最多5个，保持用户原词
-- time_range：0=不限 1=一天内 2=一周内 3=半年内，默认0
-  - "近半年/半年内/最近6个月" → 3；"近一周/最近7天" → 2；"近一天/今天" → 1；未提及 → 0
-- min_interaction：互动量下限（数字），未提及则为0
-- top_notes：笔记数量上限，未明确指定则为0
+提取规则：
+- keywords：核心搜索词，去掉「笔记」「评论区」「互动量」「近一周」等修饰词，只保留产品/品类名称，最多5个
+- time_range：时间范围（0=不限 1=一天内 2=一周内 3=半年内），默认0
+- min_interaction：互动量下限（数字，如1000），未提及则为0
+- top_notes：分析笔记数量上限，用户未明确指定则为0（表示不限，爬到多少用多少）
+- top_comments_per_note：每条笔记取评论数量，未提及则为5
 
 示例：
-输入："帮我分析近半年雅马哈ydp165的笔记评论区洞察"
-输出：{"keywords":["雅马哈ydp165"],"time_range":3,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
-
 输入："近一周防脱精华、防脱洗发水互动量比较高的笔记评论区"
 输出：{"keywords":["防脱精华","防脱洗发水"],"time_range":2,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
 
 输入："帮我采集格力空调的高赞评论，只要最近半年的，取前30条笔记"
 输出：{"keywords":["格力空调"],"time_range":3,"min_interaction":0,"top_notes":30,"top_comments_per_note":5}
 
-输入："雅马哈吉他的评论分析"
-输出：{"keywords":["雅马哈吉他"],"time_range":0,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
-
-输入："分析索尼WH-1000XM5近一个月的评论"
-输出：{"keywords":["索尼WH-1000XM5"],"time_range":0,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
-
 严格输出 JSON，不要任何解释。"""
-
-# 仅提取过滤参数（不涉及关键词），供 hint_keywords 存在时使用
-_FILTER_ONLY_SYSTEM = """你是参数提取助手。从用户描述中提取搜索过滤条件，不要提取关键词（关键词已由用户单独指定）。
-
-参数说明：
-- time_range：时间范围（0=不限 1=一天内 2=一周内 3=半年内），未提及则为0
-- min_interaction：互动量下限（数字），未提及则为0
-- top_notes：笔记数量上限，未明确指定则为0
-
-严格输出 JSON，例：{"time_range":2,"min_interaction":1000,"top_notes":0}，不要任何解释。"""
 
 
 # ── v2 LLM Prompt ────────────────────────────────────────────────────────────
 
-_DIM1_CLASSIFY_SYSTEM = """你是产品舆情分析专家。请对小红书评论进行产品维度分类，识别用户在哪些产品特征维度上发表了意见。
+_DIM1_INDUCT_SYSTEM = """你是产品舆情分析专家。请根据以下品类关键词、笔记标题和评论样本，归纳出该品类用户真正关心的 5-8 个「产品特征维度」。
 
-分类规则：
-- 每条评论只对应一个最相关的产品维度，常见维度包括（不限于）：功效/成分、使用体验/肤感、气味/味道、外观/包装、价格/性价比、服务/物流、适用人群、品牌/口碑、副作用/刺激
-- 情感标签：正面（认可/满意/推荐）、负面（批评/失望/吐槽）、中性（描述/疑问/观望）
-- 仅当评论与产品完全无关（纯闲聊、纯表情、无实质内容）时，类别填"其他"
+要求：
+- 维度必须体现该品类的独特性，禁止套用通用模板（如「功效/成分」「使用体验/肤感」等万能标签）
+- 维度名称简洁（3-8 字），能精准概括用户关注的核心议题
+- 举例：电钢琴类 → 可归纳「真钢与电钢对比」「键盘触感/配重」「音色还原度」「录音/蓝牙功能」；护肤品类 → 可归纳「成分安全性」「上脸肤感」「美白/淡斑效果」「过敏/刺激反应」
+- 覆盖正面与负面评论提及的核心议题，不要遗漏高频话题
+- 最后一个维度固定为「其他」，兜底无法归入上述维度的评论
 
 输出格式（严格 JSON，不含任何其他文字）：
-{"results": [{"index": 0, "category": "功效/成分", "sentiment": "正面"}, ...]}"""
+{"dimensions": ["维度1", "维度2", "维度3", "其他"]}"""
+
+
+def _build_dim1_classify_system(dimensions: List[str]) -> str:
+    """根据品类专属维度动态生成分类提示词。"""
+    dim_list = "、".join(dimensions)
+    first_dim = dimensions[0] if dimensions else "其他"
+    return (
+        f"你是产品舆情分析专家。请将小红书评论按以下维度分类，"
+        f"维度是根据本品类特征专门归纳的，请严格使用，不要自行新增或替换。\n\n"
+        f"可用维度（共 {len(dimensions)} 个）：{dim_list}\n\n"
+        f"分类规则：\n"
+        f"- 每条评论只对应一个最相关的维度（优先选具体维度，无法归类才选「其他」）\n"
+        f"- 情感标签：正面（认可/满意/推荐）、负面（批评/失望/吐槽）、中性（描述/疑问/观望）\n\n"
+        f"输出格式（严格 JSON，不含任何其他文字）：\n"
+        f'{{"results": [{{"index": 0, "category": "{first_dim}", "sentiment": "正面"}}, ...]}}'
+    )
 
 _DIM1_FINDING_SYSTEM = """你是小红书产品舆情分析师。根据以下评论维度统计数据和评论样本，写一段核心发现。
 
@@ -470,64 +453,38 @@ async def _step0_parse_input(
     raw_input: str,
     hint_keywords: List[str],
 ) -> Dict[str, Any]:
-    """Step 0：解析自然语言输入，提取搜索关键词和配置参数。
+    """Step 0：LLM 解析自然语言输入，提取干净的搜索关键词和配置参数。"""
+    _NOISE_WORDS = re.compile(
+        r"笔记|评论区|评论|互动量|点赞|热门|爆款|小红书|帮我|分析|采集|整理|汇总|查看|看看|高赞|留言"
+    )
 
-    策略：
-    - 有 hint_keywords（用户在前端明确输入的关键词标签）→ 直接信任，不再交给 LLM 修改；
-      只用 LLM 从 raw_input 里提取过滤参数（时间范围/互动量/笔记数量）。
-    - 无 hint_keywords → 完整调用 LLM 解析关键词 + 过滤参数。
-    """
-    # ── 路径 A：用户已明确指定关键词标签 ──────────────────────────────────────
-    if hint_keywords:
-        # 只去掉无信息量的纯功能后缀，保留品牌/型号/品类词
-        # 注意：这里用的是字符集正则，对英文/数字结尾的型号（ydp165）无影响
-        _SUFFIX_NOISE = re.compile(r"(?:的?(?:评论区|笔记|留言|洞察|高赞评论))+$")
-        cleaned_kws = []
-        for kw in hint_keywords:
-            ck = _SUFFIX_NOISE.sub("", kw.strip())
-            cleaned_kws.append(ck if len(ck) >= 2 else kw.strip())
-        keywords = [k for k in cleaned_kws if k][:5]
+    def _is_clean(kw: str) -> bool:
+        return len(kw) <= 10 and not _NOISE_WORDS.search(kw)
 
-        # 用 LLM 仅解析过滤条件（时间/互动量/笔记数），不涉及关键词
-        filter_params: Dict[str, Any] = {}
-        if raw_input and raw_input.strip():
-            try:
-                raw_filter = await _llm_chat(
-                    "CommentPipeline.InputParser",
-                    _FILTER_ONLY_SYSTEM,
-                    raw_input.strip(),
-                    max_tokens=100,
-                )
-                filter_params = _llm_parse_json(raw_filter) or {}
-            except Exception as _fe:
-                logger.debug(f"[comment_pipeline] 过滤参数解析失败（忽略）: {_fe}")
-
-        logger.info(
-            f"[comment_pipeline] 使用用户指定关键词: {keywords}，"
-            f"过滤参数: time_range={filter_params.get('time_range', 0)} "
-            f"min_interaction={filter_params.get('min_interaction', 0)}"
-        )
+    if hint_keywords and all(_is_clean(k) for k in hint_keywords):
         return {
-            "keywords": keywords,
-            "time_range": int(filter_params.get("time_range") or 0),
-            "min_interaction": int(filter_params.get("min_interaction") or 0),
-            "top_notes": int(filter_params.get("top_notes") or _DEFAULT_TOP_NOTES),
+            "keywords": hint_keywords,
+            "time_range": 0,
+            "min_interaction": 0,
+            "top_notes": _DEFAULT_TOP_NOTES,
             "top_comments_per_note": _DEFAULT_TOP_COMMENTS,
         }
 
-    # ── 路径 B：纯自然语言输入，完整 LLM 解析 ─────────────────────────────────
-    raw = await _llm_chat(
-        "CommentPipeline.InputParser",
-        _INPUT_PARSER_SYSTEM,
-        raw_input.strip(),
-        max_tokens=200,
-    )
+    user_msg = raw_input.strip()
+    if hint_keywords:
+        user_msg = f"用户输入：{raw_input}\n参考关键词提示（可能不准确）：{'、'.join(hint_keywords)}"
+
+    raw = await _llm_chat("CommentPipeline.InputParser", _INPUT_PARSER_SYSTEM, user_msg, max_tokens=200)
     parsed = _llm_parse_json(raw)
 
     if not parsed:
-        logger.warning(f"[comment_pipeline] InputParser LLM 失败，无法解析: {raw_input!r}")
+        fallback_kw = [_NOISE_WORDS.sub("", k).strip() for k in hint_keywords]
+        fallback_kw = [k for k in fallback_kw if len(k) >= 2]
+        if not fallback_kw:
+            fallback_kw = hint_keywords[:3]
+        logger.warning(f"[comment_pipeline] InputParser LLM 失败，兜底 keywords={fallback_kw}")
         return {
-            "keywords": [],
+            "keywords": fallback_kw,
             "time_range": 0,
             "min_interaction": 0,
             "top_notes": _DEFAULT_TOP_NOTES,
@@ -535,7 +492,9 @@ async def _step0_parse_input(
         }
 
     kw_list = [str(k).strip() for k in (parsed.get("keywords") or []) if str(k).strip()]
-    logger.info(f"[comment_pipeline] LLM 解析关键词: {kw_list}")
+    if not kw_list:
+        kw_list = hint_keywords[:3] or [""]
+
     return {
         "keywords": kw_list[:5],
         "time_range": int(parsed.get("time_range") or 0),
@@ -1000,9 +959,54 @@ async def _step2v2_fetch_all_comments_for_note(
     return result
 
 
+async def _infer_dimensions(
+    sample_comments: List[Dict[str, Any]],
+    keywords: List[str],
+    note_titles: str = "",
+) -> List[str]:
+    """[v2] 从评论样本+关键词+笔记标题中归纳品类专属维度（一次 LLM 调用）。
+
+    返回维度名称列表，末尾保证含「其他」。若 LLM 失败则返回 None（调用方应使用默认维度兜底）。
+    """
+    sample_lines = [
+        f"{i+1}. {c.get('content', '')[:80]}"
+        for i, c in enumerate(sample_comments[:60])
+    ]
+    kw_str = "、".join(keywords) if keywords else "（未指定）"
+    user_msg = (
+        f"【品类关键词】{kw_str}\n"
+        + (f"【笔记标题样本】{note_titles}\n" if note_titles else "")
+        + f"【评论样本（共 {len(sample_lines)} 条）】\n"
+        + "\n".join(sample_lines)
+        + "\n\n请归纳该品类的 5-8 个产品特征维度，末尾含「其他」。"
+    )
+    raw = await _llm_chat(
+        "CommentPipeline.Dim1Induct",
+        _DIM1_INDUCT_SYSTEM,
+        user_msg,
+        max_tokens=300,
+        json_mode=True,
+    )
+    parsed = _llm_parse_json_robust(raw) or {}
+    dims: List[str] = parsed.get("dimensions") or []
+    # 校验：至少 3 个有内容的维度
+    dims = [d.strip() for d in dims if isinstance(d, str) and d.strip()]
+    if len(dims) < 3:
+        logger.warning(f"[v2 Dim1Induct] 维度归纳失败或不足，原始输出: {raw[:200]}")
+        return []
+    # 确保末尾有「其他」
+    if dims[-1] != "其他":
+        if "其他" in dims:
+            dims.remove("其他")
+        dims.append("其他")
+    logger.info(f"[v2 Dim1Induct] 归纳维度={dims}")
+    return dims
+
+
 async def _step3_dim1_classify(
     all_comments: List[Dict[str, Any]],
     keywords: List[str],
+    notes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """[v2] Step 3：维度1 — 批量分类评论（产品舆情维度+情感）+ 核心发现。
 
@@ -1020,6 +1024,20 @@ async def _step3_dim1_classify(
         f"[v2 Dim1] 开始分类，评论总量={len(all_comments)} 条，关键词={keywords}"
     )
 
+    # ── Step 3-0: 归纳品类专属维度（一次 LLM 调用）──────────────────────────────
+    note_titles_hint = "、".join(
+        n.get("title", "") for n in (notes or [])[:10] if n.get("title")
+    )
+    inferred_dims = await _infer_dimensions(all_comments, keywords, note_titles_hint)
+    if inferred_dims:
+        dim1_classify_system = _build_dim1_classify_system(inferred_dims)
+        logger.info(f"[v2 Dim1] 使用归纳维度: {inferred_dims}")
+    else:
+        # 归纳失败：降级到轻量默认维度集（不含行业废话）
+        inferred_dims = ["产品效果/功效", "使用体验", "价格/性价比", "外观/包装", "服务/物流", "其他"]
+        dim1_classify_system = _build_dim1_classify_system(inferred_dims)
+        logger.warning(f"[v2 Dim1] 维度归纳失败，使用默认维度: {inferred_dims}")
+
     # batch_size=20：每批约 20×22≈440 tokens 输出，给思考型模型（deepseek-v4-flash 等）
     # 留出足够的思考链预算，避免 JSON 被截断。
     batch_size = 20
@@ -1036,7 +1054,7 @@ async def _step3_dim1_classify(
         )
         raw = await _llm_chat(
             "CommentPipeline.Dim1Classifier",
-            _DIM1_CLASSIFY_SYSTEM,
+            dim1_classify_system,
             user_msg,
             max_tokens=2500,
             json_mode=True,
@@ -1587,13 +1605,12 @@ async def _run_v2_pipeline(
                 comments = await _step2v2_fetch_all_comments_for_note(note, cookies_str)
             except _CaptchaError:
                 logger.warning(
-                    f"[v2] task={task_id} CAPTCHA 熔断！全局暂停 {_V2_CAPTCHA_PAUSE}s，"
-                    f"跳过剩余笔记"
+                    f"[v2] task={task_id} note_id={note.get('note_id')} 遇到 CAPTCHA，"
+                    f"暂停 {_V2_CAPTCHA_PAUSE}s 后跳过该笔记，继续处理剩余笔记"
                 )
                 await asyncio.sleep(_V2_CAPTCHA_PAUSE)
-                # 保留已采集到的部分，停止继续采集
-                budget_exhausted = True
-                break
+                # 只跳过当前笔记，不中断整体采集
+                continue
             except Exception as exc:
                 logger.warning(f"[v2] task={task_id} note_id={note.get('note_id')} 评论采集异常: {exc}")
                 comments = []
@@ -1640,7 +1657,9 @@ async def _run_v2_pipeline(
 
     # Step 3: Dim1
     await _emit_progress(task_id, "维度1：产品舆情分类中...", 52)
-    dim1_result = await _step3_dim1_classify(all_comments_flat, keywords)
+    dim1_result = await _step3_dim1_classify(
+        all_comments_flat, keywords, notes=[n for n, _ in notes_with_comments]
+    )
     logger.info(
         f"[v2] task={task_id} 维度1完成，识别 {len(dim1_result['categories'])} 个舆情类别"
     )

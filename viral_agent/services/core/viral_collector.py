@@ -60,7 +60,11 @@ _COLLECTOR_NOTE_SLEEP_MIN = float(os.getenv("COLLECTOR_NOTE_SLEEP_MIN", "1.0"))
 _COLLECTOR_NOTE_SLEEP_MAX = float(os.getenv("COLLECTOR_NOTE_SLEEP_MAX", "2.0"))
 # 重试参数
 _CAPTCHA_RETRY_WAITS = [
-    float(x) for x in os.getenv("COLLECTOR_RETRY_WAITS", "5,15,45").split(",")
+    float(x) for x in os.getenv("COLLECTOR_RETRY_WAITS", "5").split(",")
+]
+# 详情接口重试等待（只重试1次，避免长时间卡在单条笔记上）
+_DETAIL_RETRY_WAITS = [
+    float(x) for x in os.getenv("COLLECTOR_DETAIL_RETRY_WAITS", "5").split(",")
 ]
 # 周期刷新 cookie 间隔（秒），0 表示不启用周期刷新
 _COOKIE_REFRESH_INTERVAL = float(os.getenv("COLLECTOR_COOKIE_REFRESH_INTERVAL", "360"))  # 6 分钟

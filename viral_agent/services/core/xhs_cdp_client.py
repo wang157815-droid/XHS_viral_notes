@@ -286,7 +286,17 @@ class XhsCdpClient:
                 time_range=note_time,
                 web_origin=xhs_web_origin(),
             )
-            await session.init()
+            try:
+                await session.init()
+            except Exception as _init_exc:
+                from viral_agent.services.core.playwright_detail_fetcher import CDPContextUnavailableError
+                # new_page() 失败时（浏览器崩溃/transport 断连）→ 触发 LiveCookieProvider 重建
+                if isinstance(_init_exc, CDPContextUnavailableError):
+                    logger.warning(f"[CDP] search session.init 失败，CDP context 不可用: {_init_exc}")
+                    # 通知 LiveCookieProvider 清除死掉的 context，下次重建
+                    await self._invalidate_context()
+                    return False, "CDP context unavailable", None
+                raise
             self._sessions[session_key] = session
             logger.info(
                 f"[CDP] 新搜索会话 keyword={query!r} sort={sort_type_choice} "
@@ -333,6 +343,20 @@ class XhsCdpClient:
         except Exception as exc:
             logger.warning(f"[CDP] get_note_info 异常: {exc}, url={url}")
             return False, str(exc), None
+
+    async def _invalidate_context(self) -> None:
+        """强制清除 LiveCookieProvider 中已死掉的 context，下次 _get_context 时会重建。"""
+        username = await self._resolve_username()
+        if not username:
+            return
+        try:
+            from viral_agent.services.auth.live_cookie_provider import LiveCookieProvider
+            provider = LiveCookieProvider._registry.get(username)
+            if provider:
+                logger.warning(f"[CDP] 强制清除 {username!r} 的死 context，准备重建")
+                await provider._close_context()
+        except Exception as _e:
+            logger.debug(f"[CDP] _invalidate_context 失败（忽略）: {_e}")
 
     # ── 清理 ─────────────────────────────────────────────────────────────────
 

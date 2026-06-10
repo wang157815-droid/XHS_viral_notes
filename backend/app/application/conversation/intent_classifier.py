@@ -150,24 +150,9 @@ sample_count（采集数量）：
 输入：采集格力空调高赞评论，看看用户都在说什么
 输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户要采集高赞评论并分析用户反馈"}
 
-示例15（comment_analysis - 含时间范围+品牌型号，⚠️关键词只取品牌+型号）：
-输入：帮我分析近半年雅马哈ydp165的笔记评论区洞察
-输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["雅马哈ydp165"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"关键词=雅马哈ydp165（品牌+型号），近半年是时间过滤条件，评论区/洞察/笔记是功能描述词，均不入关键词"}
-
-示例16（comment_analysis - 含时间+互动量约束）：
-输入：近一周戴森吹风机评论区，只看互动量高的
-输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["戴森吹风机"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"关键词=戴森吹风机，近一周是时间过滤，互动量高是排序条件"}
-
-示例17（comment_analysis - 缺少关键词，追问）：
+示例14（comment_analysis - 缺少关键词，追问）：
 输入：帮我看看评论区
 输出：{"intent":"comment_analysis","confidence":0.75,"slots":{"keywords":[]},"missing_fields":["keywords"],"clarification_question":"你想分析哪个产品或关键词的评论区？","reason":"有评论分析意图但缺少具体关键词"}
-
-## comment_analysis 关键词提取铁则（禁止违反）
-- keywords 只填产品名/品牌名/品类词/品牌+型号，**最多5个词**
-- 时间词（近半年/最近一周/近一个月）→ 不入 keywords，仅影响搜索过滤
-- 功能描述词（评论区/评论洞察/留言/高赞评论/笔记/洞察）→ 不入 keywords
-- 修饰词（热门的/互动量高的/爆款）→ 不入 keywords
-- 品牌+型号必须连在一起作为单个关键词（"雅马哈ydp165"不可拆为["雅马哈","ydp165"]）
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 

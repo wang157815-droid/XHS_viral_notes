@@ -434,16 +434,17 @@ class ModelGateway:
                 )
                 choice = response.choices[0]
                 content = (choice.message.content or "").strip() if choice.message else ""
-                # 对于思考型模型（如 deepseek-v4-pro），若未禁用 thinking 且 max_tokens 不足，
-                # thinking tokens 会耗尽 budget 导致 content 为空。
-                # 调用方应通过 extra_body={"enable_thinking": False} 关闭思考模式。
+                # 对于思考型模型（如 deepseek-v4-pro/v4-flash），若未禁用 thinking，
+                # thinking tokens 会耗尽 max_tokens 预算，导致 content 为空。
+                # DeepSeek 正确关闭方式：extra_body={"thinking": {"type": "disabled"}}
+                # （注意：enable_thinking=False 是 Qwen 写法，DeepSeek 不认，会导致超时）
                 # reasoning_content 是中间思维链，不作为 content 兜底，避免把思考文字当输出。
                 if not content and choice.message:
                     rc = getattr(choice.message, "reasoning_content", None)
                     if rc:
                         logger.warning(
                             f"[ModelGateway] content 为空但 reasoning_content 非空（模型={profile.model_name}），"
-                            "请在调用时传 extra_body={{\"enable_thinking\": False}} 关闭思考模式"
+                            "请在调用时传 extra_body={{\"thinking\": {{\"type\": \"disabled\"}}}} 关闭思考模式"
                         )
                 usage = {
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
