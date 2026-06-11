@@ -50,6 +50,11 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
   - 用户只是说"好评很多"等描述性语句，没有执行意图
   - 用户在问评论功能的概念（如"评论分析是什么"）
 
+关键词提取规则（comment_analysis 专用）：
+  - 若用户用引号（""或''）明确列出多个关键词，必须将每个引号内的字符串作为独立元素放入 keywords 数组，最多6个
+  - 禁止将多个引号关键词合并为一个字符串
+  - 引号内的完整内容（包括空格和后缀词）原样保留，不做裁剪
+
 ### refine_canvas（调整当前 Canvas 模块）
 触发条件：已有 active_task_id，且用户要求修改/优化/展开/重写某个模块或内容
 禁止触发：
@@ -153,6 +158,14 @@ sample_count（采集数量）：
 示例14（comment_analysis - 缺少关键词，追问）：
 输入：帮我看看评论区
 输出：{"intent":"comment_analysis","confidence":0.75,"slots":{"keywords":[]},"missing_fields":["keywords"],"clarification_question":"你想分析哪个产品或关键词的评论区？","reason":"有评论分析意图但缺少具体关键词"}
+
+示例15（comment_analysis - 引号列出多关键词，每个引号独立提取）：
+输入：帮我分析近半年关于"雅马哈ydp165"，"雅马哈 YDP165 外接设备"，"雅马哈电钢琴 活动价折扣"，"雅马哈 YDP165 搬运重量"，"雅马哈电钢琴 弱音难控制"，"雅马哈 YDP165 性价比"一共6个关键词的笔记评论
+输出：{"intent":"comment_analysis","confidence":0.98,"slots":{"keywords":["雅马哈ydp165","雅马哈 YDP165 外接设备","雅马哈电钢琴 活动价折扣","雅马哈 YDP165 搬运重量","雅马哈电钢琴 弱音难控制","雅马哈 YDP165 性价比"],"top_notes":0,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户用引号明确列出6个关键词，全部原样提取为独立元素，近半年=time_range暂存于raw_input由pipeline解析"}
+
+示例16（comment_analysis - 引号列出多关键词，部分带空格后缀）：
+输入：帮我采集"雅马哈电钢琴 键盘手感"和"雅马哈电钢琴 音源评价"这两个关键词的评论
+输出：{"intent":"comment_analysis","confidence":0.97,"slots":{"keywords":["雅马哈电钢琴 键盘手感","雅马哈电钢琴 音源评价"],"top_notes":0,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户用引号明确列出2个关键词，带空格后缀原样保留"}
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 

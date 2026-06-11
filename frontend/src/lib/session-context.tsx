@@ -154,42 +154,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  useEffect(() => {
-    let cancelled = false;
+  const bootstrapSession = useCallback(async () => {
+    const token = getAuthToken();
+    if (!token) {
+      setUser(null);
+      setReady(true);
+      return;
+    }
 
-    const bootstrap = async () => {
-      const token = getAuthToken();
-      if (!token) {
-        if (!cancelled) {
-          setReady(true);
-        }
-        return;
-      }
+    const cached = getAuthUser();
+    if (cached && isFallbackUser(cached.user_id)) {
+      clearAuthSession();
+      setUser(null);
+      setReady(true);
+      return;
+    }
 
-      // 有 token 且有 cached user 时先放行渲染,避免 /auth/me 响应慢导致
-      // AuthGate 卡在"正在验证登录状态..."(尤其是扫码刚完成时后端事件循环繁忙)。
-      // 后台继续校验 /auth/me,失败时再 clearSession + 跳 /login。
-      const cached = getAuthUser();
-      if (cached && isFallbackUser(cached.user_id)) {
-        clearAuthSession();
-        if (!cancelled) {
-          setUser(null);
-          setReady(true);
-        }
-        return;
-      }
-      if (cached && !cancelled) {
-        setUser(cached);
-        setReady(true);
-      }
+    // 有 token 即先放行渲染（含从 intro 等静态页返回、bfcache 恢复场景），
+    // /auth/me 与 cookie-health 在后台校验，避免慢请求卡住 AuthGate。
+    if (cached) setUser(cached);
+    setReady(true);
 
+    try {
       const meRes = await apiGet<AuthUser>("/auth/me", { withAuth: true });
-      if (cancelled) return;
-
       if (!meRes.ok || isFallbackUser(meRes.ok ? meRes.data.user_id : null)) {
         clearAuthSession();
         setUser(null);
-        setReady(true);
         return;
       }
 
@@ -200,20 +190,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       };
       saveAuthSession(token, u);
       setUser(u);
+    } catch {
+      // 网络抖动时保留 cached 用户，不强制登出
+    }
 
-      const cookieRes = await apiGet<CookieHealth>("/settings/cookie-health", {
-        withAuth: true,
-      });
-      if (!cancelled && cookieRes.ok) setCookieHealth(cookieRes.data);
-
-      if (!cancelled) setReady(true);
-    };
-
-    void bootstrap();
-    return () => {
-      cancelled = true;
-    };
+    void (async () => {
+      try {
+        const cookieRes = await apiGet<CookieHealth>("/settings/cookie-health", {
+          withAuth: true,
+        });
+        if (cookieRes.ok) setCookieHealth(cookieRes.data);
+      } catch {
+        /* cookie 健康检查失败不阻塞主流程 */
+      }
+    })();
   }, []);
+
+  useEffect(() => {
+    void bootstrapSession();
+  }, [bootstrapSession]);
+
+  // 浏览器后退从 bfcache 恢复时，useEffect 不会重跑，需主动重新 bootstrap
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        void bootstrapSession();
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [bootstrapSession]);
 
   // 定时刷新 cookie 健康状态（登录后才启动）
   useEffect(() => {

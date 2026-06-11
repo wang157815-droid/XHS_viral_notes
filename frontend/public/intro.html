@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Red Muse · 小红书爆文分析与内容创作平台</title>
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --fg: #1a1a1a;
+      --muted: rgba(26, 26, 26, 0.58);
+      --border: rgba(26, 26, 26, 0.08);
+      --moss: #e8f0e8;
+      --forest: #4a5d4a;
+      --dew: #b9ced1;
+      --accent: #f28e82;
+      --accent-dark: #e06b5c;
+      --white: #ffffff;
+      --shadow: 0 24px 70px rgba(26, 26, 26, 0.08);
+      --soft-shadow: 0 16px 40px rgba(26, 26, 26, 0.05);
+      --radius: 20px;
+      --radius-lg: 32px;
+      --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-brand: Georgia, "Times New Roman", "Source Han Serif SC", serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; font-size: 16px; }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    h1, h2, h3, h4 {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      line-height: 1.4;
+      letter-spacing: 0.01em;
+      color: var(--fg);
+    }
+
+    .brand-name {
+      font-family: var(--font-brand);
+      font-style: italic;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+
+    p { margin: 0; }
+
+    a { color: var(--forest); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(247, 247, 245, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: inherit;
+    }
+    .logo:hover { text-decoration: none; }
+    .logo img {
+      width: 40px;
+      height: 40px;
+      object-fit: contain;
+      flex-shrink: 0;
+    }
+    .logo .brand-name { font-size: 17px; line-height: 1; }
+    .nav-links {
+      display: flex;
+      gap: 24px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .nav-links a:hover { color: var(--fg); text-decoration: none; }
+
+    /* ── Layout ── */
+    .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+    section { padding: 80px 0; }
+    section.alt { background: var(--white); }
+    .section-label {
+      display: inline-block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--forest);
+      margin-bottom: 14px;
+      padding: 4px 12px;
+      background: var(--moss);
+      border-radius: 6px;
+    }
+    .section-title {
+      font-size: clamp(26px, 3.5vw, 36px);
+      font-weight: 600;
+      margin-bottom: 14px;
+      max-width: 720px;
+    }
+    .section-desc {
+      font-size: 16px;
+      color: var(--muted);
+      max-width: 600px;
+      margin-bottom: 40px;
+      line-height: 1.8;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 56px 0 80px;
+      background:
+        radial-gradient(ellipse 80% 60% at 70% 0%, rgba(232, 240, 232, 0.9), transparent),
+        radial-gradient(ellipse 50% 40% at 10% 80%, rgba(185, 206, 209, 0.35), transparent),
+        var(--bg);
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.05fr;
+      gap: 56px;
+      align-items: center;
+    }
+    .hero-copy { max-width: 520px; }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 12px;
+      border-radius: 999px;
+      background: var(--moss);
+      color: var(--forest);
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 18px;
+    }
+    .hero h1 {
+      font-size: clamp(30px, 4.2vw, 44px);
+      font-weight: 600;
+      line-height: 1.35;
+      margin-bottom: 18px;
+    }
+    .hero-lead {
+      font-size: 16px;
+      color: var(--muted);
+      margin-bottom: 28px;
+      line-height: 1.85;
+    }
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .stat {
+      padding: 14px 16px;
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--soft-shadow);
+    }
+    .stat strong {
+      display: block;
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      line-height: 1.4;
+    }
+    .stat span { font-size: 12px; color: var(--muted); line-height: 1.5; display: block; }
+
+    /* Hero visual - workspace mockup */
+    .hero-visual {
+      position: relative;
+      border-radius: var(--radius-lg);
+      background: var(--white);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .mock-topbar {
+      height: 36px;
+      background: #f0f0ee;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      gap: 6px;
+    }
+    .mock-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .mock-dot.r { background: #ff6b6b; }
+    .mock-dot.y { background: #ffd93d; }
+    .mock-dot.g { background: #6bcb77; }
+    .mock-body { display: flex; height: 380px; }
+    .mock-sidebar {
+      width: 56px;
+      background: linear-gradient(180deg, rgba(232,240,232,0.8), var(--bg));
+      border-right: 1px solid var(--border);
+      padding: 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+    }
+    .mock-nav-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: rgba(26,26,26,0.06);
+    }
+    .mock-nav-icon.active { background: var(--accent); opacity: 0.85; }
+    .mock-chat {
+      width: 38%;
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #fafaf8;
+    }
+    .mock-bubble {
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+      max-width: 90%;
+    }
+    .mock-bubble.user {
+      align-self: flex-end;
+      background: #fff5f3;
+      border: 1px solid #ffe8e0;
+    }
+    .mock-bubble.ai {
+      background: white;
+      border: 1px solid var(--border);
+    }
+    .mock-progress {
+      margin-top: auto;
+      padding: 10px;
+      background: white;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      font-size: 10px;
+    }
+    .mock-step {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 0;
+      color: var(--muted);
+    }
+    .mock-step .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #ccc;
+    }
+    .mock-step .dot.done { background: #6bcb77; }
+    .mock-step .dot.run { background: #ffd93d; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .mock-canvas {
+      flex: 1;
+      padding: 16px;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .mock-canvas-title {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .mock-mod {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      font-size: 10px;
+    }
+    .mock-mod-head {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .mock-bar {
+      height: 6px;
+      border-radius: 3px;
+      background: #f0f0ee;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .mock-bar span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--accent), #ffb4a8);
+    }
+
+    /* ── Cards grid ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--soft-shadow);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow);
+    }
+    .card-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 16px;
+    }
+    .card h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+    .card p { font-size: 14px; color: var(--muted); line-height: 1.7; }
+
+    /* ── Scenarios ── */
+    .scenario-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+    .scenario {
+      display: flex;
+      gap: 20px;
+      padding: 28px;
+      background: var(--white);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    .scenario-num {
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--moss);
+      color: var(--forest);
+      font-weight: 800;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .scenario h3 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+    .scenario p { font-size: 14px; color: var(--muted); line-height: 1.7; }
+    .scenario-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .tag {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Steps ── */
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      position: relative;
+    }
+    .steps::before {
+      content: "";
+      position: absolute;
+      top: 28px;
+      left: 12%;
+      right: 12%;
+      height: 2px;
+      background: linear-gradient(90deg, var(--moss), var(--dew), var(--moss));
+      z-index: 0;
+    }
+    .step {
+      text-align: center;
+      padding: 0 12px;
+      position: relative;
+      z-index: 1;
+    }
+    .step-circle {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--white);
+      border: 2px solid var(--forest);
+      color: var(--forest);
+      font-weight: 800;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      box-shadow: var(--soft-shadow);
+    }
+    .step h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .step p { font-size: 13px; color: var(--muted); line-height: 1.65; }
+
+    /* ── Feature showcase (image + text) ── */
+    .showcase {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      align-items: center;
+      margin-bottom: 64px;
+    }
+    .showcase:last-child { margin-bottom: 0; }
+    .showcase.reverse { direction: rtl; }
+    .showcase.reverse > * { direction: ltr; }
+
+    .showcase-visual {
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      background: var(--white);
+    }
+
+    .showcase-text h3 {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .showcase-text p {
+      font-size: 15px;
+      color: var(--muted);
+      margin-bottom: 14px;
+      line-height: 1.75;
+    }
+    .bullet-list {
+      list-style: none;
+      font-size: 14px;
+    }
+    .bullet-list li {
+      padding: 7px 0 7px 26px;
+      position: relative;
+      color: var(--fg);
+      line-height: 1.65;
+    }
+    .bullet-list li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: var(--forest);
+      font-weight: 700;
+    }
+
+    /* Canvas mock illustration */
+    .canvas-mock { padding: 24px; background: var(--bg); }
+    .canvas-mock .theme-bar {
+      height: 3px;
+      background: linear-gradient(90deg, #8b6914, #d4a574, #f5e6cc);
+      border-radius: 2px;
+      margin-bottom: 16px;
+    }
+    .canvas-module {
+      background: white;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .canvas-module.highlight { border-color: #ffd6cc; box-shadow: 0 0 0 2px rgba(242,142,130,0.1); }
+    .cm-head {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      border-bottom: 1px solid var(--border);
+    }
+    .cm-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #fff0ee;
+      color: var(--accent-dark);
+    }
+    .cm-body { padding: 12px 16px; font-size: 11px; color: var(--muted); }
+    .matrix-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 10px;
+    }
+    .matrix-cell {
+      padding: 6px 8px;
+      background: #fafaf8;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .matrix-cell.head { background: var(--moss); font-weight: 600; color: var(--forest); }
+
+    /* Knowledge mock */
+    .kb-mock { padding: 20px; }
+    .kb-upload {
+      border: 2px dashed var(--dew);
+      border-radius: 14px;
+      padding: 32px;
+      text-align: center;
+      margin-bottom: 16px;
+      background: rgba(232,240,232,0.3);
+    }
+    .kb-upload .icon { font-size: 32px; margin-bottom: 8px; }
+    .kb-file {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg);
+      border-radius: 10px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .kb-file .ext {
+      width: 36px; height: 36px; border-radius: 8px;
+      background: #e8f0e8; color: var(--forest);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700;
+    }
+
+    /* Comment report mock */
+    .report-mock { padding: 20px; }
+    .report-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+    }
+    .report-tab {
+      padding: 6px 14px;
+      font-size: 11px;
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--muted);
+    }
+    .report-tab.on { background: var(--forest); color: white; }
+    .sentiment-bar {
+      display: flex;
+      height: 24px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 12px 0;
+      font-size: 10px;
+      color: white;
+      font-weight: 600;
+    }
+    .sentiment-bar .pos { background: #6bcb77; display: flex; align-items: center; justify-content: center; width: 45%; }
+    .sentiment-bar .neu { background: #b9ced1; display: flex; align-items: center; justify-content: center; width: 30%; }
+    .sentiment-bar .neg { background: var(--accent); display: flex; align-items: center; justify-content: center; width: 25%; }
+    .insight-item {
+      padding: 10px 12px;
+      background: var(--bg);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      border-left: 3px solid var(--forest);
+    }
+
+    /* ── Output cards ── */
+    .outputs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .output-card {
+      text-align: center;
+      padding: 32px 24px;
+      background: linear-gradient(180deg, var(--white), var(--bg));
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    .output-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    .output-card h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+    .output-card p { font-size: 13px; color: var(--muted); line-height: 1.65; }
+
+    /* ── Value ── */
+    .value-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+    .value-item {
+      text-align: center;
+      padding: 24px 16px;
+    }
+    .value-item .emoji { font-size: 36px; margin-bottom: 12px; }
+    .value-item h4 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .value-item p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+    .examples-box {
+      margin-top: 48px;
+      padding: 28px;
+      background: var(--white);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    .examples-box h3 { font-size: 18px; font-weight: 600; margin-bottom: 18px; }
+    .examples-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .example-label { font-size: 12px; font-weight: 600; color: var(--forest); margin-bottom: 8px; }
+    .example-quote {
+      padding: 14px 16px;
+      background: var(--bg);
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .example-quote.accent { border-left: 3px solid var(--accent); }
+    .example-quote.dew { border-left: 3px solid var(--dew); }
+    .example-quote.forest { border-left: 3px solid var(--forest); }
+    .example-quote.gold { border-left: 3px solid #d4a574; }
+    .mock-caption { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+
+    /* Footer */
+    footer {
+      padding: 36px 0;
+      border-top: 1px solid var(--border);
+      background: var(--white);
+    }
+    .footer-inner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .footer-brand { display: flex; align-items: center; gap: 10px; }
+    .footer-brand img { width: 36px; height: 36px; object-fit: contain; }
+    .footer-brand .brand-name { font-size: 16px; color: var(--fg); }
+    .footer-tagline { font-size: 12px; line-height: 1.6; }
+
+    /* ── Print ── */
+    @media print {
+      .nav { position: static; }
+      section { padding: 40px 0; break-inside: avoid; }
+      .card, .scenario { break-inside: avoid; }
+    }
+
+    @media (max-width: 900px) {
+      .hero-grid, .showcase, .showcase.reverse { grid-template-columns: 1fr; }
+      .hero-stats { grid-template-columns: 1fr; }
+      .cards, .scenario-grid, .outputs, .value-grid, .examples-grid { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr 1fr; gap: 28px; }
+      .steps::before { display: none; }
+      .nav-links { display: none; }
+      section { padding: 56px 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="logo" href="#">
+        <img src="data:image/png;base64,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" alt="Red Muse" width="40" height="40" />
+        <span class="brand-name">Red Muse</span>
+      </a>
+      <div class="nav-links">
+        <a href="#overview">产品概述</a>
+        <a href="#features">核心能力</a>
+        <a href="#scenarios">应用场景</a>
+        <a href="#workflow">使用流程</a>
+        <a href="#outputs">交付成果</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="container hero-grid">
+      <div class="hero-copy">
+        <div class="hero-badge">小红书内容智能分析平台</div>
+        <h1>从数据采集到爆文洞察，一站完成</h1>
+        <p class="hero-lead">
+          <span class="brand-name">Red Muse</span> 帮助品牌、运营与内容团队，通过对话式交互完成笔记采集、爆文特征分析、评论舆情洞察与内容策略输出，让数据真正服务于创作决策。
+        </p>
+        <div class="hero-stats">
+          <div class="stat">
+            <strong>对话驱动</strong>
+            <span>用自然语言描述需求，即可启动分析</span>
+          </div>
+          <div class="stat">
+            <strong>结构化画布</strong>
+            <span>洞察分模块呈现，支持导出与汇报</span>
+          </div>
+          <div class="stat">
+            <strong>多场景覆盖</strong>
+            <span>爆文分析、评论舆情、知识库问答</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-label="工作台界面示意">
+        <div class="mock-topbar">
+          <span class="mock-dot r"></span>
+          <span class="mock-dot y"></span>
+          <span class="mock-dot g"></span>
+        </div>
+        <div class="mock-body">
+          <div class="mock-sidebar">
+            <div class="mock-nav-icon active"></div>
+            <div class="mock-nav-icon"></div>
+            <div class="mock-nav-icon"></div>
+            <div class="mock-nav-icon"></div>
+          </div>
+          <div class="mock-chat">
+            <div class="mock-bubble user">帮我分析「北欧巧克力」在小红书的爆文特征，竞品词：Lindt、Fazer</div>
+            <div class="mock-bubble ai">好的，正在为您启动爆文分析任务，预计采集 150 条样本并生成洞察画布…</div>
+            <div class="mock-progress">
+              <div class="mock-step"><span class="dot done"></span> 解析关键词与采集策略</div>
+              <div class="mock-step"><span class="dot done"></span> 采集行业 / 竞品 / 品牌笔记</div>
+              <div class="mock-step"><span class="dot run"></span> 多模态分析封面与视频…</div>
+              <div class="mock-step"><span class="dot"></span> 生成爆文模型矩阵</div>
+            </div>
+          </div>
+          <div class="mock-canvas">
+            <div class="mock-canvas-title">北欧巧克力 · 爆文洞察画布</div>
+            <div class="mock-mod">
+              <div class="mock-mod-head"><span>数据总览</span><span style="color:var(--forest)">128 条样本</span></div>
+              <div class="mock-bar"><span style="width:72%"></span></div>
+            </div>
+            <div class="mock-mod" style="border-color:#ffd6cc">
+              <div class="mock-mod-head"><span>爆文模型矩阵</span><span class="cm-badge">核心</span></div>
+              <div style="font-size:10px;color:var(--muted)">场景种草型 · 测评对比型 · 生活方式型 …</div>
+            </div>
+            <div class="mock-mod">
+              <div class="mock-mod-head"><span>用户痛点洞察</span></div>
+              <div style="font-size:10px;color:var(--muted)">价格敏感 · 送礼场景 · 成分健康…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Overview -->
+  <section id="overview">
+    <div class="container">
+      <div class="section-label">产品概述</div>
+      <h2 class="section-title">我们解决什么问题？</h2>
+      <p class="section-desc">
+        小红书是品牌种草与内容营销的核心阵地，但人工翻笔记、抄爆款、整理表格既耗时又难沉淀方法论。<span class="brand-name">Red Muse</span> 将「采集 → 分析 → 洞察 → 创作」串成一条可复用的业务流水线。
+      </p>
+
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon" style="background:#fff0ee">🔍</div>
+          <h3>样本难凑齐</h3>
+          <p>支持多关键词、竞品词组合检索，自动去重合并，确保分析样本量充足、有代表性。</p>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:#e8f0e8">📊</div>
+          <h3>洞察难结构化</h3>
+          <p>不只给一段文字总结，而是输出可浏览、可再生的 Canvas 画布模块，方便汇报与协作。</p>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:#eef4f5">💬</div>
+          <h3>评论难量化</h3>
+          <p>独立评论舆情分析能力，从用户真实反馈中提炼正/中/负情绪与产品洞察，辅助选品与话术。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="alt">
+    <div class="container">
+      <div class="section-label">核心能力</div>
+      <h2 class="section-title">六大业务能力，覆盖内容营销全链路</h2>
+      <p class="section-desc">无需学习复杂操作——在对话里描述需求，系统自动完成采集、分析与报告生成。</p>
+
+      <div class="cards" style="margin-bottom:64px">
+        <div class="card">
+          <div class="card-icon" style="background:#e8f0e8">📝</div>
+          <h3>爆文洞察分析</h3>
+          <p>输入品类关键词与竞品词，自动采集高互动笔记，分析封面、标题、视频等要素，归纳爆文模型与创作 playbook。</p>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:#fff0ee">🗣️</div>
+          <h3>评论舆情分析</h3>
+          <p>针对指定关键词下的笔记，批量采集评论并做情感与主题归类，输出舆情报告与 Excel 数据源。</p>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:#eef4f5">📚</div>
+          <h3>企业知识库问答</h3>
+          <p>上传品牌手册、产品资料等文档，在对话中 @ 引用或直接提问，结合内部知识与外部数据综合回答。</p>
+        </div>
+        <div class="card" style="grid-column: span 1">
+          <div class="card-icon" style="background:#f5f0e8">🎯</div>
+          <h3>多业务场景入口</h3>
+          <p>除常规范文洞察外，还支持「热点发现」「投后参谋」等场景化会话，适配不同部门的汇报与复盘需求。</p>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:#f0eeff">📤</div>
+          <h3>成果导出与分享</h3>
+          <p>支持将分析画布导出为 Excel / JSON，评论分析导出专用报表，便于二次加工或向上汇报。</p>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:#e8f5ee">🔄</div>
+          <h3>模块级精细调整</h3>
+          <p>对画布中不满意的模块可单独「重新生成」，无需整份报告重跑，节省时间与成本。</p>
+        </div>
+      </div>
+
+      <!-- Showcase: Canvas -->
+      <div class="showcase">
+        <div class="showcase-visual">
+          <div class="canvas-mock">
+            <div class="theme-bar"></div>
+            <div class="mock-caption">爆文洞察画布 · 结构化呈现</div>
+            <div class="canvas-module">
+              <div class="cm-head"><span>📈 数据总览</span><span style="color:var(--muted);font-weight:400">样本 128 · 爆款率 52%</span></div>
+              <div class="cm-body">按点赞/评论/收藏三维度采集，展示各来源关键词贡献</div>
+            </div>
+            <div class="canvas-module highlight">
+              <div class="cm-head"><span>🎯 爆文模型矩阵</span><span class="cm-badge">核心产出</span></div>
+              <div class="cm-body">
+                <div class="matrix-row">
+                  <div class="matrix-cell head">模型</div>
+                  <div class="matrix-cell head">封面策略</div>
+                  <div class="matrix-cell head">标题套路</div>
+                  <div class="matrix-cell head">内容结构</div>
+                </div>
+                <div class="matrix-row">
+                  <div class="matrix-cell">场景种草型</div>
+                  <div class="matrix-cell">氛围感实拍</div>
+                  <div class="matrix-cell">「周末仪式感」</div>
+                  <div class="matrix-cell">开箱→试吃→总结</div>
+                </div>
+                <div class="matrix-row">
+                  <div class="matrix-cell">测评对比型</div>
+                  <div class="matrix-cell">并排产品图</div>
+                  <div class="matrix-cell">「X vs Y 实测」</div>
+                  <div class="matrix-cell">维度打分表</div>
+                </div>
+              </div>
+            </div>
+            <div class="canvas-module">
+              <div class="cm-head"><span>💡 痛点与 SEO 洞察</span></div>
+              <div class="cm-body">用户关心什么、搜什么、内容缺口在哪里——直接指导选题与标题优化</div>
+            </div>
+          </div>
+        </div>
+        <div class="showcase-text">
+          <h3>画布式洞察，而非一堆聊天记录</h3>
+          <p>分析完成后，右侧自动生成结构化画布。每个模块对应一块业务结论：样本库、爆文模型、痛点、SEO 建议、草稿工作台等。</p>
+          <ul class="bullet-list">
+            <li>适合开会投屏、截图放进汇报 PPT</li>
+            <li>支持单模块重新生成，快速迭代某一板块</li>
+            <li>实时显示分析进度，长任务也不焦虑</li>
+            <li>历史任务可随时回看、继续对话优化</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Showcase: Comment -->
+      <div class="showcase reverse">
+        <div class="showcase-visual">
+          <div class="report-mock">
+            <div class="mock-caption">评论舆情分析报告</div>
+            <div class="report-tabs">
+              <span class="report-tab on">舆情总览</span>
+              <span class="report-tab">分类详情</span>
+              <span class="report-tab">原始数据</span>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">关键词「雅马哈耳机」· 笔记 42 篇 · 评论 856 条</div>
+            <div class="sentiment-bar">
+              <span class="pos">正面 45%</span>
+              <span class="neu">中性 30%</span>
+              <span class="neg">负面 25%</span>
+            </div>
+            <div class="insight-item"><strong>音质表现</strong> — 高频好评点，用户认可低音与降噪</div>
+            <div class="insight-item"><strong>佩戴舒适度</strong> — 部分用户反馈久戴压耳，可作为改进方向</div>
+            <div class="insight-item"><strong>性价比</strong> — 与竞品对比讨论热烈，建议强化差异化话术</div>
+          </div>
+        </div>
+        <div class="showcase-text">
+          <h3>听见用户真实声音</h3>
+          <p>评论分析独立于爆文分析，专注「用户怎么说」。适合新品上市监测、竞品口碑对比、客服话术优化等场景。</p>
+          <ul class="bullet-list">
+            <li>自动采集笔记下的评论并分类归纳</li>
+            <li>输出正/中/负舆情结构与核心发现</li>
+            <li>附带 Excel 原始数据表，支持二次分析</li>
+            <li>可生成 Markdown 报告，方便内部分享</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Showcase: Knowledge -->
+      <div class="showcase">
+        <div class="showcase-visual">
+          <div class="kb-mock">
+            <div class="mock-caption">企业知识库</div>
+            <div class="kb-upload">
+              <div class="icon">📄</div>
+              <div style="font-size:13px;font-weight:600">拖拽上传品牌资料</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">支持 Word / PDF / Markdown / TXT</div>
+            </div>
+            <div class="kb-file"><span class="ext">PDF</span><span>2026品牌视觉规范手册.pdf · 已分块 24 段</span></div>
+            <div class="kb-file"><span class="ext">DOC</span><span>产品卖点话术库.docx · 已分块 18 段</span></div>
+            <div class="kb-file"><span class="ext">MD</span><span>竞品分析摘要.md · 已分块 8 段</span></div>
+          </div>
+        </div>
+        <div class="showcase-text">
+          <h3>内部知识 + 外部数据，一起用</h3>
+          <p>将企业自有资料沉淀到知识库后，在对话中可直接引用。AI 回答时会结合小红书数据与内部文档，输出更贴合品牌调性的建议。</p>
+          <ul class="bullet-list">
+            <li>管理员上传文档，自动分块与向量化</li>
+            <li>对话中 @ 文档或选择知识库范围</li>
+            <li>适合品牌规范、产品卖点、历史 campaign 复盘</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Scenarios -->
+  <section id="scenarios">
+    <div class="container">
+      <div class="section-label">应用场景</div>
+      <h2 class="section-title">谁在用？解决什么业务问题？</h2>
+      <p class="section-desc">不同角色都能在同一套平台上找到对应价值。</p>
+
+      <div class="scenario-grid">
+        <div class="scenario">
+          <div class="scenario-num">01</div>
+          <div>
+            <h3>品牌 / 市场团队</h3>
+            <p>新品上市前快速摸清品类爆文套路、用户关注点与竞品内容策略，缩短市场调研周期。</p>
+            <div class="scenario-tags">
+              <span class="tag">品类洞察</span>
+              <span class="tag">竞品监测</span>
+              <span class="tag">选题规划</span>
+            </div>
+          </div>
+        </div>
+        <div class="scenario">
+          <div class="scenario-num">02</div>
+          <div>
+            <h3>内容运营 / KOC 团队</h3>
+            <p>直接获得可执行的封面、标题、结构 playbook，减少「凭感觉抄爆款」的低效试错。</p>
+            <div class="scenario-tags">
+              <span class="tag">爆文拆解</span>
+              <span class="tag">创作模板</span>
+              <span class="tag">草稿工作台</span>
+            </div>
+          </div>
+        </div>
+        <div class="scenario">
+          <div class="scenario-num">03</div>
+          <div>
+            <h3>产品 / 用户研究团队</h3>
+            <p>通过评论舆情分析，从真实反馈中发现产品优缺点与用户未被满足的需求。</p>
+            <div class="scenario-tags">
+              <span class="tag">口碑监测</span>
+              <span class="tag">需求挖掘</span>
+              <span class="tag">差评归因</span>
+            </div>
+          </div>
+        </div>
+        <div class="scenario">
+          <div class="scenario-num">04</div>
+          <div>
+            <h3>管理层 / 战略分析</h3>
+            <p>结构化画布与 Excel 导出便于汇报；投后复盘、热点追踪等场景化入口支持专项分析。</p>
+            <div class="scenario-tags">
+              <span class="tag">汇报材料</span>
+              <span class="tag">投后复盘</span>
+              <span class="tag">热点发现</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Workflow -->
+  <section id="workflow" class="alt">
+    <div class="container">
+      <div class="section-label">使用流程</div>
+      <h2 class="section-title">四步上手，对话即分析</h2>
+      <p class="section-desc">无需记忆复杂菜单，按自然语言描述需求即可。</p>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-circle">1</div>
+          <h3>登录并授权</h3>
+          <p>使用账号登录平台，在「设置」中完成小红书数据源授权（扫码或粘贴 Cookie）。</p>
+        </div>
+        <div class="step">
+          <div class="step-circle">2</div>
+          <h3>新建对话</h3>
+          <p>在工作台新建会话，输入分析需求，如关键词、竞品词、样本量等，也可展开高级配置。</p>
+        </div>
+        <div class="step">
+          <div class="step-circle">3</div>
+          <h3>等待分析完成</h3>
+          <p>左侧对话区显示实时进度，右侧画布随分析推进逐步填充模块内容。</p>
+        </div>
+        <div class="step">
+          <div class="step-circle">4</div>
+          <h3>查看、调整、导出</h3>
+          <p>浏览画布结论，对不满意模块要求重新生成，或导出 Excel 用于汇报与协作。</p>
+        </div>
+      </div>
+
+      <div class="examples-box">
+        <h3>💡 对话示例</h3>
+        <div class="examples-grid">
+          <div>
+            <div class="example-label">爆文分析</div>
+            <div class="example-quote accent">「帮我分析『低卡零食』在小红书的爆文特征，竞品词：良品铺子、三只松鼠，目标采集 150 条。」</div>
+          </div>
+          <div>
+            <div class="example-label">评论舆情</div>
+            <div class="example-quote dew">「分析一下『雅马哈耳机』相关笔记的用户评论，看看大家主要夸什么、吐槽什么。」</div>
+          </div>
+          <div>
+            <div class="example-label">结合知识库</div>
+            <div class="example-quote forest">「根据我们的品牌手册，结合『北欧巧克力』爆文数据，给一份下月内容选题建议。」</div>
+          </div>
+          <div>
+            <div class="example-label">模块优化</div>
+            <div class="example-quote gold">「痛点洞察写得太泛了，请重新生成，更聚焦价格敏感人群。」</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Outputs -->
+  <section id="outputs">
+    <div class="container">
+      <div class="section-label">交付成果</div>
+      <h2 class="section-title">分析之后，您能得到什么？</h2>
+      <p class="section-desc">所有产出均可用于汇报、协作或二次加工，不只是「聊完就忘」。</p>
+
+      <div class="outputs">
+        <div class="output-card">
+          <div class="output-icon">🖼️</div>
+          <h3>洞察画布</h3>
+          <p>网页端结构化展示：样本库、爆文模型矩阵、痛点、SEO、草稿工作台等模块，支持截图与投屏汇报。</p>
+        </div>
+        <div class="output-card">
+          <div class="output-icon">📊</div>
+          <h3>Excel 报表</h3>
+          <p>爆文分析导出多 Sheet 工作簿；评论分析导出「评论数据源 + 笔记数据源」双表，便于数据同学继续加工。</p>
+        </div>
+        <div class="output-card">
+          <div class="output-icon">📝</div>
+          <h3>舆情报告</h3>
+          <p>评论分析附带 Markdown 格式洞察报告，归纳舆情结构、分类发现与可执行建议。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Value -->
+  <section class="alt">
+    <div class="container">
+      <div class="section-label">业务价值</div>
+      <h2 class="section-title">为什么选择 <span class="brand-name">Red Muse</span>？</h2>
+      <div class="value-grid">
+        <div class="value-item">
+          <div class="emoji">⏱️</div>
+          <h4>节省调研时间</h4>
+          <p>原本数天的翻笔记、整理表格，压缩到一次对话 + 等待分析</p>
+        </div>
+        <div class="value-item">
+          <div class="emoji">🎯</div>
+          <h4>结论可落地</h4>
+          <p>爆文模型与 playbook 直接指导封面、标题与脚本结构</p>
+        </div>
+        <div class="value-item">
+          <div class="emoji">🔗</div>
+          <h4>知识可沉淀</h4>
+          <p>历史任务、知识库与导出文件形成团队资产</p>
+        </div>
+        <div class="value-item">
+          <div class="emoji">👥</div>
+          <h4>多角色协作</h4>
+          <p>运营看画布、产品看评论、管理层看导出报表，各取所需</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <img src="data:image/png;base64,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" alt="Red Muse" width="36" height="36" />
+        <span class="brand-name">Red Muse</span>
+      </div>
+      <p class="footer-tagline">小红书爆文分析与内容创作平台 · 数据采集 · 爆文洞察 · 评论舆情 · 知识库问答</p>
+    </div>
+  </footer>
+
+</body>
+</html>

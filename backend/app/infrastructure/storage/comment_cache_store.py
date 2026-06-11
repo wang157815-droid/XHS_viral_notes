@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -129,6 +130,71 @@ def _make_cache_key(keywords: List[str], time_range: int, min_interaction: int) 
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
+def _norm_kw(k: str) -> str:
+    """关键词归一化：小写 + 去除全部空白（兼容「雅马哈ydp165」与「雅马哈 YDP165」）。"""
+    return re.sub(r"\s+", "", str(k or "").strip().lower())
+
+
+def _parse_keywords_json(value: Any) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(k) for k in value if str(k).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return []
+        if isinstance(parsed, list):
+            return [str(k) for k in parsed if str(k).strip()]
+    return []
+
+
+def _cached_kw_covers_user_kw(cached_kw: str, user_kw: str) -> bool:
+    """缓存侧关键词是否覆盖用户关键词（精确相等或缓存词包含用户词）。"""
+    c = _norm_kw(cached_kw)
+    u = _norm_kw(user_kw)
+    if not u:
+        return False
+    return c == u or u in c
+
+
+def _keywords_contain_all(cached: List[str], required: List[str]) -> bool:
+    """用户输入的每个关键词，均能被缓存关键词列表中的至少一项覆盖。"""
+    if not required:
+        return False
+    return all(
+        any(_cached_kw_covers_user_kw(c, r) for c in cached)
+        for r in required
+    )
+
+
+def _keywords_contain(cached: List[str], kw: str) -> bool:
+    return any(_cached_kw_covers_user_kw(c, kw) for c in cached)
+
+
+def _find_covering_cache_keys(
+    candidates: List[tuple],
+    required: List[str],
+) -> List[str]:
+    """找出所有能覆盖 required 全部关键词的 cache_key（可能多组）。"""
+    return [
+        key for key, kws, _cnt in candidates
+        if _keywords_contain_all(kws, required)
+    ]
+
+
+def _find_cache_keys_for_keyword(
+    candidates: List[tuple],
+    kw: str,
+) -> List[str]:
+    """找出所有能覆盖单个关键词的 cache_key（可能多组）。"""
+    return [
+        key for key, kws, _cnt in candidates
+        if _keywords_contain(kws, kw)
+    ]
 
 
 # ── Table Init ───────────────────────────────────────────────────────────────
@@ -267,30 +333,56 @@ class CommentCrawlCacheStore:
         """在应用启动时调用（幂等建表）。"""
         await _ensure_table()
 
-    async def get(
-        self,
-        keywords: List[str],
-        time_range: int = 0,
-        min_interaction: int = 0,
-    ) -> Optional[Dict[str, Any]]:
-        """查询缓存。
+    async def _list_active_caches(self, time_range: Optional[int] = None) -> List[tuple]:
+        """列出未过期缓存：(cache_key, keywords_list, note_count)。
 
-        命中返回 {"notes": [...{...note_fields, "_cached_comments": [...]}],
-                   "note_count": N, "comment_count": M, "from_cache": True, ...}
-        未命中返回 None。
+        keywords 来源 = JSONB keywords 列 + 各行 source_keyword（兼容迁移数据）。
+        time_range=None 时不按时间范围过滤（关键词覆盖匹配跨 time_range 生效）。
         """
-        if not _ENABLED:
-            return None
-        if not _SA_AVAILABLE or not is_postgres_available():
-            return None
-
-        await _ensure_table()
-        cache_key = _make_cache_key(keywords, time_range, min_interaction)
         now = datetime.now(timezone.utc)
+        if time_range is None:
+            sql = (
+                "SELECT cache_key, keywords, source_keyword "
+                "FROM xhs_comment_note "
+                "WHERE expires_at > :now"
+            )
+            params: Dict[str, Any] = {"now": now}
+        else:
+            sql = (
+                "SELECT cache_key, keywords, source_keyword "
+                "FROM xhs_comment_note "
+                "WHERE expires_at > :now AND time_range = :tr"
+            )
+            params = {"now": now, "tr": time_range}
 
+        async with get_db_session() as session:
+            rows = (await session.execute(sql_text(sql), params)).fetchall()
+
+        by_key: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            entry = by_key.setdefault(r.cache_key, {"kws": set(), "count": 0})
+            entry["count"] += 1
+            entry["kws"].update(_parse_keywords_json(r.keywords))
+            sk = str(r.source_keyword or "").strip()
+            if sk:
+                entry["kws"].add(sk)
+
+        result = [
+            (key, sorted(data["kws"]), int(data["count"]))
+            for key, data in by_key.items()
+            if data["kws"]
+        ]
+        logger.debug(
+            f"[comment_cache] 活跃缓存 {len(result)} 组 "
+            f"(time_range={'all' if time_range is None else time_range})"
+        )
+        return result
+
+    async def _get_by_cache_key(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        """按 cache_key 读取完整缓存数据。"""
+        now = datetime.now(timezone.utc)
         try:
             async with get_db_session() as session:
-                # 1. 查笔记
                 note_rows = (await session.execute(
                     sql_text(
                         "SELECT * FROM xhs_comment_note "
@@ -299,7 +391,6 @@ class CommentCrawlCacheStore:
                     ),
                     {"key": cache_key, "now": now},
                 )).fetchall()
-
                 if not note_rows:
                     return None
 
@@ -308,7 +399,6 @@ class CommentCrawlCacheStore:
                 )
                 age_h = int((now - oldest_crawled).total_seconds() / 3600)
 
-                # 2. 查评论
                 comment_rows = (await session.execute(
                     sql_text(
                         "SELECT * FROM xhs_comment_data "
@@ -318,12 +408,10 @@ class CommentCrawlCacheStore:
                     {"key": cache_key},
                 )).fetchall()
 
-            # 3. 按 note_id 分组评论
             comments_by_note: Dict[str, List[Dict]] = defaultdict(list)
             for row in comment_rows:
                 comments_by_note[row.note_id].append(_row_to_comment(row))
 
-            # 4. 还原为 pipeline 所需格式（note dict + _cached_comments）
             notes = []
             for row in note_rows:
                 note = _row_to_note(row)
@@ -331,10 +419,6 @@ class CommentCrawlCacheStore:
                 notes.append(note)
 
             total_comments = sum(len(v) for v in comments_by_note.values())
-            logger.info(
-                f"[comment_cache] 命中 key={cache_key[:8]}... "
-                f"notes={len(notes)} comments={total_comments} age={age_h}h"
-            )
             return {
                 "notes":            notes,
                 "note_count":       len(notes),
@@ -342,10 +426,188 @@ class CommentCrawlCacheStore:
                 "from_cache":       True,
                 "cache_age_hours":  age_h,
             }
+        except (PostgresUnavailable, Exception) as exc:
+            logger.warning(f"[comment_cache] 按 key 读取失败（降级跳过）: {exc}")
+            return None
+
+    async def _merge_cache_keys(self, cache_keys: List[str]) -> Optional[Dict[str, Any]]:
+        """合并多组 cache_key 的笔记与评论，按 note_id 去重。"""
+        if not cache_keys:
+            return None
+        if len(cache_keys) == 1:
+            return await self._get_by_cache_key(cache_keys[0])
+
+        merged_notes: Dict[str, Dict] = {}
+        min_age_h: Optional[int] = None
+        for key in cache_keys:
+            per = await self._get_by_cache_key(key)
+            if not per:
+                continue
+            age = per.get("cache_age_hours")
+            if age is not None:
+                min_age_h = age if min_age_h is None else min(min_age_h, age)
+            for note in per.get("notes", []):
+                nid = note.get("note_id")
+                if nid and nid not in merged_notes:
+                    merged_notes[nid] = note
+
+        if not merged_notes:
+            return None
+
+        merged_list = sorted(
+            merged_notes.values(),
+            key=lambda n: n.get("interaction_score", 0),
+            reverse=True,
+        )
+        total_comments = sum(len(n.get("_cached_comments", [])) for n in merged_list)
+        return {
+            "notes":            merged_list,
+            "note_count":       len(merged_list),
+            "comment_count":    total_comments,
+            "from_cache":       True,
+            "cache_age_hours":  min_age_h or 0,
+            "merged_cache_keys": cache_keys,
+        }
+
+    async def get(
+        self,
+        keywords: List[str],
+        time_range: int = 0,
+        min_interaction: int = 0,
+    ) -> Optional[Dict[str, Any]]:
+        """查询缓存。
+
+        命中策略（按顺序）：
+        1. cache_key 精确匹配
+        2. 覆盖匹配：所有能覆盖用户全部关键词的缓存组合并返回（可能多组）
+
+        命中返回 {"notes": [...], "note_count": N, ...}；未命中返回 None。
+        """
+        if not _ENABLED:
+            return None
+        if not _SA_AVAILABLE or not is_postgres_available():
+            return None
+        if not keywords:
+            return None
+
+        await _ensure_table()
+
+        try:
+            # 1. 精确 cache_key 命中
+            exact_key = _make_cache_key(keywords, time_range, min_interaction)
+            result = await self._get_by_cache_key(exact_key)
+            if result:
+                logger.info(
+                    f"[comment_cache] 精确命中 key={exact_key[:8]}... "
+                    f"notes={result['note_count']} comments={result['comment_count']}"
+                )
+                return result
+
+            # 2. 覆盖命中：合并所有能覆盖用户关键词的缓存组（不按 time_range 限制）
+            active = await self._list_active_caches()
+            covering_keys = _find_covering_cache_keys(active, keywords)
+            if not covering_keys:
+                logger.debug(
+                    f"[comment_cache] 覆盖未命中 user_keywords={keywords} "
+                    f"active_caches={len(active)}"
+                )
+                return None
+
+            result = await self._merge_cache_keys(covering_keys)
+            if not result:
+                return None
+
+            result["superset_cache"] = len(covering_keys) > 1
+            logger.info(
+                f"[comment_cache] 覆盖命中 groups={len(covering_keys)} "
+                f"user_keywords={keywords} notes={result['note_count']} "
+                f"comments={result['comment_count']}"
+            )
+            return result
 
         except (PostgresUnavailable, Exception) as exc:
             logger.warning(f"[comment_cache] 读取失败（降级跳过）: {exc}")
             return None
+
+    async def get_partial(
+        self,
+        keywords: List[str],
+        time_range: int = 0,
+        min_interaction: int = 0,
+    ) -> tuple:
+        """多关键词部分命中查询。
+
+        1. get()：精确命中或超集命中 → 全部关键词视为已缓存
+        2. 否则按单个关键词在任意缓存中查找（不要求 cache_key 完全一致）
+        返回 (cached_result_or_None, uncached_keywords_list)。
+        """
+        if not keywords:
+            return None, []
+
+        # 1. 精确 / 超集全量命中
+        combined = await self.get(keywords, time_range, min_interaction)
+        if combined:
+            return combined, []
+
+        # 2. 逐个关键词在任意缓存中查找（单关键词也走此路径，跨 time_range）
+        active = await self._list_active_caches()
+        if not active:
+            return None, keywords
+        merged_notes: Dict[str, Dict] = {}
+        uncached: List[str] = []
+        hit_labels: List[str] = []
+        fetched_keys: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        for kw in keywords:
+            cache_keys = _find_cache_keys_for_keyword(active, kw)
+            if not cache_keys:
+                uncached.append(kw)
+                continue
+
+            kw_hit = False
+            for cache_key in cache_keys:
+                if cache_key not in fetched_keys:
+                    fetched_keys[cache_key] = await self._get_by_cache_key(cache_key)
+                per = fetched_keys[cache_key]
+                if not per:
+                    continue
+                kw_hit = True
+                for note in per.get("notes", []):
+                    nid = note.get("note_id")
+                    if nid and nid not in merged_notes:
+                        merged_notes[nid] = note
+
+            if kw_hit:
+                hit_labels.append(kw)
+            else:
+                uncached.append(kw)
+
+        if not merged_notes:
+            return None, keywords
+
+        merged_list = sorted(
+            merged_notes.values(),
+            key=lambda n: n.get("interaction_score", 0),
+            reverse=True,
+        )
+        total_comments = sum(len(n.get("_cached_comments", [])) for n in merged_list)
+        logger.info(
+            f"[comment_cache] 部分命中: hit_keywords={hit_labels} "
+            f"uncached_keywords={uncached} notes={len(merged_list)} comments={total_comments}"
+        )
+        return (
+            {
+                "notes":             merged_list,
+                "note_count":        len(merged_list),
+                "comment_count":     total_comments,
+                "from_cache":        True,
+                "partial_cache":     True,
+                "cached_keywords":   hit_labels,
+                "uncached_keywords": uncached,
+                "cache_age_hours":   0,
+            },
+            uncached,
+        )
 
     async def set(
         self,

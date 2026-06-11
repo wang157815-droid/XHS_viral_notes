@@ -259,10 +259,27 @@ async def migrate():
 
         logger.info(f"评论写入完成：成功 {comment_ok} / 跳过 {comment_skip}")
 
+        # ── 回填 note_url / note_title ────────────────────────────────────────
+        logger.info("开始回填 xhs_comment_data.note_url / note_title ...")
+        backfill_result = await session.execute(sql_text("""
+            UPDATE xhs_comment_data AS c
+            SET
+                note_url   = n.note_url,
+                note_title = n.title
+            FROM xhs_comment_note AS n
+            WHERE c.note_id = n.note_id
+              AND (
+                  c.note_url   IS NULL OR c.note_url   = ''
+               OR c.note_title IS NULL OR c.note_title = ''
+              )
+        """))
+        logger.info(f"回填完成：更新 {backfill_result.rowcount} 条评论的 note_url/note_title")
+
     logger.success(
         f"\n迁移完成！\n"
         f"  笔记：{note_ok} 条成功，{note_skip} 条跳过\n"
         f"  评论：{comment_ok} 条成功，{comment_skip} 条跳过\n"
+        f"  note_url/note_title 回填：{backfill_result.rowcount} 条\n"
         f"  关键词分组：{list(keyword_map.items())}\n"
         f"  缓存有效期：{IMPORT_TTL_DAYS} 天"
     )

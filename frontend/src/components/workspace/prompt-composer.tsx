@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { BrandLink } from "@/components/layout/brand-link";
 import {
   useCallback,
   useEffect,
@@ -367,12 +367,7 @@ export function PromptComposer({
   return (
     <div className="relative flex min-h-full flex-1 flex-col items-center overflow-hidden bg-[#F7F7F7] px-5 sm:px-8">
       {/* 左上角品牌 logo */}
-      <div className="absolute left-3 top-3 flex items-center gap-2 sm:left-4">
-        <Image src="/logo.png" alt="RedMuse" width={44} height={44} className="object-contain" priority />
-        <span className="font-serif text-[15px] font-medium italic leading-none tracking-[0.02em] text-obsidian">
-          Red Muse
-        </span>
-      </div>
+      <BrandLink className="absolute left-3 top-3 sm:left-4" />
 
       {/* 标题区：高度固定 346px，标题底部对齐底边，与输入框保持 40px 间距 */}
       <div className="flex h-[346px] w-full max-w-[720px] flex-col items-center justify-end pb-10 text-center">

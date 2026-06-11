@@ -25,6 +25,7 @@ import { DEFAULT_ADVANCED } from "@/lib/contracts";
 import type { SseClientStatus } from "@/lib/sse/event-source-client";
 import type { TaskStreamState } from "@/lib/sse/event-reducer";
 import { motion, useReducedMotion } from "motion/react";
+import { BrandLink } from "@/components/layout/brand-link";
 import { AgentTimeline } from "./agent-timeline";
 import {
   AdvancedParamsMenuSection,
@@ -101,17 +102,6 @@ const LOCAL_MEDIA_ACCEPT = "image/*,.pdf,.txt,.md,.doc,.docx";
 /** 底部对话输入框最大高度（超出后内部滚动） */
 const MAX_FOOTER_TEXTAREA_HEIGHT = 200;
 
-/** 顶栏品牌：logo 图片 + Red Muse 文字 */
-function ChatHeaderBrand() {
-  return (
-    <div className="flex shrink-0 items-center gap-2">
-      <Image src="/logo.png" alt="RedMuse" width={44} height={44} className="object-contain" priority />
-      <span className="font-serif text-[15px] font-medium italic leading-none tracking-[0.02em] text-obsidian">
-        Red Muse
-      </span>
-    </div>
-  );
-}
 
 export function ChatPanel({
   cookieHealth,
@@ -717,7 +707,7 @@ export function ChatPanel({
         }`}
       >
       <header className="flex shrink-0 items-center justify-between gap-3 bg-papyrus/95 px-3 py-3 backdrop-blur-sm sm:px-4">
-        <ChatHeaderBrand />
+        <BrandLink />
         <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
           {hasTask ? (
             <span

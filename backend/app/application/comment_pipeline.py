@@ -73,6 +73,15 @@ _V2_MAX_CONCURRENT = 1          # 串行处理，减少并发压力
 _V2_INTER_NOTE_SLEEP = 4.0
 _V2_INTER_SUB_SLEEP = 0.5
 
+# Dim1 聚类规则
+_DIM1_MIN_CATEGORY_SIZE = 10          # 形成独立维度的最低评论数
+_DIM1_REFERENCE_DIMENSIONS = [
+    "音源", "复音数", "音色数", "音准",
+    "键盘手感", "键盘材质",
+    "价格", "性价比",
+    "扬声器", "踏板", "外观颜值",
+]
+
 # ── v1 LLM Prompt（旧版，保留不删） ────────────────────────────────────────────
 
 _NOTE_CLASSIFY_SYSTEM = """你是小红书内容分析专家。请根据笔记的标题、描述和话题标签，为每条笔记打一个类型标签。
@@ -141,16 +150,23 @@ _GROUP_SUMMARY_SYSTEM = """你是小红书内容营销分析师。根据以下�
 _INPUT_PARSER_SYSTEM = """你是搜索意图解析助手。请从用户的自然语言描述中提取小红书笔记搜索所需的结构化参数。
 
 提取规则：
-- keywords：核心搜索词，去掉「笔记」「评论区」「互动量」「近一周」等修饰词，只保留产品/品类名称，最多5个
+- keywords：提取搜索关键词，规则如下（按优先级）：
+  1. 若用户用引号（"" 或 ''）明确列出了多个关键词，则**原样保留引号内的完整字符串**，不做任何裁剪或合并，最多提取6个
+  2. 若用户未使用引号，则从自然语言中提取核心产品/品类名称，去掉「笔记」「评论区」「互动量」「近一周」等修饰词，最多5个
 - time_range：时间范围（0=不限 1=一天内 2=一周内 3=半年内），默认0
 - min_interaction：互动量下限（数字，如1000），未提及则为0
 - top_notes：分析笔记数量上限，用户未明确指定则为0（表示不限，爬到多少用多少）
 - top_comments_per_note：每条笔记取评论数量，未提及则为5
 
-示例：
+示例1（无引号，提取产品名）：
 输入："近一周防脱精华、防脱洗发水互动量比较高的笔记评论区"
 输出：{"keywords":["防脱精华","防脱洗发水"],"time_range":2,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
 
+示例2（有引号，原样提取）：
+输入：'帮我分析关于"雅马哈ydp165"，"雅马哈 YDP165 外接设备"，"雅马哈电钢琴 弱音难控制"，"雅马哈 YDP165 性价比"的笔记评论'
+输出：{"keywords":["雅马哈ydp165","雅马哈 YDP165 外接设备","雅马哈电钢琴 弱音难控制","雅马哈 YDP165 性价比"],"time_range":0,"min_interaction":0,"top_notes":0,"top_comments_per_note":5}
+
+示例3（带时间范围）：
 输入："帮我采集格力空调的高赞评论，只要最近半年的，取前30条笔记"
 输出：{"keywords":["格力空调"],"time_range":3,"min_interaction":0,"top_notes":30,"top_comments_per_note":5}
 
@@ -159,29 +175,41 @@ _INPUT_PARSER_SYSTEM = """你是搜索意图解析助手。请从用户的自然
 
 # ── v2 LLM Prompt ────────────────────────────────────────────────────────────
 
-_DIM1_INDUCT_SYSTEM = """你是产品舆情分析专家。请根据以下品类关键词、笔记标题和评论样本，归纳出该品类用户真正关心的 5-8 个「产品特征维度」。
+_DIM1_INDUCT_SYSTEM = """你是产品舆情分析专家。请根据品类关键词、笔记标题和评论样本，归纳本次分析的「产品舆情维度」列表。
 
-要求：
-- 维度必须体现该品类的独特性，禁止套用通用模板（如「功效/成分」「使用体验/肤感」等万能标签）
-- 维度名称简洁（3-8 字），能精准概括用户关注的核心议题
-- 举例：电钢琴类 → 可归纳「真钢与电钢对比」「键盘触感/配重」「音色还原度」「录音/蓝牙功能」；护肤品类 → 可归纳「成分安全性」「上脸肤感」「美白/淡斑效果」「过敏/刺激反应」
-- 覆盖正面与负面评论提及的核心议题，不要遗漏高频话题
-- 最后一个维度固定为「其他」，兜底无法归入上述维度的评论
+## 参考维度库（最高优先级，评论中一旦涉及必须优先选用）
+
+- 【优先级1 · 声音】音源、复音数、音色数、音准
+- 【优先级2 · 手感】键盘手感、键盘材质
+- 【优先级3 · 价格】价格、性价比
+- 【其他参考】扬声器、踏板、外观颜值
+
+## 选维规则
+
+1. **优先**从参考维度库中选出评论里实际被讨论的维度（声音/手感/价格优先保留）
+2. 参考库未覆盖、但在评论中**反复出现**的高频话题，可补充产品专属维度（如「真钢与电钢对比」「蓝牙/录音功能」），名称 3-8 字
+3. **维度个数不设上限**，根据评论实际话题尽可能完整覆盖，能聚多少聚多少
+4. 每个维度应有足够评论支撑（预估 ≥10 条），过于零散的话题不要单独成维
+5. 禁止空泛通用标签（如「使用体验」「产品质量」「整体评价」）
+6. 最后一个维度固定为「其他」，兜底暂时无法归类的评论
 
 输出格式（严格 JSON，不含任何其他文字）：
-{"dimensions": ["维度1", "维度2", "维度3", "其他"]}"""
+{"dimensions": ["音源", "键盘手感", "真钢与电钢对比", "其他"]}"""
 
 
 def _build_dim1_classify_system(dimensions: List[str]) -> str:
     """根据品类专属维度动态生成分类提示词。"""
+    ref_list = "、".join(_DIM1_REFERENCE_DIMENSIONS)
     dim_list = "、".join(dimensions)
     first_dim = dimensions[0] if dimensions else "其他"
     return (
-        f"你是产品舆情分析专家。请将小红书评论按以下维度分类，"
-        f"维度是根据本品类特征专门归纳的，请严格使用，不要自行新增或替换。\n\n"
-        f"可用维度（共 {len(dimensions)} 个）：{dim_list}\n\n"
+        f"你是产品舆情分析专家。请将小红书评论归入最合适的产品舆情维度。\n\n"
+        f"【参考维度库（优先匹配）】{ref_list}\n\n"
+        f"【本次可用维度（共 {len(dimensions)} 个）】{dim_list}\n\n"
         f"分类规则：\n"
-        f"- 每条评论只对应一个最相关的维度（优先选具体维度，无法归类才选「其他」）\n"
+        f"- 优先匹配参考维度库及上述可用维度中的具体维度\n"
+        f"- 每条评论只对应一个最相关维度；确实无法归类才选「其他」\n"
+        f"- 纯表情、[图片] 等无意义评论已预处理归入「其他」，你收到的均为需分类的有效评论\n"
         f"- 情感标签：正面（认可/满意/推荐）、负面（批评/失望/吐槽）、中性（描述/疑问/观望）\n\n"
         f"输出格式（严格 JSON，不含任何其他文字）：\n"
         f'{{"results": [{{"index": 0, "category": "{first_dim}", "sentiment": "正面"}}, ...]}}'
@@ -201,6 +229,11 @@ _DIM2_ANALYSIS_SYSTEM = """你是资深用户行为分析师，熟悉消费者�
 - theory：一个具体的心理学或社会学理论名称（如"期望确认理论"、"认知失调理论"、"社会认同理论"、"信息瀑布效应"、"损失厌恶"、"从众效应"等，必须是真实理论）
 - description：2-3 句话，解释该理论如何体现在这批评论中，结合具体评论内容说明
 - examples：从提供的评论样本中选取 2-3 条最典型的原文（直接引用，不修改）
+
+## 评论样本选取原则（重要）
+- 优先选用与「产品/搜索关键词」强相关的评论（明确提及品牌、型号、品类或关键词中的核心卖点）
+- 避免选用与产品无关的泛化评论（如纯表情、闲聊、跑题内容），即使点赞较高也不选
+- 若样本中已有高相关评论，examples 必须优先引用这些评论
 
 如果某个情感类型评论数为 0，examples 留空列表，description 说明"该类评论暂无样本"。
 
@@ -251,6 +284,182 @@ def _interaction_score(note: Any) -> int:
     if isinstance(note, dict):
         return int(note.get("interaction_score") or 0)
     return int(getattr(note, "interaction_score", 0) or 0)
+
+
+def _norm_match_text(text: str) -> str:
+    """匹配用归一化：小写 + 去除空白。"""
+    return re.sub(r"\s+", "", str(text or "").lower())
+
+
+def _build_keyword_match_terms(keywords: List[str]) -> tuple:
+    """从搜索关键词构建匹配词表：(完整短语列表, 分词 token 列表)。"""
+    full_phrases: List[str] = []
+    tokens: set = set()
+    for kw in keywords:
+        kw = str(kw or "").strip()
+        if not kw:
+            continue
+        full_phrases.append(kw.lower())
+        full_phrases.append(_norm_match_text(kw))
+        for part in re.split(r"[\s,，、/|]+", kw):
+            part = part.strip()
+            if len(part) >= 2:
+                tokens.add(part.lower())
+                tokens.add(_norm_match_text(part))
+    # 长短语优先匹配
+    full_phrases = sorted(
+        dict.fromkeys(p for p in full_phrases if len(p) >= 2),
+        key=len,
+        reverse=True,
+    )
+    token_list = sorted(tokens, key=len, reverse=True)
+    return full_phrases, token_list
+
+
+def _score_comment_keyword_relevance(
+    comment: Dict[str, Any],
+    full_phrases: List[str],
+    tokens: List[str],
+    note_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> float:
+    """评论与搜索关键词的相关性得分，越高越相关。"""
+    note = (note_lookup or {}).get(str(comment.get("note_id") or ""), {})
+    content = str(comment.get("content") or "")
+    note_title = str(comment.get("note_title") or note.get("title") or "")
+    source_kw = str(note.get("source_keyword") or note.get("keyword") or "")
+    blob_lower = f"{content} {note_title} {source_kw}".lower()
+    blob_norm = _norm_match_text(blob_lower)
+
+    score = 0.0
+    for phrase in full_phrases:
+        if phrase in blob_lower or phrase in blob_norm:
+            score += 12.0
+
+    for tok in tokens:
+        if len(tok) < 2:
+            continue
+        if tok in blob_lower or tok in blob_norm:
+            score += 4.0
+
+    # 点赞仅作弱 tie-breaker，避免无关高赞评论压过相关评论
+    score += min(int(comment.get("like_count") or 0) / 200.0, 1.5)
+    return score
+
+
+def _pick_keyword_relevant_comments(
+    comments: List[Dict[str, Any]],
+    keywords: List[str],
+    note_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+    n: int = 5,
+    min_score: float = 4.0,
+) -> List[str]:
+    """按关键词相关性优先选取评论样本，不足时回退到高赞评论。"""
+    if not comments:
+        return []
+    full_phrases, tokens = _build_keyword_match_terms(keywords)
+    scored = [
+        (
+            c,
+            _score_comment_keyword_relevance(c, full_phrases, tokens, note_lookup),
+        )
+        for c in comments
+    ]
+    scored.sort(key=lambda x: (x[1], x[0].get("like_count", 0)), reverse=True)
+
+    relevant = [c for c, s in scored if s >= min_score]
+    pool = relevant if relevant else [c for c, _ in scored]
+    return [str(c.get("content") or "")[:80] for c in pool[:n]]
+
+
+# 小红书评论中常见的图片/表情占位符
+_INVALID_COMMENT_MARKERS = (
+    "[图片]", "[表情]", "[贴纸]", "[视频]", "[gif]", "[头像]",
+    "[赞]", "[鼓掌]", "[笑哭]", "[doge]", "[偷笑]", "[害羞]",
+)
+_INVALID_COMMENT_RE = re.compile(
+    r"^(\[[^\]]+\]\s*)+$",
+    re.IGNORECASE,
+)
+
+
+def _is_invalid_for_clustering(content: str) -> bool:
+    """判断是否为不参与聚类的无效评论（纯表情、图片占位等）。"""
+    text = str(content or "").strip()
+    if not text:
+        return True
+    if text in _INVALID_COMMENT_MARKERS:
+        return True
+    if _INVALID_COMMENT_RE.match(text):
+        return True
+    # 去掉 [xxx] 占位后若无实质文字
+    stripped = re.sub(r"\[[^\]]+\]", "", text).strip()
+    if not stripped:
+        return True
+    # 无中文/字母/数字的纯符号或表情
+    if not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", stripped):
+        return True
+    if len(stripped) <= 1:
+        return True
+    return False
+
+
+def _merge_dim1_small_categories(
+    comment_cats: List[Dict[str, Any]],
+    min_size: int = _DIM1_MIN_CATEGORY_SIZE,
+) -> None:
+    """将评论数不足 min_size 的维度并入「其他」。"""
+    counts = Counter(c.get("category", "其他") for c in comment_cats)
+    small = {
+        name for name, cnt in counts.items()
+        if name != "其他" and cnt < min_size
+    }
+    if not small:
+        return
+    merged = 0
+    for c in comment_cats:
+        if c.get("category") in small:
+            c["category"] = "其他"
+            merged += 1
+    logger.info(
+        f"[v2 Dim1] 小样本维度并入「其他」: {small}，共 {merged} 条"
+        f"（阈值={min_size}）"
+    )
+
+
+def _build_dim1_categories(
+    comment_cats: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """从 comment_cats 聚合维度统计。"""
+    total = len(comment_cats) or 1
+    cat_counts = Counter(c.get("category", "其他") for c in comment_cats)
+
+    def _sentiment_breakdown(name: str) -> Dict[str, int]:
+        return {
+            s: sum(
+                1 for c in comment_cats
+                if c.get("category") == name and c.get("sentiment") == s
+            )
+            for s in ("正面", "中性", "负面")
+        }
+
+    categories = [
+        {
+            "name": name,
+            "count": count,
+            "ratio": f"{count / total * 100:.1f}%",
+            "sentiment_breakdown": _sentiment_breakdown(name),
+        }
+        for name, count in cat_counts.most_common()
+        if name != "其他"
+    ]
+    if "其他" in cat_counts:
+        categories.append({
+            "name": "其他",
+            "count": cat_counts["其他"],
+            "ratio": f"{cat_counts['其他'] / total * 100:.1f}%",
+            "sentiment_breakdown": _sentiment_breakdown("其他"),
+        })
+    return categories
 
 
 def _note_to_dict(note: Any) -> Dict[str, Any]:
@@ -959,47 +1168,67 @@ async def _step2v2_fetch_all_comments_for_note(
     return result
 
 
+def _merge_dimension_lists(*dim_lists: List[str]) -> List[str]:
+    """合并多组维度名，去重并保持顺序，末尾固定「其他」。"""
+    seen: set = set()
+    merged: List[str] = []
+    for dim_list in dim_lists:
+        for d in dim_list:
+            name = str(d or "").strip()
+            if not name or name in seen or name == "其他":
+                continue
+            seen.add(name)
+            merged.append(name)
+    merged.append("其他")
+    return merged
+
+
 async def _infer_dimensions(
     sample_comments: List[Dict[str, Any]],
     keywords: List[str],
     note_titles: str = "",
 ) -> List[str]:
-    """[v2] 从评论样本+关键词+笔记标题中归纳品类专属维度（一次 LLM 调用）。
+    """[v2] 从评论样本归纳舆情维度：参考维度库优先 + LLM 发现额外话题，个数不限。
 
-    返回维度名称列表，末尾保证含「其他」。若 LLM 失败则返回 None（调用方应使用默认维度兜底）。
+    返回维度名称列表，末尾保证含「其他」。失败时返回空列表（调用方用参考维度兜底）。
     """
+    valid_samples = [
+        c for c in sample_comments
+        if not _is_invalid_for_clustering(c.get("content", ""))
+    ]
     sample_lines = [
         f"{i+1}. {c.get('content', '')[:80]}"
-        for i, c in enumerate(sample_comments[:60])
+        for i, c in enumerate(valid_samples[:120])
     ]
+    if not sample_lines:
+        return []
+
+    ref_str = "、".join(_DIM1_REFERENCE_DIMENSIONS)
     kw_str = "、".join(keywords) if keywords else "（未指定）"
     user_msg = (
         f"【品类关键词】{kw_str}\n"
+        f"【参考维度库（优先选用）】{ref_str}\n"
         + (f"【笔记标题样本】{note_titles}\n" if note_titles else "")
         + f"【评论样本（共 {len(sample_lines)} 条）】\n"
         + "\n".join(sample_lines)
-        + "\n\n请归纳该品类的 5-8 个产品特征维度，末尾含「其他」。"
+        + "\n\n请根据评论实际话题归纳产品舆情维度：优先使用参考维度库中涉及的维度，"
+        "并补充评论中反复出现的高频话题；维度个数不设上限，末尾含「其他」。"
     )
     raw = await _llm_chat(
         "CommentPipeline.Dim1Induct",
         _DIM1_INDUCT_SYSTEM,
         user_msg,
-        max_tokens=300,
+        max_tokens=800,
         json_mode=True,
     )
     parsed = _llm_parse_json_robust(raw) or {}
-    dims: List[str] = parsed.get("dimensions") or []
-    # 校验：至少 3 个有内容的维度
-    dims = [d.strip() for d in dims if isinstance(d, str) and d.strip()]
-    if len(dims) < 3:
-        logger.warning(f"[v2 Dim1Induct] 维度归纳失败或不足，原始输出: {raw[:200]}")
+    llm_dims = [d.strip() for d in (parsed.get("dimensions") or []) if isinstance(d, str) and d.strip()]
+    # 参考维度库 + LLM 归纳维度合并（参考库始终排在前面）
+    dims = _merge_dimension_lists(_DIM1_REFERENCE_DIMENSIONS, llm_dims)
+    if len(dims) <= 1:
+        logger.warning(f"[v2 Dim1Induct] 维度归纳失败，原始输出: {raw[:200]}")
         return []
-    # 确保末尾有「其他」
-    if dims[-1] != "其他":
-        if "其他" in dims:
-            dims.remove("其他")
-        dims.append("其他")
-    logger.info(f"[v2 Dim1Induct] 归纳维度={dims}")
+    logger.info(f"[v2 Dim1Induct] 归纳维度({len(dims)}个)={dims}")
     return dims
 
 
@@ -1008,45 +1237,69 @@ async def _step3_dim1_classify(
     keywords: List[str],
     notes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """[v2] Step 3：维度1 — 批量分类评论（产品舆情维度+情感）+ 核心发现。
+    """[v2] Step 3：维度1 — 过滤无效评论后全量聚类分类 + 核心发现。
 
     Returns:
         {
             "categories": [{"name", "count", "ratio", "sentiment_breakdown"}],
             "core_finding": str,
             "comment_cats": [{"index", "category", "sentiment"}, ...],
+            "invalid_to_other_count": int,
         }
     """
     if not all_comments:
-        return {"categories": [], "core_finding": "", "comment_cats": []}
+        return {"categories": [], "core_finding": "", "comment_cats": [], "invalid_to_other_count": 0}
+
+    # ── Step 3-0: 无效评论（表情/图片等）直接归入「其他」，不参与 LLM 分类 ─────
+    comment_cats: List[Optional[Dict]] = [None] * len(all_comments)
+    valid_pairs: List[Tuple[int, Dict[str, Any]]] = []
+    invalid_to_other_count = 0
+    for i, c in enumerate(all_comments):
+        if _is_invalid_for_clustering(c.get("content", "")):
+            comment_cats[i] = {
+                "index": i,
+                "category": "其他",
+                "sentiment": "中性",
+            }
+            invalid_to_other_count += 1
+        else:
+            valid_pairs.append((i, c))
 
     logger.info(
-        f"[v2 Dim1] 开始分类，评论总量={len(all_comments)} 条，关键词={keywords}"
+        f"[v2 Dim1] 开始分类，评论总量={len(all_comments)} 条，"
+        f"待分类={len(valid_pairs)} 条，无效归入其他={invalid_to_other_count} 条，关键词={keywords}"
     )
 
-    # ── Step 3-0: 归纳品类专属维度（一次 LLM 调用）──────────────────────────────
+    if not valid_pairs:
+        filled = [c for c in comment_cats if c]
+        return {
+            "categories": _build_dim1_categories(filled) if filled else [],
+            "core_finding": "有效评论不足，无法生成舆情分类",
+            "comment_cats": filled,
+            "invalid_to_other_count": invalid_to_other_count,
+        }
+
+    # ── Step 3-1: 归纳维度（参考库优先 + LLM 补充，个数不限）────────────────────
     note_titles_hint = "、".join(
-        n.get("title", "") for n in (notes or [])[:10] if n.get("title")
+        n.get("title", "") for n in (notes or [])[:15] if n.get("title")
     )
-    inferred_dims = await _infer_dimensions(all_comments, keywords, note_titles_hint)
+    valid_comments_only = [c for _, c in valid_pairs]
+    inferred_dims = await _infer_dimensions(valid_comments_only, keywords, note_titles_hint)
     if inferred_dims:
         dim1_classify_system = _build_dim1_classify_system(inferred_dims)
-        logger.info(f"[v2 Dim1] 使用归纳维度: {inferred_dims}")
+        logger.info(f"[v2 Dim1] 使用归纳维度({len(inferred_dims)}个): {inferred_dims}")
     else:
-        # 归纳失败：降级到轻量默认维度集（不含行业废话）
-        inferred_dims = ["产品效果/功效", "使用体验", "价格/性价比", "外观/包装", "服务/物流", "其他"]
+        inferred_dims = _merge_dimension_lists(_DIM1_REFERENCE_DIMENSIONS)
         dim1_classify_system = _build_dim1_classify_system(inferred_dims)
-        logger.warning(f"[v2 Dim1] 维度归纳失败，使用默认维度: {inferred_dims}")
+        logger.warning(f"[v2 Dim1] 维度归纳失败，使用参考维度库: {inferred_dims}")
 
-    # batch_size=20：每批约 20×22≈440 tokens 输出，给思考型模型（deepseek-v4-flash 等）
-    # 留出足够的思考链预算，避免 JSON 被截断。
+    # ── Step 3-2: 对全部有效评论批量分类 ────────────────────────────────────────
     batch_size = 20
-    comment_cats: List[Dict] = [{}] * len(all_comments)
     kw_hint = f"（产品：{'、'.join(keywords)}）" if keywords else ""
 
-    for start in range(0, len(all_comments), batch_size):
-        batch = all_comments[start:start + batch_size]
-        lines = [f"{i}. {c.get('content', '')[:100]}" for i, c in enumerate(batch)]
+    for start in range(0, len(valid_pairs), batch_size):
+        batch = valid_pairs[start:start + batch_size]
+        lines = [f"{i}. {c.get('content', '')[:100]}" for i, (_, c) in enumerate(batch)]
         user_msg = (
             f"以下是 {len(batch)} 条小红书评论{kw_hint}（index 从 0 开始），"
             f"请对全部 {len(batch)} 条进行产品舆情维度分类：\n"
@@ -1064,78 +1317,55 @@ async def _step3_dim1_classify(
             idx = item.get("index")
             if not isinstance(idx, int) or not (0 <= idx < len(batch)):
                 continue
-            comment_cats[start + idx] = {
-                "index": start + idx,
+            global_idx = batch[idx][0]
+            comment_cats[global_idx] = {
+                "index": global_idx,
                 "category": (item.get("category") or "其他").strip(),
                 "sentiment": (item.get("sentiment") or "中性").strip(),
             }
 
-    # 填充未分类条目
     for i, cat in enumerate(comment_cats):
         if not cat:
             comment_cats[i] = {"index": i, "category": "其他", "sentiment": "中性"}
 
-    # 聚合统计
-    cat_counts = Counter(c["category"] for c in comment_cats)
-    total = len(comment_cats) or 1
+    # ── Step 3-3: 评论数 < 10 的维度并入「其他」────────────────────────────────
+    _merge_dim1_small_categories(comment_cats)  # type: ignore[arg-type]
+    categories = _build_dim1_categories(comment_cats)  # type: ignore[arg-type]
 
-    def _sentiment_breakdown(name: str) -> Dict[str, int]:
-        return {
-            s: sum(1 for c in comment_cats if c["category"] == name and c.get("sentiment") == s)
-            for s in ("正面", "中性", "负面")
-        }
-
-    categories = [
-        {
-            "name": name,
-            "count": count,
-            "ratio": f"{count / total * 100:.1f}%",
-            "sentiment_breakdown": _sentiment_breakdown(name),
-        }
-        for name, count in cat_counts.most_common()
-        if name != "其他"
-    ]
-    if "其他" in cat_counts:
-        categories.append({
-            "name": "其他",
-            "count": cat_counts["其他"],
-            "ratio": f"{cat_counts['其他'] / total * 100:.1f}%",
-            "sentiment_breakdown": _sentiment_breakdown("其他"),
-        })
-
-    # 诊断日志：显示各类别分布，方便排查
-    cat_summary = ", ".join(f"{c['name']}({c['count']})" for c in categories[:8])
-    other_count = cat_counts.get("其他", 0)
+    cat_summary = ", ".join(f"{c['name']}({c['count']})" for c in categories[:12])
+    other_count = next((c["count"] for c in categories if c["name"] == "其他"), 0)
+    valid_dim_count = len([c for c in categories if c["name"] != "其他"])
     logger.info(
-        f"[v2 Dim1] 分类完成：有效类别={len([c for c in categories if c['name']!='其他'])} 个，"
-        f"其他={other_count} 条，分布: {cat_summary}"
+        f"[v2 Dim1] 分类完成：有效维度={valid_dim_count} 个，"
+        f"其他={other_count} 条（含无效评论 {invalid_to_other_count} 条），分布: {cat_summary}"
     )
 
-    # 核心发现：取 top 5 有效类别生成摘要
-    top_cats = [c for c in categories if c["name"] != "其他"][:5]
+    # 核心发现：覆盖全部有效维度（≥10 条）
+    report_cats = [
+        c for c in categories
+        if c["name"] != "其他" and c["count"] >= _DIM1_MIN_CATEGORY_SIZE
+    ]
     summary_lines = [
         f"- {c['name']}：{c['count']}条（{c['ratio']}）"
         f" 正面{c['sentiment_breakdown']['正面']}/中性{c['sentiment_breakdown']['中性']}/负面{c['sentiment_breakdown']['负面']}"
-        for c in top_cats
+        for c in report_cats
     ]
     sample_parts = []
-    for cat_info in top_cats[:3]:
+    for cat_info in report_cats[:5]:
         samples = [
             all_comments[i].get("content", "")[:60]
             for i, cc in enumerate(comment_cats)
-            if cc.get("category") == cat_info["name"]
+            if cc and cc.get("category") == cat_info["name"]
         ][:3]
         if samples:
             sample_parts.append(f"【{cat_info['name']}典型评论】" + " | ".join(samples))
 
     finding_user = (
         f"产品：{'、'.join(keywords)}\n"
-        f"评论总量：{len(all_comments)} 条\n\n"
+        f"参与分类评论：{len(valid_pairs)} 条（无效评论 {invalid_to_other_count} 条已归入其他）\n\n"
         f"维度分布：\n" + "\n".join(summary_lines)
         + ("\n\n" + "\n".join(sample_parts) if sample_parts else "")
     )
-    # DeepSeek 推理模型的 max_tokens 同时包含思考链 + 正文，给 800 确保
-    # 思考完后仍有足够配额写出核心发现。
     core_finding = await _llm_chat(
         "CommentPipeline.Dim1Finding",
         _DIM1_FINDING_SYSTEM,
@@ -1146,7 +1376,8 @@ async def _step3_dim1_classify(
     return {
         "categories": categories,
         "core_finding": core_finding,
-        "comment_cats": comment_cats,
+        "comment_cats": comment_cats,  # type: ignore[return-value]
+        "invalid_to_other_count": invalid_to_other_count,
     }
 
 
@@ -1172,7 +1403,7 @@ async def _step4_dim2_analysis(
         f"有效类别 {len(top_valid)} 个: {top_valid[:8]}"
     )
 
-    cat_by_idx: Dict[int, Dict] = {c["index"]: c for c in comment_cats}
+    cat_by_idx: Dict[int, Dict] = {c["index"]: c for c in comment_cats if c}
     groups: Dict[str, List[Dict]] = defaultdict(list)
     for i, comment in enumerate(all_comments):
         cc = cat_by_idx.get(i, {})
@@ -1181,6 +1412,9 @@ async def _step4_dim2_analysis(
 
     note_titles = "、".join(n.get("title", "") for n in notes[:5] if n.get("title"))
     kw_str = "、".join(keywords)
+    note_lookup = {
+        str(n.get("note_id") or ""): n for n in notes if n.get("note_id")
+    }
 
     results: Dict[str, Dict] = {}
 
@@ -1208,24 +1442,22 @@ async def _step4_dim2_analysis(
                 sent_counts[s] += 1
                 by_sent[s].append(c)
 
-        def top_n(lst: List[Dict], n: int = 3) -> List[str]:
-            # 每个情感桶最多取 3 条点赞最高的，截 60 字，控制 user_msg 长度
-            return [
-                c.get("content", "")[:60]
-                for c in sorted(lst, key=lambda x: x.get("like_count", 0), reverse=True)[:n]
-            ]
-
         user_msg = (
-            f"产品：{kw_str}\n"
+            f"搜索关键词：{kw_str}\n"
+            f"（请优先分析与上述关键词强相关的评论，忽略跑题/泛化闲聊）\n"
             f"相关笔记背景：{note_titles}\n\n"
             f"当前分析维度：{cat_name}\n"
             f"该维度评论总量：{len(cat_comments)} 条\n"
             f"正面 {sent_counts['正面']} 条 | 中性 {sent_counts['中性']} 条 | 负面 {sent_counts['负面']} 条\n"
         )
         for label, key in [("正面", "正面"), ("中性", "中性"), ("负面", "负面")]:
-            samples = top_n(by_sent[key])
+            # 每个情感桶优先选与关键词强相关的评论，最多 5 条供模型挑选
+            samples = _pick_keyword_relevant_comments(
+                by_sent[key], keywords, note_lookup, n=5,
+            )
             if samples:
-                user_msg += f"\n【{label}评论样本】\n" + "\n".join(f"- {s}" for s in samples) + "\n"
+                user_msg += f"\n【{label}评论样本（已按关键词相关性筛选）】\n"
+                user_msg += "\n".join(f"- {s}" for s in samples) + "\n"
 
         raw = await _llm_chat(
             "CommentPipeline.Dim2Analysis",
@@ -1254,8 +1486,11 @@ async def _step4_dim2_analysis(
             "negative": _safe_slot("negative"),
         }
 
-    # 只分析非"其他"的 top 8 类别
-    top_cats = [c for c in categories if c["name"] != "其他"][:8]
+    # 分析全部有效维度（≥10 条，排除「其他」）
+    top_cats = [
+        c for c in categories
+        if c["name"] != "其他" and c["count"] >= _DIM1_MIN_CATEGORY_SIZE
+    ]
     if not top_cats:
         # Dim1 全部归入"其他"（通常因模型分类失败），创建兜底虚拟类别保证后续分析不为空
         logger.warning(
@@ -1434,8 +1669,10 @@ async def _run_v1_pipeline(
     notes_with_comments: List[Tuple[Dict, List]] = []
     total_comment_count = 0
 
-    cached = await comment_cache_store.get(keywords, time_range, min_interaction)
-    if cached:
+    cached, _uncached_kw = await comment_cache_store.get_partial(
+        keywords, time_range, min_interaction
+    )
+    if cached and not _uncached_kw:
         cached_notes = cached["notes"]
         notes_with_comments = [(n, n.pop("_cached_comments", [])) for n in cached_notes]
         total_comment_count = sum(len(c) for _, c in notes_with_comments)
@@ -1547,33 +1784,59 @@ async def _run_v2_pipeline(
     total_parent_comments = 0
     total_sub_comments = 0
 
-    # 先查 v2 缓存（cache_store 已在 key 中包含版本号）
-    cached = await comment_cache_store.get(keywords, time_range, min_interaction)
-    if cached:
+    # 先查缓存（优先合并 key 精确命中；多关键词时逐个检查部分命中）
+    cached, keywords_to_crawl = await comment_cache_store.get_partial(
+        keywords, time_range, min_interaction
+    )
+    if cached and not keywords_to_crawl:
+        # 完全命中（合并 key 或所有单 key 均有缓存）
         cached_notes = cached["notes"]
         notes_with_comments = [(n, n.pop("_cached_comments", [])) for n in cached_notes]
         total_parent_comments = cached.get("comment_count", 0)
+        is_partial = cached.get("partial_cache", False)
         logger.info(
-            f"[v2] task={task_id} 缓存命中 notes={len(notes_with_comments)} "
-            f"comments={total_parent_comments} age={cached.get('cache_age_hours')}h"
+            f"[v2] task={task_id} {'部分' if is_partial else ''}缓存命中 "
+            f"notes={len(notes_with_comments)} comments={total_parent_comments} "
+            f"age={cached.get('cache_age_hours')}h"
         )
         await _emit_progress(
             task_id,
-            f"命中缓存（{cached.get('cache_age_hours', 0)} 小时前），"
+            f"命中{'部分' if is_partial else ''}缓存，"
             f"已有 {len(notes_with_comments)} 条笔记数据，开始 AI 分析...",
             40,
         )
     else:
+        # 有缓存的先合并进来，只爬未命中的关键词
+        if cached and keywords_to_crawl:
+            cached_notes = cached["notes"]
+            notes_with_comments = [(n, n.pop("_cached_comments", [])) for n in cached_notes]
+            total_parent_comments = cached.get("comment_count", 0)
+            logger.info(
+                f"[v2] task={task_id} 部分关键词缓存命中 "
+                f"cached_notes={len(notes_with_comments)} uncached_keywords={keywords_to_crawl}"
+            )
+            await _emit_progress(
+                task_id,
+                f"部分缓存命中（{len(notes_with_comments)} 条），"
+                f"继续采集未缓存关键词：{'、'.join(keywords_to_crawl)}...",
+                10,
+            )
+        else:
+            keywords_to_crawl = keywords
+
         crawl_target = max(top_notes * 3, _CRAWL_TARGET_PER_KW) if top_notes > 0 else _CRAWL_TARGET_PER_KW
-        await _emit_progress(task_id, f"正在采集关键词「{'、'.join(keywords)}」的笔记...", 10)
+        await _emit_progress(task_id, f"正在采集关键词「{'、'.join(keywords_to_crawl)}」的笔记...", 10)
 
         notes_raw = await _step1_crawl_notes(
-            keywords, cookies_str, crawl_target,
+            keywords_to_crawl, cookies_str, crawl_target,
             time_range=time_range, min_interaction=min_interaction,
             user_query=raw_input, owner_user_id=owner_user_id,
         )
-        top_notes_list = notes_raw[:top_notes] if top_notes > 0 else notes_raw
-        if not top_notes_list:
+        # 与已缓存的笔记合并去重（按 note_id）
+        existing_ids = {n.get("note_id") for n, _ in notes_with_comments}
+        new_notes = [n for n in notes_raw if n.get("note_id") not in existing_ids]
+        top_notes_list = new_notes[:top_notes] if top_notes > 0 else new_notes
+        if not top_notes_list and not notes_with_comments:
             raise ValueError(f"关键词「{'、'.join(keywords)}」未采集到任何笔记，请检查 Cookie 或关键词")
 
         await _emit_progress(

@@ -367,11 +367,11 @@ class ConversationToolExecutor:
             keywords=keywords,
             canvas_url_hint=None,
         )
-        kw_str = "、".join(keywords)
+        kw_display = "".join(f"「{kw}」" for kw in keywords)
         msg = self._assistant(
             ctx,
             (
-                f"好的，已为「{kw_str}」启动**评论分析任务**（ID: `{result.record.task_id}`）。\n"
+                f"好的，已为 {kw_display} 启动**评论分析任务**（ID: `{result.record.task_id}`）。\n"
                 f"正在采集{'全部' if not top_notes else f' Top {top_notes} '}条笔记，每条笔记取 Top {top_comments} 条高赞评论。\n"
                 f"分析完成后会自动推送下载链接，稍等片刻。"
             ),
