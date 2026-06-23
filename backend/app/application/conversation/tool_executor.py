@@ -294,25 +294,6 @@ class ConversationToolExecutor:
                 ctx,
             )
 
-        try:
-            cookie_health = self.cookie_health_service.get_cookie_health(
-                current_user=ctx.current_user, force_check=False
-            )
-        except Exception as exc:
-            logger.warning("Comment analysis cookie health check failed: {}", exc)
-            return self._assistant(
-                ctx,
-                f"启动评论分析任务前检查小红书登录态失败：{exc}",
-                debug={"tool_name": call.name, "model_error_code": ErrorCode.SYSTEM_INTERNAL.value},
-            )
-
-        if cookie_health.get("status") == "expired":
-            return self._assistant(
-                ctx,
-                f"小红书 Cookie 已过期：{cookie_health.get('message', '请重新登录')}。请重新登录后再发起评论分析。",
-                debug={"tool_name": call.name, "cookie_health": cookie_health},
-            )
-
         top_notes = int(args.get("top_notes") or 0)   # 0 = 不限
         top_comments = int(args.get("top_comments_per_note") or 5)
 

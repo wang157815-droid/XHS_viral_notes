@@ -44,37 +44,24 @@ _ANALYSIS_VERSION: str = "v2"   # "v1" 可切回旧逻辑
 # ── 采集参数默认值 ─────────────────────────────────────────────────────────────
 _DEFAULT_TOP_NOTES = 0           # 0 = 不限，爬到多少用多少
 _DEFAULT_TOP_COMMENTS = 5        # v1 专用：每条笔记取点赞 Top K 条评论
-_CRAWL_TARGET_PER_KW = 50        # 每关键词采集目标数
+_CRAWL_TARGET_PER_KW = 200       # 多关键词合并去重后的总爬取目标数
+_MAX_CONSECUTIVE_EMPTY_PAGES = 3 # 连续 N 页搜索返回 0 条才终止翻页（单页空则跳过继续）
+_MAX_CONSECUTIVE_DUP_PAGES = 2   # 连续 N 页全部重复才终止翻页
 
 # v1 速率控制
 _V1_INTER_NOTE_SLEEP = 1.0
 _V1_MAX_CONCURRENT = 5
 
-# v2 速率控制（参考 MediaCrawler 策略：页间睡眠 + 串行 + 总量预算）
-#
-# MediaCrawler 默认：每页 sleep 2s，并发=1，每笔记上限 10 条一级评论
-# 我们需要更多评论做分析，但要避免连续请求触发风控（~1900 条即中招）：
-#   - 页间 sleep: 2.5~4.5s 随机 jitter，打破等间隔 bot 特征
-#   - 每笔记最多 3 页（每页 ~20 条 → 上限 ~60 条一级评论）
-#   - 串行处理笔记（并发=1），笔记间 sleep 4~8s
-#   - 全局总一级评论软上限 1000 条，超限停止采集
-#   - CaptchaError 触发后全局暂停 90s，跳过该笔记剩余页
-_V2_PAGE_SLEEP_MIN = 2.5        # 页间最小 sleep（秒）
-_V2_PAGE_SLEEP_MAX = 4.5        # 页间最大 sleep（秒）
-_V2_INTER_NOTE_SLEEP_MIN = 4.0  # 笔记间最小 sleep（秒）
-_V2_INTER_NOTE_SLEEP_MAX = 8.0  # 笔记间最大 sleep（秒）
-_V2_MAX_PAGES_PER_NOTE = 5      # 每笔记最多请求页数（约 100 条一级评论）
-_V2_MAX_PARENT_PER_NOTE = 100   # 每笔记一级评论硬上限
-_V2_TOTAL_PARENT_BUDGET = 1000  # 全局总一级评论软上限，超过则停止继续采集
-_V2_CAPTCHA_PAUSE = 90.0        # CAPTCHA 熔断后全局暂停时长（秒）
-_V2_MAX_CONCURRENT = 1          # 串行处理，减少并发压力
-
-# 保留旧名称兼容（v1 pipeline 不使用页间 sleep）
-_V2_INTER_NOTE_SLEEP = 4.0
-_V2_INTER_SUB_SLEEP = 0.5
+# v2 速率控制（三方 Redbook API：风控由三方承担，无需限速/熔断/总量预算）
+# 评论拉取无上限：cursor 翻页直到 has_more=False，拉取每篇笔记的全部评论。
+# 仅保留极短随机 sleep，避免瞬时密集请求压垮三方服务。
+_V2_PAGE_SLEEP_MIN = 0.3        # 页间最小 sleep（秒）
+_V2_PAGE_SLEEP_MAX = 0.8        # 页间最大 sleep（秒）
+_V2_INTER_NOTE_SLEEP_MIN = 0.5  # 笔记间最小 sleep（秒）
+_V2_INTER_NOTE_SLEEP_MAX = 1.5  # 笔记间最大 sleep（秒）
 
 # Dim1 聚类规则
-_DIM1_MIN_CATEGORY_SIZE = 10          # 形成独立维度的最低评论数
+_DIM1_MIN_CATEGORY_SIZE = 5           # 形成独立维度的最低评论数
 _DIM1_REFERENCE_DIMENSIONS = [
     "音源", "复音数", "音色数", "音准",
     "键盘手感", "键盘材质",
@@ -189,7 +176,7 @@ _DIM1_INDUCT_SYSTEM = """你是产品舆情分析专家。请根据品类关键�
 1. **优先**从参考维度库中选出评论里实际被讨论的维度（声音/手感/价格优先保留）
 2. 参考库未覆盖、但在评论中**反复出现**的高频话题，可补充产品专属维度（如「真钢与电钢对比」「蓝牙/录音功能」），名称 3-8 字
 3. **维度个数不设上限**，根据评论实际话题尽可能完整覆盖，能聚多少聚多少
-4. 每个维度应有足够评论支撑（预估 ≥10 条），过于零散的话题不要单独成维
+4. 每个维度应有足够评论支撑（预估 ≥5 条），过于零散的话题不要单独成维
 5. 禁止空泛通用标签（如「使用体验」「产品质量」「整体评价」）
 6. 最后一个维度固定为「其他」，兜底暂时无法归类的评论
 
@@ -286,9 +273,112 @@ def _interaction_score(note: Any) -> int:
     return int(getattr(note, "interaction_score", 0) or 0)
 
 
+def _note_publish_sort_ts(note: Any) -> float:
+    """将笔记发布时间转为可排序时间戳（越大越新），无法解析时返回 0。"""
+    if isinstance(note, dict):
+        raw_time = (
+            note.get("time")
+            or note.get("create_time")
+            or note.get("publish_time")
+            or note.get("upload_time")
+            or ""
+        )
+    else:
+        raw_time = (
+            getattr(note, "upload_time", None)
+            or getattr(note, "publish_time", None)
+            or ""
+        )
+
+    if raw_time in (None, ""):
+        return 0.0
+
+    if isinstance(raw_time, (int, float)):
+        ts = float(raw_time)
+        return ts / 1000.0 if ts > 1e10 else ts
+
+    text = str(raw_time).strip()
+    if not text:
+        return 0.0
+
+    if text.isdigit():
+        ts = float(text)
+        return ts / 1000.0 if ts > 1e10 else ts
+
+    now = datetime.now(timezone.utc).timestamp()
+    if "刚刚" in text:
+        return now
+    m = re.search(r"(\d+)\s*分钟前", text)
+    if m:
+        return now - int(m.group(1)) * 60
+    m = re.search(r"(\d+)\s*小时前", text)
+    if m:
+        return now - int(m.group(1)) * 3600
+    if "今天" in text or "昨天" in text:
+        offset = 0 if "今天" in text else 86400
+        return now - offset
+    m = re.search(r"(\d+)\s*天前", text)
+    if m:
+        return now - int(m.group(1)) * 86400
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text[:19], fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
 def _norm_match_text(text: str) -> str:
     """匹配用归一化：小写 + 去除空白。"""
     return re.sub(r"\s+", "", str(text or "").lower())
+
+
+def _note_text_blob(note: dict) -> str:
+    """笔记标题+描述+标签，归一化后用于关键词/型号匹配。"""
+    title = note.get("title") or note.get("display_title", "")
+    desc = note.get("desc", "")
+    tags = note.get("tags") or [
+        t.get("name", "") for t in (note.get("tag_list") or [])
+    ]
+    tags_str = " ".join(str(t) for t in tags if t)
+    return _norm_match_text(f"{title} {desc} {tags_str}")
+
+
+def _note_matches_keywords(note: dict, keywords: List[str]) -> bool:
+    """笔记是否涉及任一搜索关键词（标题/描述/标签）。"""
+    if not keywords:
+        return False
+    blob = _note_text_blob(note)
+    blob_lower = blob  # 已 lower
+    full_phrases, tokens = _build_keyword_match_terms(keywords)
+    for phrase in full_phrases:
+        norm = _norm_match_text(phrase)
+        if norm and (norm in blob_lower or phrase.lower() in blob_lower):
+            return True
+    for tok in tokens:
+        if len(tok) >= 2 and tok in blob_lower:
+            return True
+    return False
+
+
+def _extract_model_terms(keywords: List[str]) -> List[str]:
+    """从关键词中提取含数字的型号片段（如 ydp165、YDP-165）。"""
+    terms: List[str] = []
+    full_phrases, tokens = _build_keyword_match_terms(keywords)
+    for item in list(full_phrases) + list(tokens):
+        if re.search(r"\d", item):
+            terms.append(_norm_match_text(item))
+    return sorted(dict.fromkeys(t for t in terms if len(t) >= 2), key=len, reverse=True)
+
+
+def _note_has_model_terms(note: dict, keywords: List[str]) -> bool:
+    """笔记是否提及关键词中的具体型号。"""
+    model_terms = _extract_model_terms(keywords)
+    if not model_terms:
+        return False
+    blob = _note_text_blob(note)
+    return any(t in blob for t in model_terms)
 
 
 def _build_keyword_match_terms(keywords: List[str]) -> tuple:
@@ -606,13 +696,21 @@ async def _tier1_brief_filter(user_query: str, briefs: list) -> list:
         return briefs
 
 
-async def _tier2_detail_filter(user_query: str, note: dict) -> bool:
-    """Tier2 精判：对单条 note 详情判断核心主题是否符合用户意图。
+async def _tier2_detail_filter(
+    user_query: str,
+    note: dict,
+    keywords: Optional[List[str]] = None,
+) -> bool:
+    """Tier2 精判：涉及关键词的笔记保留；含具体型号者优先。
 
     fail-open：LLM 或解析失败时返回 True（通过），不误杀。
     兼容 handle_note_info 正常返回（tags: List[str]）和降级 note_card（tag_list）两种格式。
     """
     try:
+        kw_list = [str(k).strip() for k in (keywords or []) if str(k).strip()]
+        if kw_list and _note_matches_keywords(note, kw_list):
+            return True
+
         title = note.get("title") or note.get("display_title", "")
         desc = note.get("desc", "")
         # 兼容两种格式：正常为 tags: List[str]，降级为 tag_list: [{"name": "..."}]
@@ -620,23 +718,24 @@ async def _tier2_detail_filter(user_query: str, note: dict) -> bool:
             t.get("name", "") for t in (note.get("tag_list") or [])
         ]
         tags_str = " | ".join(str(t) for t in tags if t)
+        kw_hint = "、".join(kw_list) if kw_list else "（见用户意图）"
         system = (
-            "你是小红书笔记相关性精判专家。你的任务是：根据用户的搜索意图，对单条笔记的完整内容做「精细」相关性判断。\n\n"
-            "## 判断标准\n"
-            "笔记的核心话题必须与用户意图属于同一品类/领域，以下情况判定为通过：\n"
-            "- 内容角度不同但品类相同：评测/种草/使用教程/成分分析/对比/避坑/推荐清单等\n"
-            "- 场景/人群/功效/使用方式不同，但核心品类一致\n"
-            "- 笔记提及多个产品，但主要讨论的品类与用户意图一致\n\n"
-            "## 必须淘汰的情况\n"
-            "- 关键词相同但实际品类不同（例：用户搜「燕麦奶」食品类，笔记讲的是「燕麦奶色系穿搭/家居」）\n"
-            "- 用户意图有明确约束（如「个护产品」），而笔记属于完全不同领域（如「音乐/影视/穿搭」）\n"
-            "- 笔记仅在标签中带有关键词，但正文核心内容与用户意图无关\n\n"
-            "## 判断要点\n"
-            "重点看笔记的「核心受众」和「核心诉求」是否与用户意图匹配，而不是字面关键词是否出现。\n\n"
+            "你是小红书笔记相关性精判专家。你的任务是：根据用户的搜索意图与关键词，判断单条笔记是否应保留。\n\n"
+            "## 核心原则（宽松保留）\n"
+            "只要笔记的标题、描述或标签中「涉及到」用户关键词（含品牌名、型号、产品名及其常见写法变体），一律判定为通过。\n"
+            "标签中出现关键词、正文中顺带提及关键词，均算「涉及」，不得因角度不同而淘汰。\n\n"
+            "## 品牌/型号场景\n"
+            "若用户关键词中包含品牌或具体型号：\n"
+            "- 笔记明确写出该型号（含大小写、空格、连字符等变体，如 YDP165 / YDP-165）→ 必须通过\n"
+            "- 笔记仅提及品牌、未写具体型号，但仍涉及用户其他关键词 → 仍判定为通过\n"
+            "- 含具体型号的笔记相关性高于仅含品牌的笔记；精判阶段两者均保留，不得误杀含型号笔记\n\n"
+            "## 仅可淘汰的情况\n"
+            "笔记标题、描述、标签与用户关键词完全无任何文字关联，且内容与用户意图明显无关时，才判定为不通过。\n\n"
             '输出合法 JSON，格式：{"pass": true, "reason": "一句话说明判断依据"}'
         )
         user_msg = (
-            f"{user_query}\n\n"
+            f"用户意图：{user_query}\n"
+            f"搜索关键词：{kw_hint}\n\n"
             f"笔记内容：\n标题：{title}\n描述：{desc[:300]}\n标签：{tags_str}"
         )
         raw = await _llm_chat(
@@ -715,36 +814,190 @@ async def _step0_parse_input(
 
 async def _step1_crawl_notes(
     keywords: List[str],
-    cookies_str: str,
+    cookies_str: str,  # 三方 API 模式下不再使用，保留兼容签名
     target_count: int,
     *,
     time_range: int = 0,
     min_interaction: int = 0,
     user_query: str = "",
     owner_user_id: str = "",
+    exclude_note_ids: Optional[set] = None,  # 已在 DB 中的 note_id，补爬时跳过
 ) -> List[Dict[str, Any]]:
-    """步骤 1：爬取笔记，返回 dict 列表，按互动量降序。"""
-    from ..application.agents.crawler_agent import _collect_one_dimension
+    """步骤 1：通过三方 Redbook API 搜索笔记，返回 dict 列表。
 
-    runtime_cfg: Dict[str, Any] = {
-        "target_count": target_count,
-        "note_type": 0,
-        "time_range": time_range,
-        "min_interaction": min_interaction,
-    }
-    if user_query:
-        _uq = user_query
-        runtime_cfg["tier1_filter"] = lambda b: _tier1_brief_filter(_uq, b)
-        runtime_cfg["tier2_filter"] = lambda n: _tier2_detail_filter(_uq, n)
+    搜索逻辑：
+    - 按关键词逐个搜索，每关键词最多取 per_kw_target 条（去重后）
+    - 若 user_query 非空，逐条经 Tier2 精判过滤
+    - 最终按「含型号笔记优先 + 发布时间从新到旧」排序
+    """
+    from ..infrastructure.crawlers.redbook_api_client import RedbookApiClient
 
-    try:
-        raw = await _collect_one_dimension(cookies_str, keywords, target_count, runtime_cfg, owner_user_id or None)
-        notes = [_note_to_dict(n) for n in (raw or [])]
-        notes.sort(key=_interaction_score, reverse=True)
-        return notes
-    except Exception as exc:
-        logger.warning(f"[comment_pipeline] 爬取笔记失败: {exc}")
-        return []
+    client = RedbookApiClient()
+    per_kw_target = max(target_count // max(len(keywords), 1), 20)
+    _MAX_PAGES_PER_KW = 30  # 每关键词最多请求页数，避免无限循环（每页约18条笔记）
+
+    all_notes: Dict[str, Any] = {}  # note_id → note_dict，全局去重
+
+    for keyword in keywords:
+        collected_for_kw = 0
+        page = 1
+        prev_page_first_id = ""  # 用于检测分页是否卡在同一页
+        consecutive_empty_pages = 0
+        consecutive_dup_pages = 0
+        logger.info(
+            f"[Step1] ▶ 开始采集关键词「{keyword}」"
+            f"  目标={per_kw_target} 条  最大页数={_MAX_PAGES_PER_KW}"
+        )
+
+        while collected_for_kw < per_kw_target and page <= _MAX_PAGES_PER_KW:
+            logger.info(f"[Step1] 「{keyword}」page={page}  搜索中...")
+
+            try:
+                # sort="time_descending"：按最新发布时间排序搜索
+                # 网络重试由 client.search 内部负责；0 条结果不在本页重试，改为跳过继续翻页
+                raw_resp = await asyncio.to_thread(
+                    client.search, keyword, page, "time_descending"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[Step1] 「{keyword}」page={page} 搜索失败（已内部重试），终止本关键词: {exc}"
+                )
+                break
+
+            raw_notes = RedbookApiClient.parse_search_notes(raw_resp)
+            logger.info(
+                f"[Step1] 「{keyword}」page={page}  搜索返回 {len(raw_notes)} 条"
+            )
+            if not raw_notes:
+                consecutive_empty_pages += 1
+                logger.warning(
+                    f"[Step1] 「{keyword}」page={page}  本页 0 条"
+                    f"（连续空页 {consecutive_empty_pages}/{_MAX_CONSECUTIVE_EMPTY_PAGES}），"
+                    f"跳过本页继续翻页"
+                )
+                if consecutive_empty_pages >= _MAX_CONSECUTIVE_EMPTY_PAGES:
+                    logger.info(
+                        f"[Step1] 「{keyword}」连续 {_MAX_CONSECUTIVE_EMPTY_PAGES} 页无结果，终止翻页"
+                    )
+                    break
+                page += 1
+                if page <= _MAX_PAGES_PER_KW and collected_for_kw < per_kw_target:
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                continue
+
+            consecutive_empty_pages = 0
+
+            page_ids = [str(n.get("id") or "").strip() for n in raw_notes if n.get("id")]
+            overlap = sum(1 for nid in page_ids if nid in all_notes)
+            if page_ids:
+                logger.info(
+                    f"[Step1] 「{keyword}」page={page}  "
+                    f"note_id 首={page_ids[0][:12]}… 尾={page_ids[-1][:12]}…  "
+                    f"与已入库重复 {overlap}/{len(page_ids)}"
+                )
+                if prev_page_first_id and page_ids[0] == prev_page_first_id:
+                    logger.warning(
+                        f"[Step1] 「{keyword}」page={page}  "
+                        f"首条 note_id 与上一页相同（{page_ids[0]}），"
+                        f"分页可能抖动，继续翻页"
+                    )
+                prev_page_first_id = page_ids[0]
+
+            # 逐条补全 detail + Tier2 精判
+            page_deduped = page_detail_ok = page_detail_fail = page_t2_reject = page_added = 0
+            for raw_note in raw_notes:
+                note_dict = RedbookApiClient.note_to_dict(raw_note, keyword)
+                nid = note_dict.get("note_id")
+                if not nid or nid in all_notes or (exclude_note_ids and nid in exclude_note_ids):
+                    page_deduped += 1
+                    continue
+
+                # ── Detail API 补全：获取完整 desc + 结构化话题标签 ──────────────
+                try:
+                    detail_resp = await asyncio.to_thread(client.get_detail, nid)
+                    detail_note = RedbookApiClient.parse_detail_note(detail_resp)
+                    if detail_note:
+                        enriched = RedbookApiClient.extract_detail_fields(detail_note)
+                        note_dict["desc"] = enriched["desc"]
+                        note_dict["tags"] = enriched["tags"]
+                        page_detail_ok += 1
+                    else:
+                        page_detail_fail += 1
+                except Exception as exc:
+                    page_detail_fail += 1
+                    logger.debug(
+                        f"[Step1] detail 补全失败 note_id={nid}，保留截断摘要: {exc}"
+                    )
+                # detail 请求间随机间隔，避免连续请求触发服务端速率限制
+                await asyncio.sleep(random.uniform(3.0, 4.0))
+
+                # Tier2 精判（逐条，fail-open；此时 desc 已为全文）
+                if user_query:
+                    try:
+                        passed = await _tier2_detail_filter(user_query, note_dict, keywords=keywords)
+                        if not passed:
+                            page_t2_reject += 1
+                            continue
+                    except Exception:
+                        pass
+
+                all_notes[nid] = note_dict
+                collected_for_kw += 1
+                page_added += 1
+                if collected_for_kw >= per_kw_target:
+                    break
+
+            logger.info(
+                f"[Step1] 「{keyword}」page={page}  本页结果: "
+                f"新增={page_added}  去重跳过={page_deduped}  "
+                f"detail成功={page_detail_ok} 失败={page_detail_fail}  "
+                f"Tier2淘汰={page_t2_reject}  "
+                f"累计={collected_for_kw}/{per_kw_target}（全局={len(all_notes)}）"
+            )
+
+            # 本页全部 note_id 均已入库 → 可能是翻页抖动，连续多页才终止
+            if (
+                len(raw_notes) > 0
+                and page_added == 0
+                and page_deduped == len(raw_notes)
+            ):
+                consecutive_dup_pages += 1
+                logger.warning(
+                    f"[Step1] 「{keyword}」page={page}  "
+                    f"本页 {len(raw_notes)} 条全部重复"
+                    f"（连续重复页 {consecutive_dup_pages}/{_MAX_CONSECUTIVE_DUP_PAGES}），"
+                    f"继续翻页"
+                )
+                if consecutive_dup_pages >= _MAX_CONSECUTIVE_DUP_PAGES:
+                    logger.warning(
+                        f"[Step1] 「{keyword}」连续 {_MAX_CONSECUTIVE_DUP_PAGES} 页全部重复，终止翻页"
+                    )
+                    break
+            else:
+                consecutive_dup_pages = 0
+
+            if collected_for_kw >= per_kw_target:
+                logger.info(f"[Step1] 「{keyword}」已达目标 {per_kw_target} 条，停止翻页")
+                break
+
+            page += 1
+            # 页间随机 sleep，避免连续请求被限流
+            if page <= _MAX_PAGES_PER_KW and collected_for_kw < per_kw_target:
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+
+        logger.info(
+            f"[Step1] ◀ 关键词「{keyword}」采集完毕  "
+            f"本轮新增={collected_for_kw}  全局总计={len(all_notes)}"
+        )
+
+    notes = list(all_notes.values())
+    # 含具体型号的笔记优先，其次按发布时间从新到旧
+    notes.sort(
+        key=lambda n: (_note_has_model_terms(n, keywords), _note_publish_sort_ts(n)),
+        reverse=True,
+    )
+    logger.info(f"[comment_pipeline] _step1 完成，共 {len(notes)} 条笔记")
+    return notes
 
 
 # ── v1 专用步骤（保留原样，不删除） ──────────────────────────────────────────
@@ -1039,131 +1292,110 @@ async def _step7_aggregate_and_summarize(
 
 async def _step2v2_fetch_all_comments_for_note(
     note: Dict[str, Any],
-    cookies_str: str,
+    cookies_str: str,  # 三方 API 模式下不再使用，保留兼容签名
 ) -> List[Dict[str, Any]]:
-    """[v2] 步骤 2：分页采集单篇笔记评论，含页间睡眠和 CaptchaError 熔断。
+    """[v2] 步骤 2：通过三方 Redbook API 分页采集单篇笔记的全部评论。
 
-    策略（参考 MediaCrawler）：
-    - 手动分页调用 get_note_out_comment（单页），每页后随机 sleep
-    - 最多 _V2_MAX_PAGES_PER_NOTE 页 / _V2_MAX_PARENT_PER_NOTE 条一级评论
-    - 子评论只使用每页返回时已附带的 sub_comments，不额外翻页
-    - CaptchaError 向上层抛出，由 _run_v2_pipeline 做全局熔断
+    策略：
+    - cursor 翻页直到 has_more=False，拉取笔记全部一级评论（无条数/页数上限）
+    - 子评论使用每页已附带的 sub_comments，不额外翻页
+    - 风控由三方 API 承担，无需熔断与限速（仅保留极短页间 sleep 避免瞬时并发）
+    - 防御性保护：cursor 不再变化或本页为空时终止，防止 API 异常导致死循环
 
     Returns:
         扁平评论列表，每条含 is_sub_comment: bool 和 parent_comment_id: str。
     """
+    from ..infrastructure.crawlers.redbook_api_client import RedbookApiClient
+
     note_id = str(note.get("note_id") or "").strip()
     if not note_id or note_id.startswith("stub_"):
         return []
 
-    xsec = str(note.get("xsec_token") or "").strip()
-    if not xsec:
-        url = str(note.get("url") or "")
-        m = re.search(r'xsec_token=([^&]+)', url)
-        if m:
-            xsec = m.group(1)
-
-    if not xsec:
-        logger.debug(f"[comment v2] note_id={note_id} 无 xsec_token，跳过")
-        return []
-
-    def _parse_comment(c: dict, *, is_sub: bool, parent_id: str) -> Optional[Dict]:
-        if not isinstance(c, dict):
-            return None
-        content_raw = c.get("content") or {}
-        text = str(
-            content_raw.get("text") if isinstance(content_raw, dict) else content_raw or ""
-        ).strip()
-        if not text:
-            return None
-        return {
-            "comment_id": str(c.get("id") or ""),
-            "content": text,
-            "like_count": int(c.get("like_count") or 0),
-            "author": str((c.get("user_info") or {}).get("nickname") or ""),
-            "note_id": note_id,
-            "note_url": str(note.get("url") or ""),
-            "note_title": str(note.get("title") or ""),
-            "is_sub_comment": is_sub,
-            "parent_comment_id": parent_id,
-        }
-
-    from apis.xhs_pc_apis import XHS_Apis, CaptchaError as _CaptchaError  # noqa: PLC0415
-    client = XHS_Apis()
+    client = RedbookApiClient()
+    note_url = str(note.get("url") or "")
+    note_title = str(note.get("title") or "")
 
     result: List[Dict] = []
     cursor = ""
     parent_count = 0
+    page_idx = 0
+    consecutive_fails = 0  # 连续请求失败计数（get_comments 内部已重试3次后仍失败才计1次）
 
-    for page_idx in range(_V2_MAX_PAGES_PER_NOTE):
-        # 调用单页接口（同步 → to_thread 转异步）
+    while True:
+        page_idx += 1
         try:
-            success, msg, res_json = await asyncio.to_thread(
-                client.get_note_out_comment, note_id, cursor, xsec, cookies_str
-            )
-        except _CaptchaError:
-            # CaptchaError 向上冒泡，交由 _run_v2_pipeline 做全局熔断
-            logger.warning(f"[comment v2] CAPTCHA note_id={note_id} page={page_idx+1}，向上抛出熔断")
-            raise
+            raw_resp = await asyncio.to_thread(client.get_comments, note_id, cursor)
+            consecutive_fails = 0  # 请求成功，重置计数
         except Exception as exc:
-            logger.warning(f"[comment v2] note_id={note_id} page={page_idx+1} 请求异常: {exc}")
-            break
-
-        if not success or not isinstance(res_json, dict):
-            logger.debug(f"[comment v2] note_id={note_id} 接口失败: {msg}")
-            break
-
-        data = res_json.get("data") or {}
-        comments_raw = data.get("comments") or []
-        has_more = bool(data.get("has_more", False))
-        cursor = str(data.get("cursor", ""))
-
-        # 从第一页第一条提取笔记时间（如果还没有）
-        if page_idx == 0 and comments_raw and not note.get("publish_time"):
-            first = comments_raw[0] if isinstance(comments_raw[0], dict) else {}
-            note_time_raw = (
-                (first.get("note_info") or {}).get("time")
-                or (first.get("note") or {}).get("time")
+            consecutive_fails += 1
+            logger.warning(
+                f"[comment v2] note_id={note_id} page={page_idx} "
+                f"重试耗尽({consecutive_fails}/3)，已采 {parent_count} 条: {exc}"
             )
-            if note_time_raw:
-                try:
-                    import datetime as _dt  # noqa: PLC0415
-                    ts = int(note_time_raw) // 1000 if int(note_time_raw) > 1e10 else int(note_time_raw)
-                    note["publish_time"] = _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-                except Exception:
-                    pass
+            if consecutive_fails >= 3:
+                logger.warning(f"[comment v2] note_id={note_id} 连续失败 3 次，终止本篇采集")
+                break
+            # cursor 未推进时无法继续翻页
+            if not cursor:
+                break
+            continue
+
+        # 顶层 err_no 非 0 时中止
+        err_no = raw_resp.get("err_no") if isinstance(raw_resp, dict) else None
+        if err_no and err_no != 0:
+            logger.debug(f"[comment v2] note_id={note_id} err_no={err_no}，停止采集")
+            break
+
+        comments_raw, has_more, next_cursor, _ = RedbookApiClient.parse_comments(raw_resp)
 
         # 解析本页评论
         for parent in comments_raw:
-            if parent_count >= _V2_MAX_PARENT_PER_NOTE:
-                break
             if not isinstance(parent, dict):
                 continue
+
             parent_id = str(parent.get("id") or "")
-            p_parsed = _parse_comment(parent, is_sub=False, parent_id="")
+            p_parsed = RedbookApiClient.parse_comment_item(
+                parent,
+                note_id=note_id,
+                note_url=note_url,
+                note_title=note_title,
+                is_sub=False,
+                parent_id="",
+            )
             if p_parsed:
                 result.append(p_parsed)
                 parent_count += 1
 
-            # 只使用页面已附带的 sub_comments，不额外翻页（子评论翻页接口 /comment/sub/page 风控极敏感）
+            # 使用已附带的 sub_comments，不额外翻页
             for sub in (parent.get("sub_comments") or []):
-                s_parsed = _parse_comment(sub, is_sub=True, parent_id=parent_id)
+                s_parsed = RedbookApiClient.parse_comment_item(
+                    sub,
+                    note_id=note_id,
+                    note_url=note_url,
+                    note_title=note_title,
+                    is_sub=True,
+                    parent_id=parent_id,
+                )
                 if s_parsed:
                     result.append(s_parsed)
 
         logger.debug(
-            f"[comment v2] note_id={note_id} page={page_idx+1} "
+            f"[comment v2] note_id={note_id} page={page_idx} "
             f"本页={len(comments_raw)} 累计一级={parent_count} has_more={has_more}"
         )
 
-        # 已达每笔记上限 或 没有更多页
-        if parent_count >= _V2_MAX_PARENT_PER_NOTE or not has_more:
+        if not has_more:
             break
+        # 防御：本页无数据或 cursor 未推进时终止，避免 API 异常导致死循环
+        if not comments_raw or not next_cursor or next_cursor == cursor:
+            logger.warning(
+                f"[comment v2] note_id={note_id} page={page_idx} "
+                f"has_more=True 但 cursor 未推进，提前终止"
+            )
+            break
+        cursor = next_cursor
 
-        # 页间随机 sleep（打破等间隔 bot 特征）
-        sleep_sec = random.uniform(_V2_PAGE_SLEEP_MIN, _V2_PAGE_SLEEP_MAX)
-        logger.debug(f"[comment v2] 页间 sleep {sleep_sec:.1f}s ...")
-        await asyncio.sleep(sleep_sec)
+        await asyncio.sleep(random.uniform(_V2_PAGE_SLEEP_MIN, _V2_PAGE_SLEEP_MAX))
 
     return result
 
@@ -1328,7 +1560,7 @@ async def _step3_dim1_classify(
         if not cat:
             comment_cats[i] = {"index": i, "category": "其他", "sentiment": "中性"}
 
-    # ── Step 3-3: 评论数 < 10 的维度并入「其他」────────────────────────────────
+    # ── Step 3-3: 评论数不足阈值的维度并入「其他」──────────────────────────────
     _merge_dim1_small_categories(comment_cats)  # type: ignore[arg-type]
     categories = _build_dim1_categories(comment_cats)  # type: ignore[arg-type]
 
@@ -1340,7 +1572,7 @@ async def _step3_dim1_classify(
         f"其他={other_count} 条（含无效评论 {invalid_to_other_count} 条），分布: {cat_summary}"
     )
 
-    # 核心发现：覆盖全部有效维度（≥10 条）
+    # 核心发现：覆盖全部有效维度（≥ _DIM1_MIN_CATEGORY_SIZE 条）
     report_cats = [
         c for c in categories
         if c["name"] != "其他" and c["count"] >= _DIM1_MIN_CATEGORY_SIZE
@@ -1486,7 +1718,7 @@ async def _step4_dim2_analysis(
             "negative": _safe_slot("negative"),
         }
 
-    # 分析全部有效维度（≥10 条，排除「其他」）
+    # 分析全部有效维度（≥ _DIM1_MIN_CATEGORY_SIZE 条，排除「其他」）
     top_cats = [
         c for c in categories
         if c["name"] != "其他" and c["count"] >= _DIM1_MIN_CATEGORY_SIZE
@@ -1690,7 +1922,7 @@ async def _run_v1_pipeline(
         )
         top_notes_list = notes_raw[:top_notes] if top_notes > 0 else notes_raw
         if not top_notes_list:
-            raise ValueError(f"关键词「{'、'.join(keywords)}」未采集到任何笔记，请检查 Cookie 或关键词")
+            raise ValueError(f"关键词「{'、'.join(keywords)}」未采集到任何笔记，请检查关键词或 API 配置")
 
         await _emit_progress(task_id, f"已采集 {len(top_notes_list)} 条笔记，开始拉取评论...", 25)
 
@@ -1784,129 +2016,110 @@ async def _run_v2_pipeline(
     total_parent_comments = 0
     total_sub_comments = 0
 
-    # 先查缓存（优先合并 key 精确命中；多关键词时逐个检查部分命中）
-    cached, keywords_to_crawl = await comment_cache_store.get_partial(
+    # ── 数量导向缓存策略 ──────────────────────────────────────────────────────
+    # 1. 查 DB 中当前关键词已缓存的笔记数量
+    # 2. 若 cached_count >= crawl_target → 直接复用，跳过爬取
+    # 3. 若 cached_count <  crawl_target → 以差额为目标补爬，pass exclude_note_ids 去重
+    # ─────────────────────────────────────────────────────────────────────────
+    crawl_target = max(top_notes * 3, _CRAWL_TARGET_PER_KW) if top_notes > 0 else _CRAWL_TARGET_PER_KW
+
+    cached_raw, cached_count = await comment_cache_store.load_notes_for_keywords(
         keywords, time_range, min_interaction
     )
-    if cached and not keywords_to_crawl:
-        # 完全命中（合并 key 或所有单 key 均有缓存）
-        cached_notes = cached["notes"]
-        notes_with_comments = [(n, n.pop("_cached_comments", [])) for n in cached_notes]
-        total_parent_comments = cached.get("comment_count", 0)
-        is_partial = cached.get("partial_cache", False)
+    # 将缓存笔记拆包，同时统计已有评论数
+    cached_notes_with_comments: List[Tuple[Dict, List]] = [
+        (n, n.pop("_cached_comments", [])) for n in cached_raw
+    ]
+    for _, cached_cmts in cached_notes_with_comments:
+        total_parent_comments += sum(1 for c in cached_cmts if not c.get("is_sub_comment"))
+        total_sub_comments    += sum(1 for c in cached_cmts if c.get("is_sub_comment"))
+
+    deficit = crawl_target - cached_count
+
+    if deficit <= 0:
+        # DB 中已有足够笔记，直接复用
+        notes_with_comments = cached_notes_with_comments
         logger.info(
-            f"[v2] task={task_id} {'部分' if is_partial else ''}缓存命中 "
-            f"notes={len(notes_with_comments)} comments={total_parent_comments} "
-            f"age={cached.get('cache_age_hours')}h"
+            f"[v2] task={task_id} 缓存充足 cached={cached_count} >= target={crawl_target}，跳过爬取"
         )
         await _emit_progress(
             task_id,
-            f"命中{'部分' if is_partial else ''}缓存，"
-            f"已有 {len(notes_with_comments)} 条笔记数据，开始 AI 分析...",
+            f"已有 {cached_count} 条缓存笔记（目标 {crawl_target}），直接进入分析...",
             40,
         )
     else:
-        # 有缓存的先合并进来，只爬未命中的关键词
-        if cached and keywords_to_crawl:
-            cached_notes = cached["notes"]
-            notes_with_comments = [(n, n.pop("_cached_comments", [])) for n in cached_notes]
-            total_parent_comments = cached.get("comment_count", 0)
+        # 需要补爬 deficit 条
+        existing_ids = {n.get("note_id") for n, _ in cached_notes_with_comments}
+        if cached_count > 0:
             logger.info(
-                f"[v2] task={task_id} 部分关键词缓存命中 "
-                f"cached_notes={len(notes_with_comments)} uncached_keywords={keywords_to_crawl}"
+                f"[v2] task={task_id} 缓存不足 cached={cached_count} < target={crawl_target}，"
+                f"补爬 deficit={deficit}，已有 {len(existing_ids)} 个 note_id 参与去重"
             )
             await _emit_progress(
                 task_id,
-                f"部分缓存命中（{len(notes_with_comments)} 条），"
-                f"继续采集未缓存关键词：{'、'.join(keywords_to_crawl)}...",
+                f"库中已有 {cached_count} 条笔记，需再采集 {deficit} 条，开始补爬...",
                 10,
             )
         else:
-            keywords_to_crawl = keywords
+            logger.info(f"[v2] task={task_id} 无缓存，采集目标 {crawl_target} 条")
+            await _emit_progress(task_id, f"正在采集关键词「{'、'.join(keywords)}」的笔记...", 10)
 
-        crawl_target = max(top_notes * 3, _CRAWL_TARGET_PER_KW) if top_notes > 0 else _CRAWL_TARGET_PER_KW
-        await _emit_progress(task_id, f"正在采集关键词「{'、'.join(keywords_to_crawl)}」的笔记...", 10)
-
-        notes_raw = await _step1_crawl_notes(
-            keywords_to_crawl, cookies_str, crawl_target,
+        new_notes_raw = await _step1_crawl_notes(
+            keywords, cookies_str, deficit,
             time_range=time_range, min_interaction=min_interaction,
             user_query=raw_input, owner_user_id=owner_user_id,
+            exclude_note_ids=existing_ids,
         )
-        # 与已缓存的笔记合并去重（按 note_id）
-        existing_ids = {n.get("note_id") for n, _ in notes_with_comments}
-        new_notes = [n for n in notes_raw if n.get("note_id") not in existing_ids]
-        top_notes_list = new_notes[:top_notes] if top_notes > 0 else new_notes
-        if not top_notes_list and not notes_with_comments:
-            raise ValueError(f"关键词「{'、'.join(keywords)}」未采集到任何笔记，请检查 Cookie 或关键词")
+
+        if not new_notes_raw and not cached_notes_with_comments:
+            raise ValueError(f"关键词「{'、'.join(keywords)}」未采集到任何笔记，请检查关键词或 API 配置")
 
         await _emit_progress(
             task_id,
-            f"已采集 {len(top_notes_list)} 条笔记，开始全量拉取评论（含子评论）...",
+            f"新采集 {len(new_notes_raw)} 条笔记，开始全量拉取评论（含子评论）...",
             25,
         )
         logger.info(
-            f"[v2] task={task_id} 采集到 {len(top_notes_list)} 条笔记，开始串行评论拉取 "
-            f"(上限: 每笔记 {_V2_MAX_PAGES_PER_NOTE} 页/{_V2_MAX_PARENT_PER_NOTE} 条，"
-            f"全局预算 {_V2_TOTAL_PARENT_BUDGET} 条)"
+            f"[v2] task={task_id} 新采集 {len(new_notes_raw)} 条笔记，开始串行拉取评论"
         )
 
-        from apis.xhs_pc_apis import CaptchaError as _CaptchaError  # noqa: PLC0415
-        budget_exhausted = False
-
-        for note_idx, note in enumerate(top_notes_list):
-            if budget_exhausted:
-                break
-            if total_parent_comments >= _V2_TOTAL_PARENT_BUDGET:
-                logger.info(
-                    f"[v2] task={task_id} 已达总评论预算 {_V2_TOTAL_PARENT_BUDGET}，"
-                    f"停止继续采集（已处理 {note_idx}/{len(top_notes_list)} 篇笔记）"
-                )
-                budget_exhausted = True
-                break
-
+        new_notes_with_comments: List[Tuple[Dict, List]] = []
+        for note_idx, note in enumerate(new_notes_raw):
             try:
                 comments = await _step2v2_fetch_all_comments_for_note(note, cookies_str)
-            except _CaptchaError:
-                logger.warning(
-                    f"[v2] task={task_id} note_id={note.get('note_id')} 遇到 CAPTCHA，"
-                    f"暂停 {_V2_CAPTCHA_PAUSE}s 后跳过该笔记，继续处理剩余笔记"
-                )
-                await asyncio.sleep(_V2_CAPTCHA_PAUSE)
-                # 只跳过当前笔记，不中断整体采集
-                continue
             except Exception as exc:
                 logger.warning(f"[v2] task={task_id} note_id={note.get('note_id')} 评论采集异常: {exc}")
                 comments = []
 
-            notes_with_comments.append((note, comments))
+            new_notes_with_comments.append((note, comments))
             note_parent = sum(1 for c in comments if not c.get("is_sub_comment"))
-            note_sub = sum(1 for c in comments if c.get("is_sub_comment"))
+            note_sub    = sum(1 for c in comments if c.get("is_sub_comment"))
             total_parent_comments += note_parent
-            total_sub_comments += note_sub
+            total_sub_comments    += note_sub
 
             logger.info(
-                f"[v2] task={task_id} [{note_idx+1}/{len(top_notes_list)}] "
+                f"[v2] task={task_id} [{note_idx+1}/{len(new_notes_raw)}] "
                 f"note_id={note.get('note_id')} "
                 f"一级={note_parent} 子={note_sub} "
-                f"累计一级={total_parent_comments}/{_V2_TOTAL_PARENT_BUDGET}"
+                f"累计一级={total_parent_comments}"
             )
 
-            # 笔记间随机 sleep（最后一篇不需要等待）
-            if note_idx < len(top_notes_list) - 1 and not budget_exhausted:
-                sleep_sec = random.uniform(_V2_INTER_NOTE_SLEEP_MIN, _V2_INTER_NOTE_SLEEP_MAX)
-                logger.debug(f"[v2] 笔记间 sleep {sleep_sec:.1f}s ...")
-                await asyncio.sleep(sleep_sec)
+            if note_idx < len(new_notes_raw) - 1:
+                await asyncio.sleep(random.uniform(_V2_INTER_NOTE_SLEEP_MIN, _V2_INTER_NOTE_SLEEP_MAX))
 
-        # 写入 v2 缓存（后台）
-        if notes_with_comments:
-            total_all = total_parent_comments + total_sub_comments
-            cache_notes = [{**n, "_cached_comments": c} for n, c in notes_with_comments]
+        # 合并：缓存笔记在前（已有评论），新爬笔记在后
+        notes_with_comments = cached_notes_with_comments + new_notes_with_comments
+
+        # 将新爬笔记写入缓存（后台，仅写增量）
+        if new_notes_with_comments:
+            new_comment_count = sum(len(c) for _, c in new_notes_with_comments)
+            cache_notes = [{**n, "_cached_comments": c} for n, c in new_notes_with_comments]
             asyncio.create_task(comment_cache_store.set(
                 keywords=keywords,
                 time_range=time_range,
                 min_interaction=min_interaction,
                 notes=cache_notes,
-                comment_count=total_all,
+                comment_count=new_comment_count,
             ))
 
     total_comments = total_parent_comments + total_sub_comments
@@ -1941,9 +2154,13 @@ async def _run_v2_pipeline(
     # Step 6: MD
     await _emit_progress(task_id, "生成舆情分析 Markdown 报告...", 88)
 
-    # 组装 Excel Sheet 数据
+    # 组装 Excel Sheet 数据（含维度标注 / 笔记内容与标签）
+    comment_cats_list = dim1_result.get("comment_cats") or []
+    cat_by_idx: Dict[int, Dict] = {c["index"]: c for c in comment_cats_list if c}
+
     sheet1_comments = []
-    for comment in all_comments_flat:
+    for i, comment in enumerate(all_comments_flat):
+        cat_info = cat_by_idx.get(i, {})
         sheet1_comments.append({
             "content": comment.get("content") or "",
             "like_count": comment.get("like_count") or 0,
@@ -1951,14 +2168,25 @@ async def _run_v2_pipeline(
             "is_sub_comment": comment.get("is_sub_comment", False),
             "note_title": comment.get("note_title") or "",
             "note_url": comment.get("note_url") or "",
+            "dimension": cat_info.get("category") or "",
         })
 
     sheet2_notes = []
     for note, comments in notes_with_comments:
+        desc = note.get("desc") or ""
+        # detail API 返回 tags 为列表（话题名，如 ["二手钢琴", "钢琴选购"]）
+        # 搜索摘要回退情况下从 desc 提取 #xxx 标签
+        tags_raw = note.get("tags")
+        if tags_raw and isinstance(tags_raw, list):
+            tags_str = " ".join(f"#{t}" for t in tags_raw if t)
+        else:
+            tags_str = " ".join(re.findall(r'#\S+', desc))
         sheet2_notes.append({
             "url": note.get("url") or note.get("note_id") or "",
             "publish_time": note.get("publish_time") or "",
             "title": note.get("title") or "",
+            "desc": desc,
+            "tags": tags_str,
             "interaction_score": note.get("interaction_score") or 0,
             "fetched_comment_count": len(comments),
         })
@@ -2047,9 +2275,7 @@ async def run_comment_pipeline(
     try:
         record = task_repository.get(task_id)
         owner_user_id = str(record.owner_user_id) if record else ""
-        cookies_str = _resolve_cookies(owner_user_id)
-        if not cookies_str:
-            raise ValueError("未找到可用的 XHS Cookie，请在设置→数据源授权中绑定小红书账号")
+        cookies_str = ""  # 三方 API 模式不需要 XHS Cookie
 
         # Step 0：解析输入
         await _emit_progress(task_id, "解析搜索意图...", 5)

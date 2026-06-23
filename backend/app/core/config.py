@@ -48,6 +48,12 @@ class Settings(BaseModel):
     wxwork_rsa_private_key: str = os.getenv("WXWORK_RSA_PRIVATE_KEY", "")
 
     # ------------------------------------------------------------------ #
+    # 三方 Redbook API 配置（评论 Skills 搜索 + 评论采集）
+    # ------------------------------------------------------------------ #
+    redbook_api_base: str = os.getenv("REDBOOK_API_BASE", "http://115.190.137.33:10158/redbook")
+    redbook_api_key: str = os.getenv("REDBOOK_API_KEY", "")
+
+    # ------------------------------------------------------------------ #
     # Minimax Chat API 配置
     # ------------------------------------------------------------------ #
     minimax_api_key: str = os.getenv("MINIMAX_API_KEY", "")

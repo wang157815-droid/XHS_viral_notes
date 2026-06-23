@@ -145,18 +145,20 @@ def _build_v2_excel(comment_output: Dict[str, Any]) -> bytes:
     ws1 = wb.active
     ws1.title = "评论数据源"
 
-    s1_headers = ["评论内容", "点赞数", "评论者昵称", "是否子评论", "来源笔记标题", "来源笔记链接"]
-    s1_widths = [60.0, 8.0, 14.0, 10.0, 30.0, 50.0]
+    # 列1 为「维度」，方便按维度筛选 / 排序
+    s1_headers = ["维度", "评论内容", "点赞数", "评论者昵称", "是否子评论", "来源笔记标题", "来源笔记链接"]
+    s1_widths = [14.0, 60.0, 8.0, 14.0, 10.0, 30.0, 50.0]
     _write_v2_header(ws1, s1_headers, s1_widths)
 
     comments: List[Dict] = comment_output.get("sheet1_comments") or []
     for row_idx, c in enumerate(comments, start=2):
-        _cell_write(ws1, row_idx, 1, c.get("content") or "")
-        _cell_write(ws1, row_idx, 2, c.get("like_count") or 0, center=True)
-        _cell_write(ws1, row_idx, 3, c.get("author") or "", center=True)
-        _cell_write(ws1, row_idx, 4, "是" if c.get("is_sub_comment") else "否", center=True)
-        _cell_write(ws1, row_idx, 5, c.get("note_title") or "")
-        _cell_write(ws1, row_idx, 6, _to_xhs_url(c.get("note_url") or ""))
+        _cell_write(ws1, row_idx, 1, c.get("dimension") or "", center=True)
+        _cell_write(ws1, row_idx, 2, c.get("content") or "")
+        _cell_write(ws1, row_idx, 3, c.get("like_count") or 0, center=True)
+        _cell_write(ws1, row_idx, 4, c.get("author") or "", center=True)
+        _cell_write(ws1, row_idx, 5, "是" if c.get("is_sub_comment") else "否", center=True)
+        _cell_write(ws1, row_idx, 6, c.get("note_title") or "")
+        _cell_write(ws1, row_idx, 7, _to_xhs_url(c.get("note_url") or ""))
         ws1.row_dimensions[row_idx].height = _METRIC_ROW_HEIGHT
 
     ws1.freeze_panes = "A2"
@@ -164,8 +166,9 @@ def _build_v2_excel(comment_output: Dict[str, Any]) -> bytes:
     # ── Sheet2：笔记数据源 ────────────────────────────────────────────────────
     ws2 = wb.create_sheet("笔记数据源")
 
-    s2_headers = ["笔记链接", "发布时间", "标题", "互动量", "爬取评论总数"]
-    s2_widths = [55.0, 12.0, 40.0, 10.0, 12.0]
+    # 列6/7 为「笔记具体内容」和「标签内容」
+    s2_headers = ["笔记链接", "发布时间", "标题", "互动量", "爬取评论总数", "笔记具体内容", "标签内容"]
+    s2_widths = [55.0, 12.0, 40.0, 10.0, 12.0, 60.0, 30.0]
     _write_v2_header(ws2, s2_headers, s2_widths)
 
     notes: List[Dict] = comment_output.get("sheet2_notes") or []
@@ -175,7 +178,9 @@ def _build_v2_excel(comment_output: Dict[str, Any]) -> bytes:
         _cell_write(ws2, row_idx, 3, n.get("title") or "")
         _cell_write(ws2, row_idx, 4, n.get("interaction_score") or 0, center=True)
         _cell_write(ws2, row_idx, 5, n.get("fetched_comment_count") or 0, center=True)
-        ws2.row_dimensions[row_idx].height = _METRIC_ROW_HEIGHT
+        _cell_write(ws2, row_idx, 6, n.get("desc") or "")
+        _cell_write(ws2, row_idx, 7, n.get("tags") or "")
+        ws2.row_dimensions[row_idx].height = _DEFAULT_ROW_HEIGHT
 
     ws2.freeze_panes = "A2"
 

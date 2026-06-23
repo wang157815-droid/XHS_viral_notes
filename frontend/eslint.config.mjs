@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // E2E（Playwright）独立于 Next 应用代码，使用自身的运行时与类型，单独管理。
+    "e2e/**",
+    "playwright.config.ts",
   ]),
 ]);
 

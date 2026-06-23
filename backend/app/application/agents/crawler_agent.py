@@ -578,6 +578,9 @@ class CrawlerAgent(BaseAgent):
             "brand": list(brand_missed),
         }
 
+        # 缓存命中但数量不足时需补采的维度 → {dim: deficit}，在下方 L3 路径中使用
+        under_count_dims_deficit: Dict[str, int] = {}
+
         if _CACHE_ENABLED and active_dims:
             cache_only_ready = True
             per_dim_cache: Dict[str, List[Dict[str, Any]]] = {}
@@ -601,20 +604,37 @@ class CrawlerAgent(BaseAgent):
                 cache_layers.append(res[1])
 
             if cache_only_ready and per_dim_cache:
-                return await self._build_result_from_cache(
-                    context,
-                    _dedupe_notes_by_note_id(merged_cache_parts),
-                    dims_keywords,
-                    active_dims,
-                    runtime_cfg,
-                    cache_source=_collapse_cache_layers(cache_layers),
-                    cache_keywords=cache_keywords,
-                    main_key=main_key,
-                    comp_key=comp_key,
-                    main_layer=main_res[1] if main_res else None,
-                    comp_layer=comp_res[1] if comp_res else None,
-                    per_dim_sources=per_dim_cache,
-                    comp_missed_keywords=None,
+                # 数量导向检查：任意维度缓存数量 < target → 不提前返回，穿透到 L3 补采
+                user_target = max(5, int(runtime_cfg.get("target_count", _DEFAULT_TARGET_PER_GROUP)))
+                under_count_dims_deficit = {
+                    dim: user_target - len(notes)
+                    for dim, notes in per_dim_cache.items()
+                    if len(notes) < user_target
+                }
+                if not under_count_dims_deficit:
+                    # 所有维度缓存数量充足 → 原有早返回路径
+                    return await self._build_result_from_cache(
+                        context,
+                        _dedupe_notes_by_note_id(merged_cache_parts),
+                        dims_keywords,
+                        active_dims,
+                        runtime_cfg,
+                        cache_source=_collapse_cache_layers(cache_layers),
+                        cache_keywords=cache_keywords,
+                        main_key=main_key,
+                        comp_key=comp_key,
+                        main_layer=main_res[1] if main_res else None,
+                        comp_layer=comp_res[1] if comp_res else None,
+                        per_dim_sources=per_dim_cache,
+                        comp_missed_keywords=None,
+                    )
+                # 有维度数量不足 → 记录日志后穿透到 L3 补采
+                await self.emit_log(
+                    task_id, "info",
+                    "缓存命中但数量不足，需 L3 补采：" + "  ".join(
+                        f"{dim}(已有 {len(per_dim_cache[dim])} 条，目标 {user_target} 条，差 {v} 条)"
+                        for dim, v in under_count_dims_deficit.items()
+                    ),
                 )
 
         if any(cache_res_by_dim.values()):
@@ -653,6 +673,22 @@ class CrawlerAgent(BaseAgent):
             if cache_missed_by_dim.get(dim)
         }
 
+        # 缓存命中但数量不足的维度：将已有缓存笔记转入 prior_cached_samples，
+        # 清空 samples_by_dim[dim]，加入 dims_limit，L3 只补采差额；
+        # 合并逻辑复用 lines 681-688 的 prior_cached_samples 去重路径。
+        for dim, deficit in under_count_dims_deficit.items():
+            if dim not in active_dims:
+                continue
+            existing = list(samples_by_dim.get(dim) or [])
+            prior_cached_samples[dim] = _dedupe_notes_by_note_id(
+                prior_cached_samples.get(dim, []) + existing
+            )
+            samples_by_dim[dim] = []   # 清空，L3 将写入补采结果
+            dims_limit.add(dim)
+            logger.debug(
+                f"[CrawlerAgent] {dim} 缓存不足，已有 {len(existing)} 条移入 prior，补采目标 {deficit} 条"
+            )
+
         crawl_kw_override = None
         if any(cache_missed_by_dim.get(dim) for dim in active_dims):
             crawl_kw_override = {k: list(v) for k, v in dims_keywords.items()}
@@ -663,6 +699,10 @@ class CrawlerAgent(BaseAgent):
                 elif cache_res_by_dim.get(dim) is not None:
                     dims_limit.discard(dim)
                     crawl_kw_override.pop(dim, None)
+            # 若某维度同时出现在 under_count_dims_deficit，需确保保留在 dims_limit
+            for dim in under_count_dims_deficit:
+                if dim in active_dims:
+                    dims_limit.add(dim)
 
         if cookies_str and dims_limit:
             await self._run_real_collection(
@@ -676,6 +716,7 @@ class CrawlerAgent(BaseAgent):
                 dims_limit=dims_limit,
                 keywords_by_dim_override=crawl_kw_override,
                 owner_user_id=owner_user_id,
+                per_dim_target_override=under_count_dims_deficit if under_count_dims_deficit else None,
             )
 
         for dim, prior in prior_cached_samples.items():
@@ -863,6 +904,7 @@ class CrawlerAgent(BaseAgent):
         dims_limit: Optional[Set[str]] = None,
         keywords_by_dim_override: Optional[Dict[str, List[str]]] = None,
         owner_user_id: Optional[str] = None,
+        per_dim_target_override: Optional[Dict[str, int]] = None,
     ) -> None:
         """按 keywords 去重并对不同组串行采集，规避 XHS 软反爬。
 
@@ -871,6 +913,8 @@ class CrawlerAgent(BaseAgent):
         2. 不同 keyword 组串行而非并行，避免同 IP + 同 cookies 并发触发 XHS 风控。
         3. 每组独立超时，单组失败不影响其它组。
         4. 采集参数全部来自 runtime_cfg（前端高级配置），不再读取硬编码 env。
+        5. per_dim_target_override: 补采场景下各维度的实际差额 {dim: deficit}，
+           每关键词组的目标取组内所有维度 deficit 的最大值，确保不遗漏任何维度。
         """
         user_analysis_target = max(5, int(runtime_cfg["target_count"]))
         per_group_target = user_analysis_target
@@ -909,9 +953,15 @@ class CrawlerAgent(BaseAgent):
         # 逐组串行采集
         for group_idx, (kw_tuple, dim_list) in enumerate(keyword_groups.items(), start=1):
             kws = list(kw_tuple)
+            # 补采场景：取组内各维度 deficit 的最大值作为本组实际目标
+            if per_dim_target_override:
+                overrides = [per_dim_target_override[d] for d in dim_list if d in per_dim_target_override]
+                group_target = max(overrides) if overrides else per_group_target
+            else:
+                group_target = per_group_target
             try:
                 notes = await asyncio.wait_for(
-                    _collect_one_dimension(cookies_str, kws, per_group_target, runtime_cfg, owner_user_id),
+                    _collect_one_dimension(cookies_str, kws, group_target, runtime_cfg, owner_user_id),
                     timeout=_PER_GROUP_TIMEOUT,
                 )
                 primary_dim = dim_list[0]
@@ -934,7 +984,7 @@ class CrawlerAgent(BaseAgent):
                     if retry_kws:
                         try:
                             retry_notes = await asyncio.wait_for(
-                                _collect_one_dimension(cookies_str, retry_kws, per_group_target, runtime_cfg, owner_user_id),
+                                _collect_one_dimension(cookies_str, retry_kws, group_target, runtime_cfg, owner_user_id),
                                 timeout=_PER_GROUP_TIMEOUT,
                             )
                             if retry_notes:

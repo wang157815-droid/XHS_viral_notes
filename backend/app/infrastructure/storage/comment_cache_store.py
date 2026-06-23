@@ -609,6 +609,82 @@ class CommentCrawlCacheStore:
             uncached,
         )
 
+    async def load_notes_for_keywords(
+        self,
+        keywords: List[str],
+        time_range: int = 0,
+        min_interaction: int = 0,
+    ) -> tuple:
+        """从 DB 加载当前关键词对应的所有未过期笔记（跨 cache_key，按 note_id 去重）。
+
+        匹配逻辑：source_keyword 精确匹配 keywords 列表中任意一项。
+        去重策略：DISTINCT ON (note_id) ORDER BY crawled_at DESC，保留最新爬取版本。
+
+        Returns:
+            (notes_with_comments, unique_note_count)
+            notes_with_comments 格式：[{...note_fields, "_cached_comments": [...]}]
+            失败或不可用时返回 ([], 0)（降级跳过，不影响流水线）。
+        """
+        if not _ENABLED or not _SA_AVAILABLE or not is_postgres_available() or not keywords:
+            return [], 0
+
+        await _ensure_table()
+
+        kw_list = [k.strip() for k in keywords if k.strip()]
+        if not kw_list:
+            return [], 0
+
+        try:
+            now = datetime.now(timezone.utc)
+            async with get_db_session() as session:
+                note_rows = (await session.execute(
+                    sql_text(
+                        "SELECT DISTINCT ON (note_id) * "
+                        "FROM xhs_comment_note "
+                        "WHERE expires_at > :now "
+                        "  AND source_keyword = ANY(:kws) "
+                        "ORDER BY note_id, crawled_at DESC"
+                    ),
+                    {"now": now, "kws": kw_list},
+                )).fetchall()
+
+                if not note_rows:
+                    logger.debug(
+                        f"[comment_cache] load_notes_for_keywords keywords={keywords} → 0 条"
+                    )
+                    return [], 0
+
+                note_ids = [r.note_id for r in note_rows]
+                comment_rows = (await session.execute(
+                    sql_text(
+                        "SELECT * FROM xhs_comment_data "
+                        "WHERE note_id = ANY(:nids) "
+                        "ORDER BY note_id, is_sub_comment, like_count DESC"
+                    ),
+                    {"nids": note_ids},
+                )).fetchall()
+
+            comments_by_note: Dict[str, List[Dict]] = defaultdict(list)
+            for row in comment_rows:
+                comments_by_note[row.note_id].append(_row_to_comment(row))
+
+            notes_with_comments = []
+            for row in note_rows:
+                note = _row_to_note(row)
+                note["_cached_comments"] = comments_by_note.get(row.note_id, [])
+                notes_with_comments.append(note)
+
+            total_comments = sum(len(n["_cached_comments"]) for n in notes_with_comments)
+            logger.info(
+                f"[comment_cache] load_notes_for_keywords keywords={keywords} "
+                f"→ {len(notes_with_comments)} 条笔记  {total_comments} 条评论"
+            )
+            return notes_with_comments, len(notes_with_comments)
+
+        except (PostgresUnavailable, Exception) as exc:
+            logger.warning(f"[comment_cache] load_notes_for_keywords 失败（降级跳过）: {exc}")
+            return [], 0
+
     async def set(
         self,
         keywords: List[str],

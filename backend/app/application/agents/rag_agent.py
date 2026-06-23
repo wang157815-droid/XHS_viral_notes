@@ -23,6 +23,7 @@ RAGAgent：业务约束检索（阶段 4.1 真实化，阶段 4.6 切 pgvector�
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...domain.task_context import TaskContextWriter
@@ -34,23 +35,34 @@ from .prompts import prompt_registry
 
 
 _RAG_SERVICE_SINGLETON: Optional[Any] = None
-_RAG_SERVICE_INIT_FAILED = False
+# 上次初始化失败的单调时钟时刻（0 表示无失败记录）。失败后进入冷却期，
+# 避免一次瞬时抖动（pgvector/网络）把整个进程的 RAG 永久关闭。
+_RAG_SERVICE_INIT_FAILED_AT: float = 0.0
+_RAG_INIT_RETRY_COOLDOWN_SEC = 300.0
 
 
 def _get_rag_service() -> Optional[Any]:
-    """懒加载 RAGService 单例。失败（依赖缺失 / pgvector 异常）后标记不可用，不再重试。"""
-    global _RAG_SERVICE_SINGLETON, _RAG_SERVICE_INIT_FAILED
-    if _RAG_SERVICE_INIT_FAILED:
-        return None
+    """懒加载 RAGService 单例。
+
+    失败（依赖缺失 / pgvector 瞬时异常）后进入冷却期：冷却期内直接返回 None
+    不重试；超过冷却期允许再探测一次。相比此前的"永久标记不可用"，可在瞬时
+    故障恢复后自动重新启用 RAG，而稳态失败仍不会高频重试拖慢任务。
+    """
+    global _RAG_SERVICE_SINGLETON, _RAG_SERVICE_INIT_FAILED_AT
     if _RAG_SERVICE_SINGLETON is not None:
         return _RAG_SERVICE_SINGLETON
+    if _RAG_SERVICE_INIT_FAILED_AT and (
+        time.monotonic() - _RAG_SERVICE_INIT_FAILED_AT < _RAG_INIT_RETRY_COOLDOWN_SEC
+    ):
+        return None
     try:
         from viral_agent.services.knowledge.rag_service import RAGService
 
         _RAG_SERVICE_SINGLETON = RAGService()
+        _RAG_SERVICE_INIT_FAILED_AT = 0.0
         return _RAG_SERVICE_SINGLETON
-    except Exception:  # noqa: BLE001 - 依赖/初始化问题统一标记
-        _RAG_SERVICE_INIT_FAILED = True
+    except Exception:  # noqa: BLE001 - 依赖/初始化问题进入冷却期，到期再探测
+        _RAG_SERVICE_INIT_FAILED_AT = time.monotonic()
         return None
 
 
