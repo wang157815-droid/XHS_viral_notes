@@ -7,6 +7,8 @@ import urllib.parse
 from pathlib import Path
 from urllib.parse import urlparse
 
+from loguru import logger
+
 import execjs
 from xhs_utils.cookie_util import trans_cookies
 
