@@ -6,7 +6,7 @@ requests>=2.31.0
 # 签名虽能通过"success=True"校验,但服务端内容风控会识别算法版本返回空结果(items=[])。
 # 切换到 xhshow 后诊断脚本验证能采到真实数据。
 # 如需回退老算法,设置 XHS_SIGN_BACKEND=execjs
-xhshow>=0.1.0
+xhshow==0.2.0
 loguru>=0.7.2
 python-dotenv>=1.0.0
 retry>=0.9.2

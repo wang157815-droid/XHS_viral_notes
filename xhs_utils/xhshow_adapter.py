@@ -1,4 +1,4 @@
-"""xhshow 签名适配层（阶段 4.1 hotfix 3）。
+"""xhshow 签名适配层（阶段 4.1 hotfix 3，兼容 0.1.x / 0.2.x）。
 
 背景：
 - 我们项目原本用 execjs 跑 static/xhs_xs_xsc_56.js 生成签名,
@@ -9,15 +9,19 @@
 - 本模块封装 xhshow,对外提供与旧 `generate_xs_xs_common` 等价的接口,
   通过环境变量 `XHS_SIGN_BACKEND=xhshow|execjs` 可切换(默认 xhshow)。
 
-签名 bug 修复：
-  参照 MediaCrawler/playwright_sign.py 的 `_patch_xhshow_a3_hash`,
-  修复 xhshow 对 GET 请求 a3_hash 计算错误(应使用完整 content_string 的 MD5,
-  而不是剥离 query 参数后的 URI)。issue: https://github.com/Cloxl/xhshow/issues/104
+版本兼容：
+- xhshow < 0.2.0：GET 请求走手动调内部 build_payload_array 的老路径，
+  并 monkey-patch 修复 a3_hash bug（issue #104）。
+- xhshow >= 0.2.0：GET 请求直接用 sign_headers_get 高层接口，
+  POST 请求用 sign_headers_post，两者均无需 patch。
+  0.2.0 在 build_payload_array 新增了 hex_md5_path 参数，
+  若仍需 patch（老版本降级场景），需匹配新签名。
 """
 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -29,7 +33,11 @@ _PATCHED = False
 
 
 def _patch_xhshow_a3_hash() -> None:
-    """为 GET 请求修复 xhshow 的 a3_hash 计算 bug（一次性 monkey-patch）。"""
+    """为 GET 请求修复 xhshow 的 a3_hash 计算 bug（一次性 monkey-patch）。
+    
+    自动检测 xhshow API 版本（0.1.x vs 0.2.x），匹配不同签名。
+    xhshow >= 0.2.0 已提供 sign_headers_get 高层接口，此 patch 仅作兜底。
+    """
     global _PATCHED
     if _PATCHED:
         return
@@ -41,38 +49,67 @@ def _patch_xhshow_a3_hash() -> None:
 
     _original_build = CryptoProcessor.build_payload_array
 
-    def _patched_build(
-        self,
-        hex_parameter,
-        a1_value,
-        app_identifier="xhs-pc-web",
-        string_param="",
-        timestamp=None,
-        sign_state=None,
-    ):
-        payload = _original_build(
+    # 探测 API 版本：0.2.0 新增了 hex_md5_path 参数
+    sig_params = list(inspect.signature(_original_build).parameters.keys())
+    is_v2_api = "hex_md5_path" in sig_params
+
+    if is_v2_api:
+        # xhshow >= 0.2.0 签名：(self, hex_parameter, hex_md5_path, a1_value, ...)
+        def _patched_build(
+            self,
+            hex_parameter: str,
+            hex_md5_path: str,
+            a1_value: str,
+            app_identifier: str = "xhs-pc-web",
+            string_param: str = "",
+            timestamp=None,
+            sign_state=None,
+        ):
+            payload = _original_build(
+                self, hex_parameter, hex_md5_path, a1_value,
+                app_identifier, string_param, timestamp, sign_state,
+            )
+            if "{" not in string_param:
+                correct_md5_hex = hashlib.md5(string_param.encode("utf-8")).hexdigest()
+                correct_md5_bytes = [
+                    int(correct_md5_hex[i : i + 2], 16) for i in range(0, 32, 2)
+                ]
+                seed_byte = payload[4]
+                ts_bytes = payload[8:16]
+                correct_a3_hash = self._custom_hash_v2(
+                    list(ts_bytes) + correct_md5_bytes
+                )
+                for i in range(16):
+                    payload[128 + i] = correct_a3_hash[i] ^ seed_byte
+            return payload
+    else:
+        # xhshow < 0.2.0 签名：(self, hex_parameter, a1_value, ...)
+        def _patched_build(
             self,
             hex_parameter,
             a1_value,
-            app_identifier,
-            string_param,
-            timestamp,
-            sign_state,
-        )
-        # 仅对 GET 请求修复（content_string 不含 "{"）
-        if "{" not in string_param:
-            correct_md5_hex = hashlib.md5(string_param.encode("utf-8")).hexdigest()
-            correct_md5_bytes = [
-                int(correct_md5_hex[i : i + 2], 16) for i in range(0, 32, 2)
-            ]
-            seed_byte = payload[4]
-            ts_bytes = payload[8:16]
-            correct_a3_hash = self._custom_hash_v2(
-                list(ts_bytes) + correct_md5_bytes
+            app_identifier="xhs-pc-web",
+            string_param="",
+            timestamp=None,
+            sign_state=None,
+        ):
+            payload = _original_build(
+                self, hex_parameter, a1_value, app_identifier,
+                string_param, timestamp, sign_state,
             )
-            for i in range(16):
-                payload[128 + i] = correct_a3_hash[i] ^ seed_byte
-        return payload
+            if "{" not in string_param:
+                correct_md5_hex = hashlib.md5(string_param.encode("utf-8")).hexdigest()
+                correct_md5_bytes = [
+                    int(correct_md5_hex[i : i + 2], 16) for i in range(0, 32, 2)
+                ]
+                seed_byte = payload[4]
+                ts_bytes = payload[8:16]
+                correct_a3_hash = self._custom_hash_v2(
+                    list(ts_bytes) + correct_md5_bytes
+                )
+                for i in range(16):
+                    payload[128 + i] = correct_a3_hash[i] ^ seed_byte
+            return payload
 
     CryptoProcessor.build_payload_array = _patched_build
     _PATCHED = True
@@ -100,7 +137,6 @@ def _build_get_sign_string(uri: str, data: Optional[Union[Dict, str]]) -> str:
 def is_xhshow_available() -> bool:
     try:
         import xhshow  # noqa: F401
-
         return True
     except Exception:
         return False
@@ -122,7 +158,13 @@ def sign_with_xhshow(
     cookie_str: str,
     method: str = "POST",
 ) -> Dict[str, str]:
-    """用 xhshow 生成签名 headers,返回 {x-s, x-t, x-s-common, x-b3-traceid}。"""
+    """用 xhshow 生成签名 headers，返回 {x-s, x-t, x-s-common, x-b3-traceid}。
+    
+    兼容策略：
+    - POST：始终用 sign_headers_post。
+    - GET + xhshow >= 0.2.0（有 sign_headers_get）：直接调高层接口。
+    - GET + xhshow < 0.2.0：使用手动内部调用路径（+a3_hash patch）。
+    """
     _patch_xhshow_a3_hash()
 
     from xhshow import Xhshow
@@ -137,8 +179,18 @@ def sign_with_xhshow(
             cookies=cookie_str,
             payload=payload,
         )
+
+    elif hasattr(client, "sign_headers_get"):
+        # xhshow >= 0.2.0：使用高层 GET 接口，内部已正确处理 query 参数和时间戳
+        params = data if isinstance(data, dict) else {}
+        headers = client.sign_headers_get(
+            uri=uri,
+            cookies=cookie_str,
+            params=params,
+        )
+
     else:
-        # GET:按 content_string 手工构建签名(和 MediaCrawler 一致)
+        # xhshow < 0.2.0：手动调内部方法（保留旧路径作兜底）
         content_string = _build_get_sign_string(uri, data)
         cookie_dict = client._parse_cookies(cookie_str)
         a1_value = cookie_dict.get("a1", "")
