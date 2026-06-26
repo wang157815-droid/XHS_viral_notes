@@ -16,6 +16,8 @@ ConversationIntent = Literal[
     "general_qa",
     "knowledge_qa",
     "xhs_analysis",
+    "comment_analysis",
+    "agent_task",
     "refine_canvas",
     "export",
     "web_research",
@@ -155,6 +157,8 @@ class ChatMessage:
     linked_task_id: Optional[str] = None
     debug: Optional[Dict[str, Any]] = None
     attachments: List[Dict[str, Any]] = field(default_factory=list)
+    # 自主 Agent 产出的结构化交付物（表格/分组要点卡片），前端 AgentArtifactCard 渲染
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -172,6 +176,7 @@ class ChatMessage:
             "linked_task_id": self.linked_task_id,
             "debug": self.debug,
             "attachments": list(self.attachments or []),
+            "artifacts": list(self.artifacts or []),
             "created_at": self.created_at,
         }
 
@@ -195,6 +200,7 @@ class ChatMessage:
             linked_task_id=data.get("linked_task_id"),
             debug=data.get("debug"),
             attachments=attachments,
+            artifacts=[a for a in (data.get("artifacts") or []) if isinstance(a, dict)],
             created_at=str(data.get("created_at") or utc_now_iso()),
         )
 

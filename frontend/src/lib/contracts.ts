@@ -151,6 +151,46 @@ export interface IntentClassification {
   clarification_question: string | null;
 }
 
+export interface AgentArtifactTable {
+  artifact_id: string;
+  type: "table";
+  title: string;
+  summary?: string;
+  columns: string[];
+  rows: string[][];
+}
+
+export interface AgentArtifactSection {
+  heading: string;
+  points: string[];
+  body?: string;
+}
+
+export interface AgentArtifactSections {
+  artifact_id: string;
+  type: "sections";
+  title: string;
+  summary?: string;
+  sections: AgentArtifactSection[];
+}
+
+export type AgentArtifact = AgentArtifactTable | AgentArtifactSections;
+
+export interface AgentPlanStep {
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "done" | "skip";
+}
+
+// 自主 Agent 运行时单步执行记录（前端从 agent_tool_call / agent_tool_result 状态事件累积）
+export interface AgentRunStep {
+  id: string;
+  iteration: number;
+  tool: string;
+  status: "running" | "ok" | "error";
+  summary?: string;
+}
+
 export interface ChatMessage {
   message_id: string;
   conversation_id: string;
@@ -165,6 +205,7 @@ export interface ChatMessage {
   linked_task_id?: string | null;
   debug?: Record<string, unknown> | null;
   attachments?: Array<Record<string, unknown>>;
+  artifacts?: AgentArtifact[];
   created_at: string;
 }
 
@@ -182,7 +223,18 @@ export interface SendConversationMessageResponse {
 
 export type ConversationStreamEvent =
   | { type: "user_message"; user_message: ChatMessage }
-  | { type: "status"; status: string; message?: string; tool?: string }
+  | {
+      type: "status";
+      status: string;
+      message?: string;
+      tool?: string;
+      ok?: boolean;
+      summary?: string;
+      iteration?: number;
+      plan?: AgentPlanStep[];
+      arguments?: Record<string, unknown>;
+    }
+  | { type: "artifact"; artifact: AgentArtifact; iteration?: number }
   | { type: "tool_selected"; tool: { name: string; arguments?: Record<string, unknown>; confidence?: number; reason?: string } }
   | { type: "message_start"; message_id: string }
   | { type: "message_delta"; message_id: string; delta: string }

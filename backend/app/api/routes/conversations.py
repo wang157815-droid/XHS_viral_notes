@@ -216,6 +216,35 @@ def _upload_subpath_for_user(uid: str, subpath: str) -> Path:
     return path
 
 
+@router.get("/reports/content")
+async def download_agent_report(
+    subpath: str = Query(..., description="export_report 工具返回的 subpath（{owner}/{filename}）"),
+    current_user: dict = Depends(get_current_user),
+):
+    """下载自主分析 Agent 生成的报告（按 owner 隔离，仅本人可下）。"""
+    _ensure_conversation_enabled()
+    uid = _user_id(current_user)
+    sub = (subpath or "").strip().replace("\\", "/")
+    if not sub or ".." in sub:
+        raise HTTPException(status_code=400, detail="无效的 subpath")
+    safe_owner = "".join(c for c in uid if c.isalnum() or c in "-_") or "anon"
+    prefix = f"{safe_owner}/"
+    if not sub.startswith(prefix) or len(sub) <= len(prefix):
+        raise HTTPException(status_code=403, detail="无权访问该报告")
+    path = _repo_root() / "datas" / "agent_reports" / sub
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="报告不存在")
+    ext = path.suffix.lower()
+    guessed = {
+        ".md": "text/markdown; charset=utf-8",
+        ".markdown": "text/markdown; charset=utf-8",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".txt": "text/plain; charset=utf-8",
+    }
+    mime = guessed.get(ext, "application/octet-stream")
+    return FileResponse(path, filename=path.name, media_type=mime)
+
+
 @router.get("/uploads/content")
 async def download_conversation_upload(
     subpath: str = Query(..., description="上传接口返回的 storage_subpath"),

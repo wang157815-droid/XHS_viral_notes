@@ -29,6 +29,9 @@ import {
   uploadConversationFile,
 } from "@/lib/conversation-api";
 import type {
+  AgentArtifact,
+  AgentPlanStep,
+  AgentRunStep,
   CanvasSchema,
   ChatMessage,
   ConversationStreamEvent,
@@ -275,6 +278,10 @@ export default function WorkspacePage() {
       let assistantInserted = false;
       let thinkContent = "";
       let thinkDurationMs = 0;
+      // 自主 Agent 运行态累积：执行步骤 / 计划 / 流式产物，驱动步骤条与产物卡可视化
+      let agentSteps: AgentRunStep[] = [];
+      let agentPlan: AgentPlanStep[] = [];
+      let streamedArtifacts: AgentArtifact[] = [];
       try {
         if (!conversationId) {
           const surface = surfaceFromQuery(searchParams.get("surface")) ?? "insight";
@@ -318,22 +325,34 @@ export default function WorkspacePage() {
         appendConversationMessages([optimisticMessage]);
 
         // 积累本轮思考内容（供最终消息渲染思考框用）
-        const makeAssistantMessage = (patch: Partial<ChatMessage> = {}): ChatMessage => ({
-          message_id: assistantMessageId,
-          conversation_id: currentConversationId,
-          role: "assistant",
-          content: assistantContent,
-          intent: "unknown",
-          intent_confidence: 0,
-          clarification_needed: false,
-          clarification_question: null,
-          citations: [],
-          task_handoff: null,
-          linked_task_id: taskId,
-          debug: { streaming: true, status: "thinking" },
-          created_at: new Date().toISOString(),
-          ...patch,
-        });
+        const makeAssistantMessage = (patch: Partial<ChatMessage> = {}): ChatMessage => {
+          const { debug: patchDebug, artifacts: patchArtifacts, ...restPatch } = patch;
+          const agentDebug: Record<string, unknown> = {};
+          if (agentSteps.length) agentDebug.agent_steps = agentSteps;
+          if (agentPlan.length) agentDebug.agent_plan = agentPlan;
+          return {
+            message_id: assistantMessageId,
+            conversation_id: currentConversationId,
+            role: "assistant",
+            content: assistantContent,
+            intent: "unknown",
+            intent_confidence: 0,
+            clarification_needed: false,
+            clarification_question: null,
+            citations: [],
+            task_handoff: null,
+            linked_task_id: taskId,
+            debug: {
+              streaming: true,
+              status: "thinking",
+              ...agentDebug,
+              ...((patchDebug as Record<string, unknown> | undefined) ?? {}),
+            },
+            artifacts: streamedArtifacts.length ? streamedArtifacts : patchArtifacts,
+            created_at: new Date().toISOString(),
+            ...restPatch,
+          };
+        };
         const upsertAssistant = (message: ChatMessage) => {
           if (assistantInserted) {
             replaceConversationMessage(assistantMessageId, message);
@@ -344,11 +363,24 @@ export default function WorkspacePage() {
           assistantMessageId = message.message_id;
         };
         const handleFinalAssistant = (message: ChatMessage) => {
-          // 将本轮积累的思考内容合并进 debug，供渲染思考框使用
-          const enriched: ChatMessage =
-            thinkContent
-              ? { ...message, debug: { ...(message.debug ?? {}), think_content: thinkContent, think_duration_ms: thinkDurationMs } }
-              : message;
+          // 将本轮积累的思考内容 + 自主 Agent 执行步骤/计划合并进 debug，供渲染
+          const mergedDebug: Record<string, unknown> = { ...(message.debug ?? {}) };
+          if (thinkContent) {
+            mergedDebug.think_content = thinkContent;
+            mergedDebug.think_duration_ms = thinkDurationMs;
+          }
+          if (agentSteps.length) mergedDebug.agent_steps = agentSteps;
+          if (agentPlan.length) mergedDebug.agent_plan = agentPlan;
+          const enriched: ChatMessage = {
+            ...message,
+            debug: mergedDebug,
+            artifacts:
+              message.artifacts && message.artifacts.length
+                ? message.artifacts
+                : streamedArtifacts.length
+                  ? streamedArtifacts
+                  : message.artifacts,
+          };
           upsertAssistant(enriched);
           const handoff = message.task_handoff;
           if (handoff?.task_id) {
@@ -389,11 +421,51 @@ export default function WorkspacePage() {
               return;
             }
             if (event.type === "status") {
+              // 自主 Agent 运行态：累积执行步骤与计划
+              if (event.status === "agent_tool_call") {
+                agentSteps = [
+                  ...agentSteps,
+                  {
+                    id: `step_${agentSteps.length + 1}`,
+                    iteration: event.iteration ?? 0,
+                    tool: event.tool ?? "",
+                    status: "running",
+                  },
+                ];
+              } else if (event.status === "agent_tool_result") {
+                let idx = -1;
+                for (let i = agentSteps.length - 1; i >= 0; i -= 1) {
+                  if (agentSteps[i].status === "running") {
+                    idx = i;
+                    break;
+                  }
+                }
+                if (idx >= 0) {
+                  agentSteps = agentSteps.map((step, i) =>
+                    i === idx
+                      ? { ...step, status: event.ok === false ? "error" : "ok", summary: event.summary }
+                      : step,
+                  );
+                }
+              } else if (event.status === "agent_plan" && Array.isArray(event.plan)) {
+                agentPlan = event.plan;
+              }
+              const agentLabel =
+                event.status === "agent_tool_call"
+                  ? `正在调用工具 ${event.tool ?? ""}…`
+                  : event.status === "agent_tool_result"
+                    ? `工具 ${event.tool ?? ""} 完成`
+                    : undefined;
               const label =
                 event.status === "retrieving_knowledge"
                   ? "正在检索知识库..."
-                  : event.message || "正在生成回答...";
-              upsertAssistant(makeAssistantMessage({ content: "", debug: { streaming: true, status: event.status, label } }));
+                  : event.message || agentLabel || "正在生成回答...";
+              upsertAssistant(makeAssistantMessage({ content: "", debug: { status: event.status, label } }));
+              return;
+            }
+            if (event.type === "artifact") {
+              streamedArtifacts = [...streamedArtifacts, event.artifact];
+              upsertAssistant(makeAssistantMessage({ content: assistantContent }));
               return;
             }
             if (event.type === "tool_selected") {

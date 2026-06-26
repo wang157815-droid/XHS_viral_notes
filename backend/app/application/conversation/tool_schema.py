@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 ConversationToolName = Literal[
     "start_xhs_analysis",
     "start_comment_analysis",
+    "run_agent_task",
     "regenerate_canvas_module",
     "answer_with_knowledge",
     "export_task",
@@ -82,6 +83,7 @@ class ConversationStreamEvent:
 _TOOL_NAMES = {
     "start_xhs_analysis",
     "start_comment_analysis",
+    "run_agent_task",
     "regenerate_canvas_module",
     "answer_with_knowledge",
     "export_task",
@@ -149,6 +151,20 @@ CONVERSATION_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "confirm_new_task": {"type": "boolean"},
                 },
                 "required": ["keywords"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_agent_task",
+            "description": "进入自主规划 Agent，按用户的灵活/多变分析需求自行规划并调用工具（搜索笔记、取详情、取评论、知识库、联网、导出报告等）执行，最后给出分析结论。适用于固定 workflow（爆文模型/评论报告）无法覆盖的任意分析与洞察任务，如『检索近半年互动量1000+的某品牌笔记并逐条拆解卖点与引流钩子』。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "用户的完整分析目标（自然语言）"},
+                },
+                "required": ["goal"],
             },
         },
     },

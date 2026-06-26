@@ -3,9 +3,10 @@
 职责：对规则层无法高置信度判断的输入，调用 LLM 返回结构化 JSON，包含
 intent / confidence / slots / missing_fields / clarification_question。
 
-意图空间（7 个）：
-  xhs_analysis      — 发起新爆文采集分析任务
-  comment_analysis  — 发起评论分析任务（采集评论区高赞评论并总结洞察，导出 Excel）
+意图空间（8 个）：
+  xhs_analysis      — 发起"标准爆文模型矩阵"分析任务（成熟 workflow）
+  comment_analysis  — 发起"标准评论洞察报告"任务（成熟 workflow，导出 Excel）
+  agent_task        — 灵活/非标的自主分析任务（workflow 覆盖不了，交给自主 Agent 规划执行）
   refine_canvas     — 调整当前 Canvas 某模块
   export            — 导出任务结果
   knowledge_qa      — 查询知识库 / SOP / 文档
@@ -30,15 +31,32 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
 
 ## 意图定义与触发规则
 
-### xhs_analysis（发起爆文采集分析任务）
-触发条件（必须同时满足 A 和 B）：
+### xhs_analysis（发起"标准爆文模型矩阵"分析任务）
+**只在用户想要标准的"爆文模型 / 内容矩阵"产出时触发**（这是一条成熟的固定流水线）。
+触发条件（必须同时满足 A、B、C）：
   A. 有明确的执行动词：帮我 / 搜索 / 采集 / 分析 / 生成 / 跑一下 / 给我 / 找 / 做一个
   B. 有具体的搜索目标词：产品名 / 品牌名 / 品类词（注意："模型""爆文""洞察""爆款"等系统功能词本身不是搜索目标）
-禁止触发：
-  - 用户在询问系统能力（如"你可以做爆文分析吗""系统支持搜索吗"）
+  C. 用户要的就是"爆文模型 / 爆款模型 / 内容矩阵 / 爆文分析"这类标准产出，没有提出更细的定制化分析要求
+禁止触发（务必改判到其它意图）：
+  - 用户在询问系统能力（如"你可以做爆文分析吗""系统支持搜索吗"）→ general_qa
   - 只提到功能词但没有实际产品/品牌/品类词
   - 已有 active_task_id 且未明确说"重新/新建/换一个"
-  - 用户明确提到"评论""评论区""高赞评论"——那应触发 comment_analysis
+  - 用户明确提到"评论""评论区""高赞评论" → comment_analysis
+  - **用户提出了定制化 / 多步骤 / 非标的分析要求**（如"逐条罗列并拆解卖点/引流钩子"、
+    "做竞品舆情对比"、"按互动量/时间等复杂条件筛选后洞察"、"达人/账号匹配"、
+    "整理成某种特定结构/报告"）→ **agent_task**（这些不是标准爆文模型流水线能覆盖的）
+
+### agent_task（灵活/非标自主分析任务）
+触发条件：用户有明确的分析/检索/洞察执行意图，但需求是**定制化、多变、需要多步规划**的，
+固定的"爆文模型 workflow"或"评论报告 workflow"无法直接覆盖。典型特征：
+  - 带复杂筛选条件的检索 + 逐条拆解（如"近半年互动量1000+的X品牌笔记，逐条拆解卖点与引流钩子"）
+  - 竞品舆情对比、跨多笔记的横向归纳
+  - 达人 / 账号匹配、选题挖掘等非标洞察
+  - 用户临时提出的、明显超出"生成爆文模型/评论报告"范围的新分析需求
+禁止触发：
+  - 纯能力询问 / 概念解释（→ general_qa）
+  - 标准爆文模型需求（→ xhs_analysis）/ 标准评论洞察需求（→ comment_analysis）
+关键词提取：把可识别的品牌/品类/产品词放入 slots.keywords（供下游参考，可为空）。
 
 ### comment_analysis（发起评论分析任务）
 触发条件（必须同时满足 A 和 B）：
@@ -166,6 +184,22 @@ sample_count（采集数量）：
 示例16（comment_analysis - 引号列出多关键词，部分带空格后缀）：
 输入：帮我采集"雅马哈电钢琴 键盘手感"和"雅马哈电钢琴 音源评价"这两个关键词的评论
 输出：{"intent":"comment_analysis","confidence":0.97,"slots":{"keywords":["雅马哈电钢琴 键盘手感","雅马哈电钢琴 音源评价"],"top_notes":0,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户用引号明确列出2个关键词，带空格后缀原样保留"}
+
+示例17（agent_task - Fazer 定制化逐条拆解）：
+输入：检索小红书近半年内、互动量1000+的Fazer品牌相关的所有笔记，逐条罗列并重点拆解其产品系列差异化卖点、爆款引流钩子
+输出：{"intent":"agent_task","confidence":0.93,"slots":{"keywords":["Fazer"],"time_range":"半年内","min_interaction":"1000+"},"missing_fields":[],"clarification_question":null,"reason":"带复杂筛选条件的检索+逐条拆解卖点与引流钩子，属定制化分析，固定爆文模型 workflow 覆盖不了"}
+
+示例18（agent_task - 竞品舆情对比）：
+输入：帮我对比一下完美日记和花西子在小红书上的口碑差异，重点看用户吐槽点
+输出：{"intent":"agent_task","confidence":0.9,"slots":{"keywords":["完美日记","花西子"]},"missing_fields":[],"clarification_question":null,"reason":"跨品牌竞品舆情对比+横向归纳，属非标自主分析"}
+
+示例19（xhs_analysis - 标准爆文模型，仍走固定 workflow）：
+输入：帮我搜索格力空调的爆文模型
+输出：{"intent":"xhs_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"competitor_keywords":[],"skip_competitor":false,"time_range":null,"note_type":null,"min_interaction":null},"missing_fields":[],"clarification_question":null,"reason":"要的是标准爆文模型产出，无定制化要求"}
+
+示例20（agent_task - 达人匹配/选题挖掘）：
+输入：根据「儿童钢琴」这个方向，帮我挖一批适合投放的小红书达人和可切入的选题
+输出：{"intent":"agent_task","confidence":0.88,"slots":{"keywords":["儿童钢琴"]},"missing_fields":[],"clarification_question":null,"reason":"达人匹配+选题挖掘属非标洞察，需自主规划"}
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 
@@ -304,7 +338,7 @@ class IntentClassifier:
             else:
                 data = {}
 
-        valid_intents = {"xhs_analysis", "comment_analysis", "refine_canvas", "export", "knowledge_qa", "general_qa", "unknown"}
+        valid_intents = {"xhs_analysis", "comment_analysis", "agent_task", "refine_canvas", "export", "knowledge_qa", "general_qa", "unknown"}
         intent = str(data.get("intent") or "general_qa")
         if intent not in valid_intents:
             intent = "general_qa"

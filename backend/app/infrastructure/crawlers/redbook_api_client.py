@@ -54,6 +54,15 @@ class RedbookApiClient:
         }
 
     def _log_remaining(self, resp_json: Dict[str, Any]) -> None:
+        # 业务错误优先：err_no != 0 表示第三方服务端处理失败（data 通常为 null），
+        # 此时不会带 count，直接把真实 message 打出来，避免误判为"0 条结果"。
+        api_err = self.extract_api_error(resp_json)
+        if api_err:
+            logger.warning(
+                f"[RedbookApi] 接口返回业务错误 err_no={resp_json.get('err_no')} "
+                f"message={api_err!r}（data 为空，本次无数据）"
+            )
+            return
         remaining = resp_json.get("count")
         if remaining is not None:
             logger.info(f"[RedbookApi] 数据请求总次数剩余{remaining}次")
@@ -213,6 +222,23 @@ class RedbookApiClient:
         raise last_exc
 
     # ── 解析方法 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def extract_api_error(response: Dict[str, Any]) -> Optional[str]:
+        """三方接口业务错误检测。
+
+        成功响应：err_no==0 且 message=="success"。
+        失败响应：err_no!=0（如服务端崩溃/风控/上游失败），data 通常为 null。
+
+        Returns:
+            错误信息字符串（err_no != 0 时），否则 None。
+        """
+        if not isinstance(response, dict):
+            return "响应格式异常（非 JSON 对象）"
+        err_no = response.get("err_no")
+        if err_no in (0, None):
+            return None
+        return str(response.get("message") or f"err_no={err_no}")
 
     @staticmethod
     def parse_search_notes(response: Dict[str, Any]) -> List[Dict[str, Any]]:

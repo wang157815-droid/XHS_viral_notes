@@ -33,7 +33,7 @@ from .task_service import task_service
 from .conversation.intent_classifier import IntentClassifier, intent_classifier
 from .conversation.intent_router import IntentRouter, intent_router
 from .conversation.knowledge_qa_service import KnowledgeQAService
-from .conversation.tool_agent import ConversationToolAgent, conversation_tool_agent
+from .conversation.tool_agent import ANALYSIS_CHOICE_TOOL, ConversationToolAgent, conversation_tool_agent
 from .conversation.tool_executor import (
     ConversationToolExecutionContext,
     ConversationToolExecutor,
@@ -505,6 +505,20 @@ class ConversationService:
                 restrict_knowledge_doc_ids=restrict_docs,
                 owner_user_id=owner_user_id,
                 attachments=attachments,
+            ):
+                yield event
+            return
+        if call.name == "run_agent_task":
+            async for event in self._stream_agent_task(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                intent=intent,
+                call=call,
+                content=content,
+                recent_messages=recent_messages,
+                current_user=current_user,
+                advanced_config=advanced_config or {},
+                active_task_id=active_task,
             ):
                 yield event
             return
@@ -1006,6 +1020,145 @@ class ConversationService:
                     yield {"type": "conversation_updated", "conversation": updated.to_dict()}
                 return
 
+    async def _stream_agent_task(
+        self,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        intent: IntentClassification,
+        call: ConversationToolCall,
+        content: str,
+        recent_messages: List[Dict[str, Any]],
+        current_user: Dict[str, Any],
+        advanced_config: Dict[str, Any],
+        active_task_id: Optional[str],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """流式执行自主规划 Agent：tool_call/observation 作为 status 事件，最终答案流式 Markdown。"""
+        if not settings.agent_runtime_enabled:
+            async for event in self._stream_general_answer(
+                conversation_id, owner_user_id, intent, recent_messages, active_task_id
+            ):
+                yield event
+            return
+
+        from .agent_runtime import ToolContext as RuntimeToolContext, build_runtime
+        from .agent_runtime.runtime import AgentRunTrace
+
+        goal = str(call.arguments.get("goal") or content)
+        # 清理可能残留的选择反问 pending
+        self.store.update_conversation(conversation_id, metadata_patch={"pending_tool_decision": None})
+
+        runtime = build_runtime()
+        rt_ctx = RuntimeToolContext(
+            owner_user_id=owner_user_id,
+            conversation_id=conversation_id,
+            current_user=current_user,
+            advanced_config=advanced_config or {},
+        )
+        trace = AgentRunTrace()
+        yield {"type": "status", "status": "agent_started", "message": "已进入 AI 自主分析，开始规划..."}
+
+        content_parts: List[str] = []
+        collected_artifacts: List[Dict[str, Any]] = []
+        message_id: Optional[str] = None
+        try:
+            async for event in runtime.run_stream(
+                goal=goal, ctx=rt_ctx, history=recent_messages, trace=trace
+            ):
+                etype = event.get("type")
+                if etype == "status":
+                    yield event
+                    continue
+                if etype == "artifact":
+                    art = event.get("artifact")
+                    if isinstance(art, dict):
+                        collected_artifacts.append(art)
+                    yield event
+                    continue
+                if etype == "message_start":
+                    message_id = str(event.get("message_id") or new_id("msg"))
+                    yield event
+                    continue
+                if etype == "message_delta":
+                    content_parts.append(str(event.get("delta") or ""))
+                    yield event
+                    continue
+                if etype == "message_error":
+                    yield event
+                    continue
+                if etype == "message_done":
+                    final_content = str(event.get("content") or "".join(content_parts)).strip()
+                    created = rt_ctx.extra.get("created_tasks") or []
+                    artifacts = collected_artifacts or [
+                        a for a in (rt_ctx.extra.get("artifacts") or []) if isinstance(a, dict)
+                    ]
+                    assistant = ChatMessage(
+                        message_id=message_id or str(event.get("message_id") or new_id("msg")),
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=final_content or "我已完成规划，但未生成有效结论，请补充更具体的需求。",
+                        intent=intent.intent,
+                        intent_confidence=intent.confidence,
+                        linked_task_id=created[0]["task_id"] if created else active_task_id,
+                        artifacts=artifacts,
+                        debug={
+                            "intent_reason": intent.reason,
+                            "tool_name": "run_agent_task",
+                            "streamed": True,
+                            "agent_iterations": trace.iterations,
+                            "agent_tool_calls": trace.tool_calls,
+                            "agent_stop_reason": trace.stop_reason,
+                            "agent_artifacts": len(artifacts),
+                            "created_tasks": created,
+                        },
+                    )
+                    if created:
+                        first = created[0]
+                        assistant.task_handoff = TaskHandoff(
+                            task_id=first["task_id"],
+                            status="running",
+                            raw_input=goal,
+                            keywords=first.get("keywords") or [],
+                            canvas_url_hint=(
+                                f"/workspace?task={first['task_id']}"
+                                if first.get("type") == "viral_analysis"
+                                else None
+                            ),
+                        )
+                    self.store.append_message(conversation_id, assistant)
+                    self._maybe_update_summary(conversation_id)
+                    refreshed = self.store.get(conversation_id)
+                    yield {
+                        **event,
+                        "message_id": assistant.message_id,
+                        "content": assistant.content,
+                        "assistant_message": assistant.to_dict(),
+                        "conversation": refreshed.to_dict() if refreshed else None,
+                        "intent": intent.to_dict(),
+                    }
+                    try:
+                        await asyncio.wait_for(self._auto_title_if_needed(conversation_id), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("[auto-title] LLM 起名超时，保持原标题")
+                    updated = self.store.get(conversation_id)
+                    if updated:
+                        yield {"type": "conversation_updated", "conversation": updated.to_dict()}
+                    return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[conversation_service] _stream_agent_task failed: {}", exc)
+            err = self._assistant(
+                conversation_id, intent, f"自主分析执行失败：{exc}"
+            )
+            self.store.append_message(conversation_id, err)
+            refreshed = self.store.get(conversation_id)
+            yield {
+                "type": "assistant_message",
+                "assistant_message": err.to_dict(),
+                "conversation": refreshed.to_dict() if refreshed else None,
+                "intent": intent.to_dict(),
+            }
+            return
+
     async def _stream_knowledge_answer(
         self,
         conversation_id: str,
@@ -1364,6 +1517,31 @@ class ConversationService:
         except Exception:
             return None
 
+    @staticmethod
+    def _parse_analysis_mode(content: str) -> Optional[str]:
+        """解析用户对『workflow vs AI 自主』反问的回复，返回 'workflow' / 'agent' / None。"""
+        text = (content or "").strip().lower()
+        if not text:
+            return None
+        agent_signals = (
+            "自主", "ai自主", "ai 自主", "生成式", "灵活", "agent", "智能体",
+            "第二", "方案二", "方案2", "选2", "选二", "②",
+        )
+        workflow_signals = (
+            "workflow", "工作流", "定制", "标准", "成熟", "流水线", "固定流程", "走流程",
+            "第一", "方案一", "方案1", "选1", "选一", "①",
+        )
+        # 纯数字 / 单字快捷回复
+        if text in {"2", "二", "b"}:
+            return "agent"
+        if text in {"1", "一", "a"}:
+            return "workflow"
+        if any(sig in text for sig in agent_signals):
+            return "agent"
+        if any(sig in text for sig in workflow_signals):
+            return "workflow"
+        return None
+
     def _resolve_pending_tool_call(
         self,
         metadata: Dict[str, Any],
@@ -1389,6 +1567,39 @@ class ConversationService:
             "min_sample_count",
         }
         CONFIRMATION_FIELDS = {"risk_confirmation", "competitor_confirmation"}
+
+        # ── workflow vs AI 自主 选择反问的回复解析 ──────────────────────────
+        if pending_tool == ANALYSIS_CHOICE_TOOL:
+            mode = self._parse_analysis_mode(content)
+            workflow_tool = str(pending_args.get("workflow_tool") or "")
+            workflow_arguments = pending_args.get("workflow_arguments")
+            workflow_arguments = workflow_arguments if isinstance(workflow_arguments, dict) else {}
+            agent_goal = str(pending_args.get("agent_goal") or content)
+            if mode == "agent":
+                return ConversationToolCall(
+                    name="run_agent_task",
+                    arguments={"goal": agent_goal},
+                    confidence=0.82,
+                    reason="user chose AI 自主分析",
+                )
+            if mode == "workflow" and workflow_tool:
+                return ConversationToolCall(
+                    name=workflow_tool,
+                    arguments={**workflow_arguments, "confirm_new_task": True},
+                    confidence=0.82,
+                    reason="user chose 定制 workflow",
+                )
+            # 用户答非所问但表达了新的明确工具意图 → 用新意图（注意排除又一次的选择反问）
+            if selected and selected.name not in ("answer_general", "ask_clarification"):
+                return selected
+            # 仍然含糊：默认走成熟 workflow（最小惊讶），保持原行为
+            if workflow_tool:
+                return ConversationToolCall(
+                    name=workflow_tool,
+                    arguments={**workflow_arguments, "confirm_new_task": True},
+                    confidence=0.6,
+                    reason="ambiguous choice reply → default workflow",
+                )
 
         if pending_tool == "regenerate_canvas_module":
             if selected and selected.name != "answer_general":

@@ -18,6 +18,26 @@ class Settings(BaseModel):
     conversation_knowledge_qa_enabled: bool = _env_bool("CONVERSATION_KNOWLEDGE_QA_ENABLED", True)
 
     # ------------------------------------------------------------------ #
+    # 自主规划 Agent 运行时（phase3）
+    # ------------------------------------------------------------------ #
+    # 总开关：关闭后 agent_task 意图降级为普通问答，xhs/comment 不再反问执行模式
+    agent_runtime_enabled: bool = _env_bool("AGENT_RUNTIME_ENABLED", True)
+    # 命中成熟 workflow（爆文/评论分析）时是否反问"定制 workflow vs AI 自主分析"
+    agent_runtime_offer_choice: bool = _env_bool("AGENT_RUNTIME_OFFER_CHOICE", True)
+    # loop 护栏
+    agent_runtime_max_iters: int = int(os.getenv("AGENT_RUNTIME_MAX_ITERS", "8"))
+    agent_runtime_tool_budget: int = int(os.getenv("AGENT_RUNTIME_TOOL_BUDGET", "16"))
+    # 昂贵工具"调用次数"上限（批量工具算 1 次；批量化后此值不再是瓶颈，作安全上限）
+    agent_runtime_max_expensive_calls: int = int(os.getenv("AGENT_RUNTIME_MAX_EXPENSIVE_CALLS", "12"))
+    # 昂贵工具"单位"总预算（≈上游 API 请求数）：单位制让逐条拆解 N 篇不被按次数误伤
+    agent_runtime_expensive_unit_budget: int = int(os.getenv("AGENT_RUNTIME_EXPENSIVE_UNIT_BUDGET", "60"))
+    # 单工具超时按成本分级：cheap（知识库/联网检索）短，expensive（三方采集/多模态）长。
+    # 旧变量 agent_runtime_per_tool_timeout 保留为未分级时的兜底默认。
+    agent_runtime_per_tool_timeout: float = float(os.getenv("AGENT_RUNTIME_PER_TOOL_TIMEOUT", "120"))
+    agent_runtime_per_tool_timeout_cheap: float = float(os.getenv("AGENT_RUNTIME_PER_TOOL_TIMEOUT_CHEAP", "60"))
+    agent_runtime_per_tool_timeout_expensive: float = float(os.getenv("AGENT_RUNTIME_PER_TOOL_TIMEOUT_EXPENSIVE", "200"))
+
+    # ------------------------------------------------------------------ #
     # 企业微信回调配置
     # ------------------------------------------------------------------ #
     # 企微后台「开发者接口」→「接收消息」中填写的 Token

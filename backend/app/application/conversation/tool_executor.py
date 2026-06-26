@@ -71,6 +71,8 @@ class ConversationToolExecutor:
             return await self._start_xhs_analysis(call, ctx)
         if call.name == "start_comment_analysis":
             return await self._start_comment_analysis(call, ctx)
+        if call.name == "run_agent_task":
+            return await self._run_agent_task(call, ctx)
         if call.name == "regenerate_canvas_module":
             return await self._regenerate_canvas_module(call, ctx)
         if call.name == "answer_with_knowledge":
@@ -367,6 +369,65 @@ class ConversationToolExecutor:
             },
         )
         msg.task_handoff = handoff
+        return msg
+
+    async def _run_agent_task(
+        self,
+        call: ConversationToolCall,
+        ctx: ConversationToolExecutionContext,
+    ) -> ChatMessage:
+        """非流式执行自主规划 Agent（用于 handle_user_message 非流式入口）。
+
+        流式入口在 conversation_service.handle_user_message_stream 中单独特判处理。
+        """
+        if not settings.agent_runtime_enabled:
+            return await self._answer_general(call, ctx)
+        from ..agent_runtime import ToolContext as RuntimeToolContext, build_runtime
+
+        goal = str(call.arguments.get("goal") or ctx.content)
+        runtime = build_runtime()
+        rt_ctx = RuntimeToolContext(
+            owner_user_id=ctx.owner_user_id,
+            conversation_id=ctx.conversation_id,
+            current_user=ctx.current_user,
+            advanced_config=ctx.advanced_config or {},
+        )
+        try:
+            trace = await runtime.run(goal=goal, ctx=rt_ctx, history=ctx.recent_messages)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[tool_executor] run_agent_task failed: {}", exc)
+            return self._assistant(
+                ctx,
+                f"自主分析执行失败：{exc}",
+                debug={"tool_name": call.name, "agent_error": str(exc)},
+            )
+        ctx.store.update_conversation(ctx.conversation_id, metadata_patch={"pending_tool_decision": None})
+        content = trace.final_content or "我已完成规划，但未生成有效结论，请补充更具体的需求。"
+        created = rt_ctx.extra.get("created_tasks") or []
+        msg = self._assistant(
+            ctx,
+            content,
+            linked_task_id=created[0]["task_id"] if created else None,
+            debug={
+                "tool_name": call.name,
+                "agent_iterations": trace.iterations,
+                "agent_tool_calls": trace.tool_calls,
+                "agent_stop_reason": trace.stop_reason,
+                "created_tasks": created,
+            },
+        )
+        if created:
+            from ...domain.conversation import TaskHandoff
+            first = created[0]
+            msg.task_handoff = TaskHandoff(
+                task_id=first["task_id"],
+                status="running",
+                raw_input=goal,
+                keywords=first.get("keywords") or [],
+                canvas_url_hint=(
+                    f"/workspace?task={first['task_id']}" if first.get("type") == "viral_analysis" else None
+                ),
+            )
         return msg
 
     async def _regenerate_canvas_module(
