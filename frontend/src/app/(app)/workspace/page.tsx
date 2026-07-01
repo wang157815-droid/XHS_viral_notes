@@ -133,13 +133,29 @@ export default function WorkspacePage() {
   }, [toast]);
 
   // SSE conversation_message：后台 Skill 完成后的消息（如评论分析下载链接）
-  // 去重：SSE 刷新/重连后 backlog 重放会再次触发此 effect，需跳过已在会话中存在的消息
+  // 去重：SSE 刷新/重连后 backlog 重放会再次触发此 effect，需跳过已在会话中存在的消息。
+  // 注意 message_id 在这里不可靠——SSE 事件里的 message_id 是临时 event_id
+  // （见 event-reducer.ts 的 conversation_message 分支），而任务完成后落库回写的
+  // 消息（如 comment_pipeline._append_completion_message）用的是另一套真实
+  // message_id。刷新页面时 REST 历史已经带着落库消息，SSE backlog 重放会用不同的
+  // message_id 再送一次同样内容的事件，仅比 message_id 会漏判，需按
+  // linked_task_id + role + content 做内容级去重兜底。
   useEffect(() => {
     if (!streamState.pendingMessages || streamState.pendingMessages.length === 0) return;
     const existingIds = new Set(messages.map((m) => m.message_id));
-    const toAdd = streamState.pendingMessages
-      .filter((m) => !existingIds.has(m.message_id))
-      .map((m) => (m.conversation_id ? m : { ...m, conversation_id: conversationId ?? "" }));
+    const seenSignatures = new Set(
+      messages
+        .filter((m) => m.linked_task_id)
+        .map((m) => `${m.linked_task_id}:${m.role}:${m.content}`),
+    );
+    const toAdd: ChatMessage[] = [];
+    for (const m of streamState.pendingMessages) {
+      if (existingIds.has(m.message_id)) continue;
+      const signature = m.linked_task_id ? `${m.linked_task_id}:${m.role}:${m.content}` : null;
+      if (signature && seenSignatures.has(signature)) continue;
+      if (signature) seenSignatures.add(signature);
+      toAdd.push(m.conversation_id ? m : { ...m, conversation_id: conversationId ?? "" });
+    }
     if (toAdd.length > 0) appendConversationMessages(toAdd);
   }, [streamState.pendingMessages]); // eslint-disable-line react-hooks/exhaustive-deps
 

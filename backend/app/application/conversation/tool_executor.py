@@ -253,6 +253,7 @@ class ConversationToolExecutor:
             raw_input=ctx.content,
             keywords=keywords,
             canvas_url_hint=f"/workspace?task={result.record.task_id}",
+            task_type=result.record.task_type,
         )
         message = self._assistant(
             ctx,
@@ -347,13 +348,15 @@ class ConversationToolExecutor:
             raw_input=ctx.content,
             keywords=keywords,
             canvas_url_hint=None,
+            task_type=result.record.task_type,
         )
+        from ..comment_pipeline import describe_collection_plan
         kw_display = "".join(f"「{kw}」" for kw in keywords)
         msg = self._assistant(
             ctx,
             (
-                f"好的，已为 {kw_display} 启动**评论分析任务**（ID: `{result.record.task_id}`）。\n"
-                f"正在采集{'全部' if not top_notes else f' Top {top_notes} '}条笔记，每条笔记取 Top {top_comments} 条高赞评论。\n"
+                f"好的，已为 {kw_display} 启动**评论分析任务**。\n"
+                f"{describe_collection_plan(top_notes, top_comments)}。\n"
                 f"分析完成后会自动推送下载链接，稍等片刻。"
             ),
             linked_task_id=result.record.task_id,

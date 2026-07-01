@@ -149,11 +149,11 @@ sample_count（采集数量）：
 
 示例12（comment_analysis - 分析评论区）：
 输入：帮我分析一下防晒的评论区
-输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["防晒"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户明确要分析评论区，关键词为防晒"}
+输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["防晒"],"top_notes":50,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户明确要分析评论区，关键词为防晒"}
 
 示例13（comment_analysis - 采集高赞评论）：
 输入：采集格力空调高赞评论，看看用户都在说什么
-输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"top_notes":20,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户要采集高赞评论并分析用户反馈"}
+输出：{"intent":"comment_analysis","confidence":0.95,"slots":{"keywords":["格力空调"],"top_notes":50,"top_comments_per_note":5},"missing_fields":[],"clarification_question":null,"reason":"用户要采集高赞评论并分析用户反馈"}
 
 示例14（comment_analysis - 缺少关键词，追问）：
 输入：帮我看看评论区

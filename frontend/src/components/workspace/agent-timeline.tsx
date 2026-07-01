@@ -7,7 +7,17 @@ import type { TaskLogEntry, TaskStreamState } from "@/lib/sse/event-reducer";
 interface AgentTimelineProps {
   state: TaskStreamState;
   taskId: string | null;
+  /** 任务类型（来自 TaskHandoff.task_type），决定用哪套步骤目录；不传时沿用爆文默认目录 */
+  taskType?: string;
 }
+
+type AgentStepDef = {
+  id: string;
+  label: string;
+  caption: string;
+  code: string;
+  hasLLM: boolean;
+};
 
 const XHS_AUTH_NOT_BOUND_CODE = "AUTH_XHS_NOT_BOUND";
 const XHS_CAPTCHA_CODE = "CRAWLER_CAPTCHA";
@@ -19,13 +29,7 @@ const XHS_AUTH_REQUIRED_CODES = new Set([
   XHS_COOKIE_EXPIRED_CODE,
 ]);
 
-export const AGENT_STEPS: Array<{
-  id: string;
-  label: string;
-  caption: string;
-  code: string;
-  hasLLM: boolean;
-}> = [
+export const AGENT_STEPS: AgentStepDef[] = [
   { id: "InputParserAgent",  label: "意图解析",   caption: "拆解需求、关键词与任务参数",            code: "01", hasLLM: true  },
   { id: "XhsAuthAgent",      label: "数据源授权", caption: "检查小红书 Cookie 与访问权限",           code: "02", hasLLM: false },
   { id: "CrawlerAgent",      label: "小红书采集", caption: "采集行业池、竞品、互动 TOP 与 SERP 样本", code: "03", hasLLM: false },
@@ -38,11 +42,23 @@ export const AGENT_STEPS: Array<{
   { id: "CanvasRenderAgent", label: "画布渲染",   caption: "组织 Canvas 模块与可编辑产物",           code: "10", hasLLM: false },
 ];
 
+/** 评论分析 Skill 专用步骤目录，对应 comment_pipeline.py 的 7 个阶段 agent_id */
+export const COMMENT_AGENT_STEPS: AgentStepDef[] = [
+  { id: "CommentInputParser", label: "意图解析",     caption: "拆解关键词与采集范围",               code: "01", hasLLM: true  },
+  { id: "CommentCrawler",     label: "笔记采集",     caption: "按关键词搜索并补全笔记详情",           code: "02", hasLLM: false },
+  { id: "CommentFetcher",     label: "评论采集",     caption: "逐笔记拉取全量评论（含子评论）",        code: "03", hasLLM: false },
+  { id: "CommentDim1",        label: "舆情分类",     caption: "识别评论中的核心讨论类别",             code: "04", hasLLM: true  },
+  { id: "CommentDim2",        label: "类别深度分析", caption: "逐类别拆解正/中/负情感与代表性评论",    code: "05", hasLLM: true  },
+  { id: "CommentDim3",        label: "总体洞察",     caption: "从评论中提炼行动导向的创作建议",        code: "06", hasLLM: true  },
+  { id: "CommentReport",      label: "生成报告",     caption: "汇总生成 Excel 数据表与 Markdown 报告", code: "07", hasLLM: false },
+];
+
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
-export function AgentTimeline({ state, taskId }: AgentTimelineProps) {
+export function AgentTimeline({ state, taskId, taskType }: AgentTimelineProps) {
   const isTerminal = TERMINAL_STATUSES.has(state.status);
   const isRunning = state.status === "running" || state.status === "queued";
+  const activeSteps = taskType === "comment_analysis" ? COMMENT_AGENT_STEPS : AGENT_STEPS;
 
   // ─── 问题1：实时计时器（每秒本地更新，不依赖 SSE 事件频率）─────────────────
   const [now, setNow] = useState(() => Date.now());
@@ -68,10 +84,10 @@ export function AgentTimeline({ state, taskId }: AgentTimelineProps) {
 
   if (!taskId) return null;
 
-  const errorStepId = pickErrorStepId(state);
+  const errorStepId = pickErrorStepId(state, activeSteps);
 
   // ─── 问题2：步骤可见性——有日志就要显示，不能等 agentStatus ────────────────
-  const visibleSteps = AGENT_STEPS.filter(
+  const visibleSteps = activeSteps.filter(
     (step) =>
       state.agentStatus[step.id] ||
       state.agentThinking[step.id] ||
@@ -79,7 +95,7 @@ export function AgentTimeline({ state, taskId }: AgentTimelineProps) {
   );
 
   // 当前正在运行的步骤（用于 running 状态时显示具体步骤名）
-  const currentRunningStep = AGENT_STEPS.find((step) => {
+  const currentRunningStep = activeSteps.find((step) => {
     const entry = state.agentStatus[step.id];
     return entry && !entry.done;
   });
@@ -151,7 +167,7 @@ export function AgentTimeline({ state, taskId }: AgentTimelineProps) {
 // ─────────────────────────────────────────
 
 interface StepRowProps {
-  step: (typeof AGENT_STEPS)[number];
+  step: AgentStepDef;
   state: TaskStreamState;
   isTerminal: boolean;
   errorStepId: string | null;
@@ -210,18 +226,26 @@ function StepRow({ step, state, isTerminal, errorStepId }: StepRowProps) {
           isError={isError}
           code={step.code}
         />
-        <span
-          className={`flex-1 text-[13px] font-medium leading-snug ${
-            isError
-              ? "text-[#9A5558]"
-              : isStepRunning
-                ? "text-obsidian/90"
-                : isStepDone
-                  ? "text-obsidian/70"
-                  : "text-obsidian/55"
-          }`}
-        >
-          {step.label}
+        <span className="flex-1 min-w-0">
+          <span
+            className={`block text-[13px] font-medium leading-snug ${
+              isError
+                ? "text-[#9A5558]"
+                : isStepRunning
+                  ? "text-obsidian/90"
+                  : isStepDone
+                    ? "text-obsidian/70"
+                    : "text-obsidian/55"
+            }`}
+          >
+            {step.label}
+          </span>
+          {/* 运行中副标题：展示该阶段最新一条 AGENT_PROGRESS 文案，如"库中已有87条笔记，需再采集113条…" */}
+          {isStepRunning && entry?.message && (
+            <span className="block truncate text-[11px] leading-snug text-obsidian/40">
+              {entry.message}
+            </span>
+          )}
         </span>
         {entry?.lastAt && (
           <span className="shrink-0 text-[10px] text-obsidian/28">
@@ -413,16 +437,18 @@ function VideoAsyncBadge({ value }: { value: TaskStreamState["videoAsyncState"] 
 // 工具函数
 // ─────────────────────────────────────────
 
-function pickErrorStepId(state: TaskStreamState): string | null {
+function pickErrorStepId(state: TaskStreamState, steps: AgentStepDef[]): string | null {
   if (state.status !== "failed" && !state.error) return null;
-  if (state.error?.code && XHS_AUTH_REQUIRED_CODES.has(state.error.code)) return "XhsAuthAgent";
+  if (state.error?.code && XHS_AUTH_REQUIRED_CODES.has(state.error.code) && steps.some((s) => s.id === "XhsAuthAgent")) {
+    return "XhsAuthAgent";
+  }
   const lastAgentId = state.logs
     .slice()
     .reverse()
     .find((log) => typeof log.agent_id === "string")?.agent_id;
-  if (lastAgentId && AGENT_STEPS.some((step) => step.id === lastAgentId)) return lastAgentId;
-  const lastEntry = AGENT_STEPS.slice().reverse().find((step) => state.agentStatus[step.id]);
-  return lastEntry?.id ?? "InputParserAgent";
+  if (lastAgentId && steps.some((step) => step.id === lastAgentId)) return lastAgentId;
+  const lastEntry = steps.slice().reverse().find((step) => state.agentStatus[step.id]);
+  return lastEntry?.id ?? steps[0]?.id ?? null;
 }
 
 function timelineSummaryLine(

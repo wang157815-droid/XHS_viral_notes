@@ -1210,6 +1210,7 @@ class ConversationService:
             raw_input=content,
             keywords=intent.extracted_keywords,
             canvas_url_hint=f"/workspace?task={result.record.task_id}",
+            task_type=result.record.task_type,
         )
         message = self._assistant(
             conversation_id,

@@ -137,6 +137,8 @@ export interface TaskHandoff {
   raw_input: string;
   keywords: string[];
   canvas_url_hint: string | null;
+  /** 任务类型，决定前端时间线用哪套步骤目录渲染（viral_analysis / comment_analysis） */
+  task_type?: string;
 }
 
 export interface IntentClassification {

@@ -57,6 +57,7 @@ async def test_conversation_service_xhs_analysis_does_not_call_model(monkeypatch
                 task_id="task_conv_1",
                 status=SimpleNamespace(value="pending"),
                 progress=0,
+                task_type="viral_analysis",
             )
             return SimpleNamespace(record=record, created=True)
 
@@ -107,6 +108,7 @@ async def test_conversation_task_handoff_keeps_main_and_competitor_keywords_sepa
                 task_id="task_conv_2",
                 status=SimpleNamespace(value="pending"),
                 progress=0,
+                task_type="viral_analysis",
             )
             return SimpleNamespace(record=record, created=False)
 

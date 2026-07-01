@@ -8,8 +8,51 @@ import pytest
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.conversation.tool_schema import ConversationToolCall, ConversationToolDecision
 from backend.app.domain.canvas.schema import CanvasModule, CanvasSchema
+from backend.app.domain.conversation import TaskHandoff
 from backend.app.domain.module_status import ModuleStatus
 from backend.app.services.conversation_store import ConversationStore
+
+
+def test_task_handoff_to_dict_from_dict_roundtrip_keeps_task_type():
+    """task_type 是前端选择 AgentTimeline 步骤目录(爆文 vs 评论)的唯一依据，
+    必须在 to_dict/from_dict 往返及 JSON 持久化路径中保持不丢失。
+    """
+    handoff = TaskHandoff(
+        task_id="task_1",
+        status="running",
+        raw_input="分析防晒霜评论",
+        keywords=["防晒霜"],
+        canvas_url_hint=None,
+        task_type="comment_analysis",
+    )
+
+    data = handoff.to_dict()
+    assert data["task_type"] == "comment_analysis"
+
+    restored = TaskHandoff.from_dict(data)
+    assert restored is not None
+    assert restored.task_type == "comment_analysis"
+    assert restored.task_id == "task_1"
+    assert restored.keywords == ["防晒霜"]
+
+
+def test_task_handoff_from_dict_defaults_task_type_when_missing():
+    """兼容历史数据(旧记录没有 task_type 字段)：缺省应回退为爆文分析，不应报错。"""
+    legacy_data = {
+        "task_id": "task_old",
+        "status": "completed",
+        "raw_input": "分析防晒霜",
+        "keywords": [],
+        "canvas_url_hint": None,
+    }
+    restored = TaskHandoff.from_dict(legacy_data)
+    assert restored is not None
+    assert restored.task_type == "viral_analysis"
+
+
+def test_task_handoff_default_task_type_is_viral_analysis():
+    handoff = TaskHandoff(task_id="task_2", status="pending", raw_input="x")
+    assert handoff.task_type == "viral_analysis"
 
 
 @pytest.mark.asyncio
@@ -29,6 +72,7 @@ async def test_task_handoff_updates_active_task(monkeypatch, tmp_path):
                     task_id="task_44",
                     status=SimpleNamespace(value="pending"),
                     progress=0,
+                    task_type="viral_analysis",
                 ),
                 created=True,
             )
