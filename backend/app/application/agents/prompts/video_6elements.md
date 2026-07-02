@@ -44,10 +44,16 @@ JSON,把这条视频按下面 6 个要素归类,再附上痛点关键词、内�
 
 **content_direction** — 内容方向,优先常见类名,否则自拟。
 
+**product_brand** — 视频主推的真实品牌或产品名
+从标题、文案、视频画面/台词识别笔记里**真实出现/主推**的品牌或具体产品名(不是品类词)。
+多品牌时用 `/` 分隔(如「卡诗/潘婷」);**无法识别**任何品牌时填「未知」。
+注意:这是内容实体识别,与用户搜索词无关——即使搜索词是品类词(如「防脱洗发水」),
+也要尽力从视频内容里挑出具体品牌名。
+
 ## 输出格式
 
 严格 JSON(单个对象,**不要** markdown 代码块包裹、**不要**解释性文字):
 
-{"cover_type": "...", "cover_text_type": "...", "title_type": "...", "opening_type": "...", "product_intro_type": "...", "product_placement_type": "...", "pain_keywords": "...", "content_direction": "..."}
+{"cover_type": "...", "cover_text_type": "...", "title_type": "...", "opening_type": "...", "product_intro_type": "...", "product_placement_type": "...", "pain_keywords": "...", "content_direction": "...", "product_brand": "..."}
 
 每个字段都必须存在且为非空字符串(勿用 `_NONE`)。

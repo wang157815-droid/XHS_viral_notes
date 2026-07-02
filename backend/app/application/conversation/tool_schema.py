@@ -130,7 +130,7 @@ CONVERSATION_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+                    "keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 50},
                     "competitor_keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
                     "target_count": {
                         "type": "integer",

@@ -45,12 +45,14 @@ class FakeNotesStore:
         pass
 
     async def search_notes(
-        self, keywords, top_k=30, query_embedding=None, recent_days=None
+        self, keywords, top_k=None, query_embedding=None, recent_days=None
     ):
         kws = set(keywords or [])
         matching = [
             r for r in self._rows if set(r.get("source_keywords") or []) & kws
         ]
+        if top_k is None or top_k <= 0:
+            return matching
         return matching[:top_k]
 
     async def add_notes(self, notes, embeddings=None):

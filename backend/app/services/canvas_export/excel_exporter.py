@@ -182,6 +182,11 @@ _DEFAULT_EXCEL_CELL_ALIGN = Alignment(
 # 不套用「列宽 25 / 行高 15 / 全居中」的 sheet(保留各 builder 内版式)
 _SKIP_DEFAULT_LAYOUT_SHEETS = frozenset({"爆文总结", "爆文总结详情2"})
 
+# 图片下载预算:total_timeout 减去这部分留给 sheet 组装/xlsx 保存(CPU 密集但通常很快)
+_SHEET_BUILD_RESERVE_SEC = 15.0
+# 图片下载预算下限,避免 total_timeout 传得很小时算出负数/过小窗口
+_MIN_IMAGE_FETCH_TIMEOUT_SEC = 10.0
+
 
 # ==================================================================
 # 顶层入口
@@ -225,6 +230,7 @@ async def build_excel_bytes(
                 annotations=annotations,
                 viral_matrix=viral_matrix,
                 semantic=semantic,
+                total_timeout=total_timeout,
             ),
             timeout=total_timeout,
         )
@@ -250,15 +256,27 @@ async def _build_full(
     annotations: Dict[str, Dict[str, Any]],
     viral_matrix: Dict[str, Any],
     semantic: Dict[str, Any],
+    total_timeout: float = 60.0,
 ) -> bytes:
     urls = _collect_image_urls(viral_matrix=viral_matrix, crawler=crawler)
     img_cache: Dict[str, Optional[io.BytesIO]] = {}
     if urls:
+        # 图片下载预算 = total_timeout 减去留给 sheet 组装/保存的缓冲(_SHEET_BUILD_RESERVE_SEC)，
+        # 而非固定 15s —— 三方 API 采集样本量更大、CDN 更慢时，固定 15s 很容易整体超时，
+        # 导致 img_cache 被清空、xlsx 全表无图（即便剩余预算本可以再等一会儿下载完）。
+        img_fetch_timeout = max(
+            _MIN_IMAGE_FETCH_TIMEOUT_SEC, total_timeout - _SHEET_BUILD_RESERVE_SEC
+        )
         try:
             fetcher = CoverImageFetcher()
-            img_cache = await asyncio.wait_for(fetcher.fetch_all(urls), timeout=15.0)
+            img_cache = await asyncio.wait_for(
+                fetcher.fetch_all(urls), timeout=img_fetch_timeout
+            )
         except asyncio.TimeoutError:
-            logger.warning("[excel_exporter] 图片下载 15s 窗口超时,继续生成无图版本")
+            logger.warning(
+                f"[excel_exporter] 图片下载 {img_fetch_timeout:.0f}s 窗口超时({len(urls)} 张),"
+                "继续生成无图版本"
+            )
             img_cache = {}
 
     return await asyncio.to_thread(
@@ -913,19 +931,11 @@ def _as_single_line_cell_value(val: Any) -> Any:
 
 
 # ------------------------------------------------------------------
-# 样本表「品牌」列:标题/正文/标签词表匹配 + 爬虫检索词回退(非 LLM,导出侧推断)
+# 样本表「品牌」列:搜索词是已知品牌时直接用搜索词;品类词时用 LLM 标注的真实品牌
 # ------------------------------------------------------------------
-_GENERIC_TOPIC_KEYWORDS: frozenset[str] = frozenset(
-    {
-        "手机", "智能手机", "安卓", "苹果机", "巧克力", "甜品", "零食", "护肤", "护肤品",
-        "美妆", "化妆", "抗老", "抗老精华", "精华", "面霜", "乳液", "面膜", "口红", "唇膏",
-        "防晒", "卸妆", "洗发水", "洗发", "防脱", "母婴", "家居", "穿搭", "减肥", "健身",
-        "运动", "数码", "好物", "推荐", "测评", "开箱", "种草", "平价", "大牌", "国货",
-        "显卡", "笔记本", "耳机", "蓝牙", "相机",
-    }
-)
 
-# 常见品牌/产品线(越长越优先匹配);可随业务再扩充
+# 已知品牌/产品线词表,用于判断采集搜索词是否为品牌名(越长越优先匹配)。
+# 仅用于"搜索词是否为品牌名"的判定,不再用于笔记内容匹配。
 _RAW_BRAND_LEXICON: frozenset[str] = frozenset(
     {
         "IPSA", "茵芙莎", "PMPM", "SK-II", "林清轩", "玉兰油", "OLAY", "雅诗兰黛",
@@ -952,6 +962,14 @@ _RAW_BRAND_LEXICON: frozenset[str] = frozenset(
 _BRAND_NAMES_SORTED_DESC: Tuple[str, ...] = tuple(
     sorted(_RAW_BRAND_LEXICON, key=len, reverse=True)
 )
+_BRAND_NAME_LOWER_SET: frozenset[str] = frozenset(
+    b.lower() for b in _RAW_BRAND_LEXICON if b
+)
+
+# LLM 标注 product_brand 时表示"无法识别"的占位值,导出侧视为无效品牌
+_NO_BRAND_TOKENS: frozenset[str] = frozenset(
+    {"", "未知", "无", "unknown", "无品牌", "none", "n/a", "未识别"}
+)
 
 
 def _infer_brand_for_export(
@@ -960,39 +978,45 @@ def _infer_brand_for_export(
     *,
     task_keywords: List[str],
 ) -> str:
-    """导出 Excel 时填充「品牌」列:多模态 brand 字段优先,否则正文词表匹配,再爬虫 keyword / 任务词。"""
-    ann_brand = str(ann.get("brand") or "").strip()
-    if ann_brand:
+    """导出 Excel 时填充 Sheet3/4/5 的「品牌」列(自适应)。
+
+    判定逻辑:
+    1. 取采集搜索词(``note["source_keywords"]`` 去重,回退 ``note["keyword"]``)。
+    2. 搜索词任一命中品牌词表 → 视为品牌名(竞品/品牌维度),品牌列 = 搜索词拼接。
+    3. 否则(品类词如「防脱洗发水」,或词表外新品牌)→ 取多模态标注的真实品牌
+       ``ann["product_brand"]``;为「未知」等占位时视为无效。
+    4. LLM 品牌也无值 → 回退搜索词(至少有值,不比现状差)。
+
+    ``task_keywords`` 入参保留以兼容调用处,当前不再使用。
+    """
+    _ = task_keywords
+    sk_raw = note.get("source_keywords") or []
+    if not isinstance(sk_raw, list):
+        sk_raw = [sk_raw]
+    picked: List[str] = []
+    seen: set[str] = set()
+    for item in sk_raw:
+        s = str(item or "").strip()
+        if not s or s in seen:
+            continue
+        picked.append(s)
+        seen.add(s)
+    if not picked:
+        kw = str(note.get("keyword") or "").strip()
+        if kw:
+            picked = [kw]
+
+    # 搜索词任一为已知品牌 → 直接用搜索词(竞品/品牌维度场景)
+    if picked and any(s.lower() in _BRAND_NAME_LOWER_SET for s in picked):
+        return " / ".join(picked)[:80]
+
+    # 搜索词不是已知品牌(品类词/新品牌)→ 用 LLM 标注的真实品牌
+    ann_brand = str(ann.get("product_brand") or "").strip()
+    if ann_brand and ann_brand.lower() not in _NO_BRAND_TOKENS:
         return ann_brand[:80]
-    title = str(note.get("title") or "")
-    desc = str(note.get("desc") or "")[:1200]
-    tags = note.get("tags") or []
-    if isinstance(tags, list):
-        tag_txt = " ".join(str(t) for t in tags if t)
-    else:
-        tag_txt = str(tags or "")
-    blob = f"{title} {desc} {tag_txt}".strip()
-    if not blob:
-        blob = title
-    blob_l = blob.lower()
-    for cand in _BRAND_NAMES_SORTED_DESC:
-        if len(cand) < 2:
-            continue
-        if cand.lower() in blob_l:
-            return cand[:80]
-    kw = str(note.get("keyword") or "").strip()
-    gen_l = {x.lower() for x in _GENERIC_TOPIC_KEYWORDS}
-    if 2 <= len(kw) <= 24 and kw.lower() not in gen_l and kw not in _GENERIC_TOPIC_KEYWORDS:
-        return kw[:80]
-    for tk in task_keywords:
-        s = str(tk).strip()
-        if not s or len(s) > 32:
-            continue
-        if s.lower() in gen_l or s in _GENERIC_TOPIC_KEYWORDS:
-            continue
-        if s in title:
-            return s[:80]
-    return ""
+
+    # 都无值 → 回退搜索词
+    return (" / ".join(picked)[:80]) if picked else ""
 
 
 # ==================================================================

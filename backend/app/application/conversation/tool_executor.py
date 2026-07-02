@@ -87,7 +87,8 @@ class ConversationToolExecutor:
         ctx: ConversationToolExecutionContext,
     ) -> ChatMessage:
         args = call.arguments
-        keywords = self._clean_list(args.get("keywords")) or ctx.intent.extracted_keywords
+        # 爆文任务主关键词不设硬性上限（仅保留 50 的宽松安全上限）
+        keywords = self._clean_list(args.get("keywords"), max_items=50) or ctx.intent.extracted_keywords
         if not keywords:
             return self._ask_clarification(
                 ConversationToolCall(
@@ -597,7 +598,7 @@ class ConversationToolExecutor:
         )
 
     @staticmethod
-    def _clean_list(value: Any) -> List[str]:
+    def _clean_list(value: Any, max_items: int = 5) -> List[str]:
         if not value:
             return []
         if isinstance(value, str):
@@ -609,7 +610,7 @@ class ConversationToolExecutor:
             text = str(item or "").strip()
             if text and text not in result:
                 result.append(text)
-        return result[:5]
+        return result[:max_items]
 
     @staticmethod
     def _build_chat_messages(recent_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

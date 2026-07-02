@@ -45,8 +45,6 @@ _ANALYSIS_VERSION: str = "v2"   # "v1" 可切回旧逻辑
 _DEFAULT_TOP_NOTES = 0           # 0 = 不限，爬到多少用多少
 _DEFAULT_TOP_COMMENTS = 5        # v1 专用：每条笔记取点赞 Top K 条评论
 _CRAWL_TARGET_PER_KW = 200       # 多关键词合并去重后的总爬取目标数
-_MAX_CONSECUTIVE_EMPTY_PAGES = 3 # 连续 N 页搜索返回 0 条才终止翻页（单页空则跳过继续）
-_MAX_CONSECUTIVE_DUP_PAGES = 2   # 连续 N 页全部重复才终止翻页
 
 # v1 速率控制
 _V1_INTER_NOTE_SLEEP = 1.0
@@ -870,188 +868,39 @@ async def _step1_crawl_notes(
     """步骤 1：通过三方 Redbook API 搜索笔记，返回 dict 列表。
 
     搜索逻辑：
-    - 按关键词逐个搜索，每关键词最多取 per_kw_target 条（去重后）
+    - 按关键词逐个搜索（sort="time_descending"，按最新发布时间排序），
+      每关键词最多取 per_kw_target 条（去重后）
     - 若 user_query 非空，逐条经 Tier2 精判过滤
     - 最终按「含型号笔记优先 + 发布时间从新到旧」排序
 
+    翻页/去重/detail 补全的通用循环已抽取到 `redbook_note_search.search_notes_for_keywords`
+    （与爆文 CrawlerAgent 的第三方采集分支共用），本函数只负责拼装评论流水线专属参数
+    （Tier2 精判 hook、`_emit_log` SSE 播报）和爬完后的业务排序。
     关键节点同步 _emit_log(agent_id="CommentCrawler")，供前端时间线展示逐关键词/
-    逐页的实时采集进展(此前仅 logger.info，SSE 收不到)。
+    逐页的实时采集进展。
     """
-    from ..infrastructure.crawlers.redbook_api_client import RedbookApiClient
+    from ..infrastructure.crawlers.redbook_note_search import search_notes_for_keywords
 
-    client = RedbookApiClient()
     per_kw_target = max(target_count // max(len(keywords), 1), 20)
-    _MAX_PAGES_PER_KW = 30  # 每关键词最多请求页数，避免无限循环（每页约18条笔记）
 
-    all_notes: Dict[str, Any] = {}  # note_id → note_dict，全局去重
-    total_kw = len(keywords)
+    async def _log_hook(message: str) -> None:
+        await _emit_log(task_id, "CommentCrawler", message)
 
-    for kw_idx, keyword in enumerate(keywords, start=1):
-        collected_for_kw = 0
-        page = 1
-        prev_page_first_id = ""  # 用于检测分页是否卡在同一页
-        consecutive_empty_pages = 0
-        consecutive_dup_pages = 0
-        logger.info(
-            f"[Step1] ▶ 开始采集关键词「{keyword}」"
-            f"  目标={per_kw_target} 条  最大页数={_MAX_PAGES_PER_KW}"
-        )
-        await _emit_log(
-            task_id, "CommentCrawler",
-            f"开始采集关键词「{keyword}」（{kw_idx}/{total_kw}），目标 {per_kw_target} 条",
-        )
+    tier2_hook: Optional[Any] = None
+    if user_query:
+        async def tier2_hook(note_dict: Dict[str, Any]) -> bool:  # noqa: F811
+            return await _tier2_detail_filter(user_query, note_dict, keywords=keywords)
 
-        while collected_for_kw < per_kw_target and page <= _MAX_PAGES_PER_KW:
-            logger.info(f"[Step1] 「{keyword}」page={page}  搜索中...")
+    notes = await search_notes_for_keywords(
+        keywords,
+        sort="time_descending",
+        per_keyword_target=per_kw_target,
+        fetch_detail=True,
+        exclude_note_ids=exclude_note_ids,
+        tier2_filter=tier2_hook,
+        log_hook=_log_hook,
+    )
 
-            try:
-                # sort="time_descending"：按最新发布时间排序搜索
-                # 网络重试由 client.search 内部负责；0 条结果不在本页重试，改为跳过继续翻页
-                raw_resp = await asyncio.to_thread(
-                    client.search, keyword, page, "time_descending"
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"[Step1] 「{keyword}」page={page} 搜索失败（已内部重试），终止本关键词: {exc}"
-                )
-                break
-
-            raw_notes = RedbookApiClient.parse_search_notes(raw_resp)
-            logger.info(
-                f"[Step1] 「{keyword}」page={page}  搜索返回 {len(raw_notes)} 条"
-            )
-            if not raw_notes:
-                consecutive_empty_pages += 1
-                logger.warning(
-                    f"[Step1] 「{keyword}」page={page}  本页 0 条"
-                    f"（连续空页 {consecutive_empty_pages}/{_MAX_CONSECUTIVE_EMPTY_PAGES}），"
-                    f"跳过本页继续翻页"
-                )
-                if consecutive_empty_pages >= _MAX_CONSECUTIVE_EMPTY_PAGES:
-                    logger.info(
-                        f"[Step1] 「{keyword}」连续 {_MAX_CONSECUTIVE_EMPTY_PAGES} 页无结果，终止翻页"
-                    )
-                    break
-                page += 1
-                if page <= _MAX_PAGES_PER_KW and collected_for_kw < per_kw_target:
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
-                continue
-
-            consecutive_empty_pages = 0
-
-            page_ids = [str(n.get("id") or "").strip() for n in raw_notes if n.get("id")]
-            overlap = sum(1 for nid in page_ids if nid in all_notes)
-            if page_ids:
-                logger.info(
-                    f"[Step1] 「{keyword}」page={page}  "
-                    f"note_id 首={page_ids[0][:12]}… 尾={page_ids[-1][:12]}…  "
-                    f"与已入库重复 {overlap}/{len(page_ids)}"
-                )
-                if prev_page_first_id and page_ids[0] == prev_page_first_id:
-                    logger.warning(
-                        f"[Step1] 「{keyword}」page={page}  "
-                        f"首条 note_id 与上一页相同（{page_ids[0]}），"
-                        f"分页可能抖动，继续翻页"
-                    )
-                prev_page_first_id = page_ids[0]
-
-            # 逐条补全 detail + Tier2 精判
-            page_deduped = page_detail_ok = page_detail_fail = page_t2_reject = page_added = 0
-            for raw_note in raw_notes:
-                note_dict = RedbookApiClient.note_to_dict(raw_note, keyword)
-                nid = note_dict.get("note_id")
-                if not nid or nid in all_notes or (exclude_note_ids and nid in exclude_note_ids):
-                    page_deduped += 1
-                    continue
-
-                # ── Detail API 补全：获取完整 desc + 结构化话题标签 ──────────────
-                try:
-                    detail_resp = await asyncio.to_thread(client.get_detail, nid)
-                    detail_note = RedbookApiClient.parse_detail_note(detail_resp)
-                    if detail_note:
-                        enriched = RedbookApiClient.extract_detail_fields(detail_note)
-                        note_dict["desc"] = enriched["desc"]
-                        note_dict["tags"] = enriched["tags"]
-                        page_detail_ok += 1
-                    else:
-                        page_detail_fail += 1
-                except Exception as exc:
-                    page_detail_fail += 1
-                    logger.debug(
-                        f"[Step1] detail 补全失败 note_id={nid}，保留截断摘要: {exc}"
-                    )
-                # detail 请求间随机间隔，避免连续请求触发服务端速率限制
-                await asyncio.sleep(random.uniform(3.0, 4.0))
-
-                # Tier2 精判（逐条，fail-open；此时 desc 已为全文）
-                if user_query:
-                    try:
-                        passed = await _tier2_detail_filter(user_query, note_dict, keywords=keywords)
-                        if not passed:
-                            page_t2_reject += 1
-                            continue
-                    except Exception:
-                        pass
-
-                all_notes[nid] = note_dict
-                collected_for_kw += 1
-                page_added += 1
-                if collected_for_kw >= per_kw_target:
-                    break
-
-            logger.info(
-                f"[Step1] 「{keyword}」page={page}  本页结果: "
-                f"新增={page_added}  去重跳过={page_deduped}  "
-                f"detail成功={page_detail_ok} 失败={page_detail_fail}  "
-                f"Tier2淘汰={page_t2_reject}  "
-                f"累计={collected_for_kw}/{per_kw_target}（全局={len(all_notes)}）"
-            )
-            await _emit_log(
-                task_id, "CommentCrawler",
-                f"「{keyword}」第 {page} 页：新增 {page_added} 条，"
-                f"累计 {collected_for_kw}/{per_kw_target}（全局 {len(all_notes)} 条）",
-            )
-
-            # 本页全部 note_id 均已入库 → 可能是翻页抖动，连续多页才终止
-            if (
-                len(raw_notes) > 0
-                and page_added == 0
-                and page_deduped == len(raw_notes)
-            ):
-                consecutive_dup_pages += 1
-                logger.warning(
-                    f"[Step1] 「{keyword}」page={page}  "
-                    f"本页 {len(raw_notes)} 条全部重复"
-                    f"（连续重复页 {consecutive_dup_pages}/{_MAX_CONSECUTIVE_DUP_PAGES}），"
-                    f"继续翻页"
-                )
-                if consecutive_dup_pages >= _MAX_CONSECUTIVE_DUP_PAGES:
-                    logger.warning(
-                        f"[Step1] 「{keyword}」连续 {_MAX_CONSECUTIVE_DUP_PAGES} 页全部重复，终止翻页"
-                    )
-                    break
-            else:
-                consecutive_dup_pages = 0
-
-            if collected_for_kw >= per_kw_target:
-                logger.info(f"[Step1] 「{keyword}」已达目标 {per_kw_target} 条，停止翻页")
-                break
-
-            page += 1
-            # 页间随机 sleep，避免连续请求被限流
-            if page <= _MAX_PAGES_PER_KW and collected_for_kw < per_kw_target:
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-
-        logger.info(
-            f"[Step1] ◀ 关键词「{keyword}」采集完毕  "
-            f"本轮新增={collected_for_kw}  全局总计={len(all_notes)}"
-        )
-        await _emit_log(
-            task_id, "CommentCrawler",
-            f"关键词「{keyword}」采集完毕，本轮新增 {collected_for_kw} 条（全局累计 {len(all_notes)} 条）",
-        )
-
-    notes = list(all_notes.values())
     # 含具体型号的笔记优先，其次按发布时间从新到旧
     notes.sort(
         key=lambda n: (_note_has_model_terms(n, keywords), _note_publish_sort_ts(n)),

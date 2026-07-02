@@ -174,7 +174,8 @@ export function ChatPanel({
 
   const parseKeywords = (text: string): string[] => {
     const matches = text.match(/「([^」]+)」|「(.+?)」/g) ?? [];
-    return matches.map((m) => m.replace(/[「」]/g, "")).slice(0, 5);
+    // 主关键词数量不设上限，仅保留一个宽松的安全上限防止异常输入
+    return matches.map((m) => m.replace(/[「」]/g, "")).slice(0, 50);
   };
 
   const kbMention = useMemo(() => getActiveKbMention(input, inputCaret), [input, inputCaret]);

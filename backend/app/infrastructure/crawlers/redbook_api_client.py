@@ -77,7 +77,10 @@ class RedbookApiClient:
         Args:
             keyword:           搜索关键词
             page:              页码（从 1 开始）
-            sort:              排序方式，"general"（综合）或 "time_descending"（最新）
+            sort:              排序方式，"general"（综合）/ "time_descending"（最新）/
+                                "popularity_descending"（按互动量降序，与自研路径
+                                `apis/xhs_pc_apis.py` 用的 XHS 原生 sort_type 词表一致）。
+                                本方法不做取值校验，原样透传给三方接口。
             note_type:         0=全部，1=视频，2=图文
             search_request_id: 首次搜索后从响应提取，翻页时原样回传以维持同一会话
 
@@ -254,6 +257,95 @@ class RedbookApiClient:
         ]
 
     @staticmethod
+    def _extract_video_urls(raw_note: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+        """从 video_info_v2 提取视频直链候选列表（图文笔记无该字段，返回空）。
+
+        结构：video_info_v2.media.stream.{h264,h265}[] = [{master_url, backup_urls, ...}]
+        优先级：h264 在前（多数 AI 多模态接口/播放器兼容性优于 h265/hevc），
+        每种编码内部保留响应原始顺序（三方/XHS 已按清晰度做过排序）。
+        主直链取不到时回退 media.video.opaque1.default_screencast_stream。
+
+        Returns:
+            (video_url, video_urls) — 主直链 + 候选列表
+            [{"url", "type": "h264"/"h265", "quality", "backup_urls"}]。
+        """
+        media = ((raw_note.get("video_info_v2") or {}).get("media")) or {}
+        stream = media.get("stream") or {}
+
+        candidates: List[Dict[str, Any]] = []
+        for codec in ("h264", "h265"):
+            for item in stream.get(codec) or []:
+                if not isinstance(item, dict):
+                    continue
+                master_url = str(item.get("master_url") or "").strip()
+                if not master_url:
+                    continue
+                candidates.append({
+                    "url": master_url,
+                    "type": codec,
+                    "quality": str(item.get("quality_type") or ""),
+                    "backup_urls": [
+                        str(u).strip() for u in (item.get("backup_urls") or []) if str(u or "").strip()
+                    ],
+                })
+
+        video_url = candidates[0]["url"] if candidates else ""
+        if not video_url:
+            fallback = ((media.get("video") or {}).get("opaque1") or {}).get(
+                "default_screencast_stream"
+            )
+            video_url = str(fallback or "").strip()
+
+        return video_url, candidates
+
+    @staticmethod
+    def _extract_video_cover(raw_note: Dict[str, Any]) -> str:
+        """视频笔记封面优先取 video_info_v2.media.image.thumbnail/first_frame。"""
+        image_meta = ((raw_note.get("video_info_v2") or {}).get("media") or {}).get("image") or {}
+        url = str(image_meta.get("thumbnail") or image_meta.get("first_frame") or "").strip()
+        return RedbookApiClient._force_jpg(url)
+
+    @staticmethod
+    def _force_jpg(url: str) -> str:
+        """把三方 CDN 图片 URL 的 `format/heif` 替换成 `format/jpg`。
+
+        三方接口的图片/视频封面全部为 `imageView2` 处理链路生成的 HEIF 格式
+        （`Content-Type: image/heif` 已实测确认），多数多模态大模型（通义千问/
+        GPT-4V 等）无法直接解码 HEIF，导致图片分析失败。已实测验证：这条链路的
+        `sign` 签名不校验 `format` 参数，只替换 `format/heif` → `format/jpg`
+        不会导致签名失效（其余参数原样保留），CDN 正常返回 200 + image/jpeg。
+        自研路径（XHS PC-web `note_card.image_list[].info_list[]`）本身就是
+        jpg/webp，不受影响，此函数只对三方响应生效。
+        """
+        if not url or "format/heif" not in url:
+            return url
+        return url.replace("format/heif", "format/jpg")
+
+    @staticmethod
+    def sanitize_note_media_urls(note: Dict[str, Any]) -> Dict[str, Any]:
+        """防御性修复：对笔记 dict 的 cover_url / image_urls 就地强转 heif→jpg。
+
+        三方响应已在 `note_to_dict` 里转换过，但 L1/Redis、L2/pgvector 缓存里
+        可能仍留有修复上线前写入的旧数据（缓存 TTL 6 小时/长期持久化），
+        重启进程不会清空缓存。此方法在**每次从缓存读出笔记时**兜底调用一遍，
+        保证无论缓存新旧都不会再把 heif 地址喂给多模态模型。对非三方
+        （自研）笔记的 jpg/webp 地址是无操作（no-op）。
+        """
+        if not isinstance(note, dict):
+            return note
+        cover_url = note.get("cover_url")
+        if isinstance(cover_url, str) and cover_url:
+            note["cover_url"] = RedbookApiClient._force_jpg(cover_url)
+        image_urls = note.get("image_urls")
+        if isinstance(image_urls, list):
+            note["image_urls"] = [
+                RedbookApiClient._force_jpg(u) if isinstance(u, str) else u
+                for u in image_urls
+                if u
+            ]
+        return note
+
+    @staticmethod
     def note_to_dict(raw_note: Dict[str, Any], source_keyword: str) -> Dict[str, Any]:
         """将三方 API 的原始 note 映射为 pipeline 内部 note dict 格式。"""
         note_id = str(raw_note.get("id") or "").strip()
@@ -276,12 +368,20 @@ class RedbookApiClient:
                     publish_time = str(tag.get("text") or "").strip()
                     break
 
-        # 封面与图片列表
+        # 封面与图片列表（三方返回的 url 均为 HEIF 格式，转成 jpg 供多模态模型解析）
         images_list = raw_note.get("images_list") or []
         cover_url = ""
         if images_list and isinstance(images_list[0], dict):
-            cover_url = str(images_list[0].get("url") or "")
-        image_urls = [str(img.get("url") or "") for img in images_list if isinstance(img, dict)]
+            cover_url = RedbookApiClient._force_jpg(str(images_list[0].get("url") or ""))
+        image_urls = [
+            RedbookApiClient._force_jpg(str(img.get("url")))
+            for img in images_list
+            if isinstance(img, dict) and img.get("url")
+        ]
+
+        # 视频直链（图文笔记无 video_info_v2，均返回空值/空列表，不影响现有字段）
+        video_url, video_urls = RedbookApiClient._extract_video_urls(raw_note)
+        video_cover = RedbookApiClient._extract_video_cover(raw_note) or cover_url
 
         # 用户信息
         user = raw_note.get("user") or {}
@@ -314,8 +414,10 @@ class RedbookApiClient:
             "note_type":        str(raw_note.get("type") or "normal"),
             "user_id":          user_id,
             "nickname":         nickname,
-            "cover_url":        cover_url,
+            "cover_url":        video_cover,
             "image_urls":       image_urls,
+            "video_url":        video_url,
+            "video_urls":       video_urls,
             "source_keyword":   source_keyword,
         }
 

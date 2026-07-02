@@ -850,7 +850,8 @@ async def test_image_analysis_writes_annotations_dict():
         '"title_type": "干货/经验分享", "opening_type": "干货切入", '
         '"product_intro_type": "融入到干货/经验分享中", '
         '"product_placement_type": "融合自己使用方法/感受讲卖点", '
-        '"pain_keywords": "暗沉", "content_direction": "干货分享"}'
+        '"pain_keywords": "暗沉", "content_direction": "干货分享", '
+        '"product_brand": "雅诗兰黛"}'
     )
     gateway = FakeGateway([valid_ann, valid_ann, valid_ann])
     agent = ImageAnalysisAgent(model_gateway_instance=gateway, event_bus=FakeBus())

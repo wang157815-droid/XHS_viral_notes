@@ -254,7 +254,7 @@ class NotesVectorStore:
     async def search_notes(
         self,
         keywords: List[str],
-        top_k: int = 30,
+        top_k: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
         recent_days: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
@@ -262,7 +262,7 @@ class NotesVectorStore:
 
         Args:
             keywords:         必传,用于严格同词命中过滤（source_keywords && input）
-            top_k:            返回上限
+            top_k:            返回上限；None 或 <=0 表示不限（仅受 recent_days 约束）
             query_embedding:  可选,有则按向量相似度排序;否则按互动分降序
             recent_days:      覆盖默认 3 天窗口
 
@@ -291,8 +291,11 @@ class NotesVectorStore:
         params: Dict[str, Any] = {
             "keywords": cleaned_keywords,
             "min_crawled_at": min_crawled_at,
-            "limit": top_k,
         }
+        limit_clause = ""
+        if top_k is not None and top_k > 0:
+            params["limit"] = top_k
+            limit_clause = "LIMIT :limit"
 
         if query_embedding is not None:
             params["query_vec"] = _format_vector(query_embedding)
@@ -311,7 +314,7 @@ class NotesVectorStore:
             WHERE source_keywords && CAST(:keywords AS text[])
               AND crawled_at > :min_crawled_at
             ORDER BY {order_clause}
-            LIMIT :limit
+            {limit_clause}
             """
         )
 

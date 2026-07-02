@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ...core.responses import ok
 from ...core.security import RoleLevel, get_current_user, normalize_role, role_allows
@@ -38,7 +38,15 @@ class SystemSettingsPayload(BaseModel):
     vision_model: str
     embedding_model: str
     video_analysis_enabled: bool = True
+    note_crawl_backend: str = "self"
     crawler_schedule: CrawlerSchedulePayload = Field(default_factory=CrawlerSchedulePayload)
+
+    @field_validator("note_crawl_backend")
+    @classmethod
+    def _validate_note_crawl_backend(cls, v: str) -> str:
+        if v not in ("self", "redbook_api"):
+            raise ValueError('note_crawl_backend 必须是 "self" 或 "redbook_api"')
+        return v
 
 
 @router.put("/system")

@@ -58,8 +58,23 @@ _DEFAULT_TARGET_PER_GROUP = int(os.getenv("CRAWLER_TARGET_PER_GROUP", "45"))
 _MIN_SAMPLE = int(os.getenv("CRAWLER_MIN_SAMPLE", "5"))
 _INTER_GROUP_SLEEP = float(os.getenv("CRAWLER_INTER_GROUP_SLEEP", "3.0"))
 # 每维关键词数量上限；与 InputParser 竞品词条数上限对齐，用于分组采集、
-# tuple 分组和逐词缓存。
+# tuple 分组和逐词缓存。仅约束 competitor/brand 维度（LLM 推断质量控制），
+# industry（主关键词）维度改用 _MAX_KWS_INDUSTRY，见 _kw_cap_for_dim。
 _MAX_KWS_PER_DIM = int(os.getenv("CRAWLER_MAX_KEYWORDS_PER_DIM", "5"))
+# 主关键词/行业维度的关键词数量上限：彻底放开（不再硬性截断到 5），仅保留一个
+# 宽松的安全上限防止异常输入拖垮采集耗时。两条采集路径（自研 / 第三方）均适用。
+_MAX_KWS_INDUSTRY = int(os.getenv("CRAWLER_MAX_KEYWORDS_INDUSTRY", "50"))
+
+# 笔记发布时间窗口过滤（一次性业务需求，采集完成后生效，硬编码；如需调整范围需改代码）：
+# 只保留发布时间落在 [2025-10-01, 2026-04-01) 内的笔记，即 2025 年 10 月 ~ 2026 年 3 月
+# （右端为开区间，含 2026-03-31 全天）。发布时间缺失/无法解析的笔记一律视为不在范围内剔除。
+_NOTE_TIME_RANGE_START_TS = datetime(2025, 10, 1).timestamp()
+_NOTE_TIME_RANGE_END_TS = datetime(2026, 4, 1).timestamp()
+
+
+def _kw_cap_for_dim(dim: str) -> int:
+    """返回某维度关键词数量上限：industry 用放开后的上限，competitor/brand 维持现状。"""
+    return _MAX_KWS_INDUSTRY if dim == "industry" else _MAX_KWS_PER_DIM
 
 # 详情补充：搜索列表 API 返回的 liked_count 常是 `100+` 这类模糊下界，
 # 若要精确互动数据，需要逐条走详情接口 `/api/sns/web/v1/feed` 覆盖。
@@ -89,12 +104,18 @@ _CACHE_ENABLED = os.getenv("CRAWLER_CACHE_ENABLED", "true").strip().lower() in (
 # 只对未命中的词补爬，避免多词合成一把 key 时“库里有但仍全量爬”的情况。
 # 两侧所需数据都齐时才整包缓存返回，否则只补缺失维度 / 缺失竞品词。
 _L2_MIN_HIT = int(os.getenv("CRAWLER_L2_MIN_HIT", "10"))
-# L2 查询 top-K（从 pgvector 一次拉多少条候选）
-_L2_TOP_K = int(os.getenv("CRAWLER_L2_TOP_K", "30"))
+# L2 查询返回条数上限；0 或负数表示不限（在时间窗内返回所有命中笔记）。
+# 仅当需要保护大库查询性能时，才通过 CRAWLER_L2_TOP_K 设正整数 cap。
+_L2_TOP_K = int(os.getenv("CRAWLER_L2_TOP_K", "0"))
 # L2 有效时间窗（天）：超过该窗口的历史笔记不参与命中判定。
 # 预热/回填缓存不一定每天运行，3 天窗口容易让已有缓存被误判为 miss；
 # 默认放宽到 30 天，仍可通过 CRAWLER_L2_RECENT_DAYS 覆盖。
 _L2_RECENT_DAYS = int(os.getenv("CRAWLER_L2_RECENT_DAYS", "30"))
+
+
+def _l2_query_limit() -> Optional[int]:
+    """L2 查询 LIMIT；None 表示不限条数（仅受 recent_days 时间窗约束）。"""
+    return _L2_TOP_K if _L2_TOP_K > 0 else None
 
 
 def _coerce_str_list_field(raw: Any) -> List[Any]:
@@ -156,7 +177,7 @@ def _ordered_distinct_keywords(
     dims_keywords: Dict[str, List[str]], dim: str, *, max_n: Optional[int] = None
 ) -> List[str]:
     """按输入顺序去重，每维最多保留 `max_n` 个词，用于逐词缓存与补爬顺序。"""
-    cap = max_n if max_n is not None else _MAX_KWS_PER_DIM
+    cap = max_n if max_n is not None else _kw_cap_for_dim(dim)
     seen: set[str] = set()
     out: List[str] = []
     for x in (dims_keywords.get(dim) or [])[:cap]:
@@ -178,9 +199,8 @@ def _collapse_cache_layers(layers: List[str]) -> str:
 
 def _kw_group_tuple(dims_keywords: Dict[str, List[str]], dim: str) -> Tuple[str, ...]:
     kws = dims_keywords.get(dim) or []
-    return tuple(
-        sorted(str(x).strip() for x in kws[:_MAX_KWS_PER_DIM] if str(x).strip())
-    )
+    cap = _kw_cap_for_dim(dim)
+    return tuple(sorted(str(x).strip() for x in kws[:cap] if str(x).strip()))
 
 
 def _dims_sharing_kw_group(
@@ -266,6 +286,21 @@ def _dedupe_notes_by_note_id(notes: List[Dict[str, Any]]) -> List[Dict[str, Any]
         key = nid or f"__noid_{(n.get('title') or '')[:24]}"
         by_key.setdefault(key, n)
     return list(by_key.values())
+
+
+def _sanitize_cached_notes_media(notes: List[Dict[str, Any]]) -> None:
+    """就地修复 L1/L2 缓存笔记里可能残留的 heif 图片地址（见 RedbookApiClient.sanitize_note_media_urls）。
+
+    缓存（Redis TTL 6 小时 / pgvector 长期持久化）可能存有 heif 修复上线前写入的旧数据，
+    进程重启不会清空缓存，因此每次缓存命中都要兜底修一遍，避免多模态分析再次拿到无法解析的 heif 地址。
+    """
+    try:
+        from ...infrastructure.crawlers.redbook_api_client import RedbookApiClient
+    except Exception:  # noqa: BLE001
+        return
+    for n in notes:
+        if isinstance(n, dict):
+            RedbookApiClient.sanitize_note_media_urls(n)
 
 
 def _cache_trace_payload(
@@ -460,7 +495,7 @@ class CrawlerAgent(BaseAgent):
             "industry": (
                 _expand_keyword_tokens(
                     _coerce_str_list_field(dims_input.get("industry")),
-                    max_terms=_MAX_KWS_PER_DIM,
+                    max_terms=_MAX_KWS_INDUSTRY,
                 )
                 or list(base_keywords)
             ),
@@ -799,6 +834,19 @@ class CrawlerAgent(BaseAgent):
                 task_id, sources, cookies_str
             )
 
+        # 发布时间窗口过滤（业务需求：仅分析 2025-10~2026-03 的笔记）；stub 占位数据
+        # 时间戳是固定假数据，不落在窗口内，过滤会导致占位画布变空，故跳过。
+        if source == "live":
+            _before_tr = len(all_notes_with_hits)
+            all_notes_with_hits = _apply_note_time_range_filter(all_notes_with_hits)
+            notes_image = _apply_note_time_range_filter(notes_image)
+            notes_video = _apply_note_time_range_filter(notes_video)
+            if len(all_notes_with_hits) != _before_tr:
+                await self.emit_log(
+                    task_id, "info",
+                    f"时间窗口过滤（2025-10~2026-03）：{_before_tr} → {len(all_notes_with_hits)} 条",
+                )
+
         # 互动量下限过滤
         _min_inter = int(runtime_cfg.get("min_interaction") or 0)
         if _min_inter:
@@ -929,7 +977,7 @@ class CrawlerAgent(BaseAgent):
         for dim in active_dims:
             if dims_limit is not None and dim not in dims_limit:
                 continue
-            kws = eff_kw[dim][:_MAX_KWS_PER_DIM]
+            kws = eff_kw[dim][:_kw_cap_for_dim(dim)]
             if not kws:
                 continue
             # 使用 sorted tuple 作为 key，保证 "A,B" 和 "B,A" 视为同组
@@ -1048,6 +1096,7 @@ class CrawlerAgent(BaseAgent):
             cache = get_keyword_cache()
             cached = await cache.get(side_key)
             if cached:
+                _sanitize_cached_notes_media(cached)
                 if not _notes_cover_all_required_sk_keywords(cached, side_key):
                     await self.emit_log(
                         task_id,
@@ -1078,10 +1127,11 @@ class CrawlerAgent(BaseAgent):
             )
 
             store = get_notes_vector_store()
+            l2_limit = _l2_query_limit()
             rows = _dedupe_notes_by_note_id(
                 await store.search_notes(
                     keywords=side_key,
-                    top_k=_L2_TOP_K,
+                    top_k=l2_limit,
                     recent_days=_L2_RECENT_DAYS,
                 )
             )
@@ -1089,10 +1139,11 @@ class CrawlerAgent(BaseAgent):
                 if not any(kw in _row_source_keywords_list(r) for r in rows):
                     extra = await store.search_notes(
                         keywords=[kw],
-                        top_k=_L2_TOP_K,
+                        top_k=l2_limit,
                         recent_days=_L2_RECENT_DAYS,
                     )
                     rows = _dedupe_notes_by_note_id(rows + list(extra))
+            _sanitize_cached_notes_media(rows)
 
             if not _notes_cover_all_required_sk_keywords(rows, side_key):
                 if rows:
@@ -1397,6 +1448,17 @@ class CrawlerAgent(BaseAgent):
                 task_id, sources, cookies_str
             )
 
+        # 发布时间窗口过滤（业务需求：仅分析 2025-10~2026-03 的笔记）
+        _before_tr = len(all_notes_with_hits)
+        all_notes_with_hits = _apply_note_time_range_filter(all_notes_with_hits)
+        notes_image = _apply_note_time_range_filter(notes_image)
+        notes_video = _apply_note_time_range_filter(notes_video)
+        if len(all_notes_with_hits) != _before_tr:
+            await self.emit_log(
+                task_id, "info",
+                f"时间窗口过滤（2025-10~2026-03）：{_before_tr} → {len(all_notes_with_hits)} 条",
+            )
+
         # 互动量下限过滤
         _min_inter = int(runtime_cfg.get("min_interaction") or 0)
         if _min_inter:
@@ -1538,6 +1600,19 @@ class CrawlerAgent(BaseAgent):
         )
 
 
+async def _resolve_note_crawl_backend() -> str:
+    """读 system_settings.note_crawl_backend；异常/缺失时默认走自研路径（fail-open）。"""
+    try:
+        from ...services.system_settings_store import get_system_settings_store
+
+        cfg = await get_system_settings_store().get()
+        backend = str(cfg.get("note_crawl_backend") or "self").strip().lower()
+        return backend if backend in ("self", "redbook_api") else "self"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Crawler] 读取 note_crawl_backend 失败，按自研路径处理: {exc}")
+        return "self"
+
+
 async def _collect_one_dimension(
     cookies_str: str,
     keywords: List[str],
@@ -1545,14 +1620,22 @@ async def _collect_one_dimension(
     runtime_cfg: Dict[str, Any],
     owner_user_id: Optional[str] = None,
 ) -> List[Any]:
-    """单维度采集：构造独立 collector 跑一次 multi_keywords。
+    """单维度采集：按全局开关分派到自研采集或三方 Redbook API 采集。
 
-    采集参数全部来自 runtime_cfg（前端高级配置），只在缺失时回落 env 默认。
-    语义过滤：由调用方（如 comment_pipeline）将预构建的异步闭包写入
-    runtime_cfg["tier1_filter"] 和 runtime_cfg["tier2_filter"]，此处直接注入
-    到 collector 实例属性，不感知过滤逻辑本身。
-    爆文任务不传这两个字段，则 collector 属性保持 None，过滤不启用。
+    - 调用方（`_run_dimensions`）已按维度上限（`_kw_cap_for_dim`）截断好 `keywords`，
+      本函数不再重复截断，避免把 industry 放开后的关键词又截回 5 个。
+    - 自研路径：构造独立 collector 跑一次 multi_keywords，采集参数全部来自
+      runtime_cfg（前端高级配置），只在缺失时回落 env 默认。语义过滤由调用方
+      （如 comment_pipeline）将预构建的异步闭包写入 runtime_cfg["tier1_filter"]
+      和 runtime_cfg["tier2_filter"]，此处直接注入到 collector 实例属性，不感知
+      过滤逻辑本身；爆文任务不传这两个字段，则 collector 属性保持 None，过滤不启用。
+    - 三方路径：见 `_collect_one_dimension_via_redbook`（按互动量排序、不采集评论；
+      采集数量语义与自研一致，为所有关键词的总量，按词分摊到 per_keyword_target）。
     """
+    backend = await _resolve_note_crawl_backend()
+    if backend == "redbook_api":
+        return await _collect_one_dimension_via_redbook(keywords, target_count)
+
     from viral_agent.services.core.viral_collector import ViralNoteCollector
 
     collector = ViralNoteCollector(cookies_str, owner_user_id=owner_user_id)
@@ -1560,13 +1643,101 @@ async def _collect_one_dimension(
     collector.tier1_filter = runtime_cfg.get("tier1_filter")
     collector.tier2_filter = runtime_cfg.get("tier2_filter")
     notes = await collector.search_viral_notes_multi_keywords(
-        keywords=keywords[:_MAX_KWS_PER_DIM],
+        keywords=keywords,
         target_count=target_count,
         note_type=runtime_cfg.get("note_type", 0),
         time_range=runtime_cfg.get("time_range", 0),
         min_sample_count=_MIN_SAMPLE,
     )
     return notes or []
+
+
+def _redbook_note_to_viral_note_fields(note: Dict[str, Any]) -> Dict[str, Any]:
+    """把三方 Redbook note dict 字段名适配成 `ViralNote.from_spider_data` 期望的输入。
+
+    这样可以直接复用 `ViralNote.from_spider_data()` 构造出真正的 `ViralNote` 实例，
+    下游 `_normalize_note()`（含 SEO 提取、xsec_token 解析等）无需任何改动即可复用。
+    """
+    note_type_raw = str(note.get("note_type") or "normal").strip().lower()
+    source_keyword = str(note.get("source_keyword") or "").strip()
+    return {
+        "note_id": note.get("note_id", ""),
+        "note_url": note.get("url", ""),
+        "note_type": "视频" if note_type_raw == "video" else "图集",
+        "user_id": note.get("user_id", ""),
+        "nickname": note.get("nickname", ""),
+        "avatar": "",
+        "home_url": "",
+        "title": note.get("title", ""),
+        "desc": note.get("desc", ""),
+        "tags": list(note.get("tags") or []),
+        "liked_count": note.get("likes", 0),
+        "collected_count": note.get("collects", 0),
+        "comment_count": note.get("comments", 0),
+        "share_count": note.get("share_count", 0),
+        "image_list": list(note.get("image_urls") or []),
+        "video_addr": note.get("video_url") or None,
+        "video_cover": note.get("cover_url") or None,
+        "video_urls": list(note.get("video_urls") or []),
+        "source_keywords": [source_keyword] if source_keyword else [],
+        "upload_time": note.get("publish_time", ""),
+        "ip_location": "",
+    }
+
+
+def _per_keyword_target_for_redbook(keywords: List[str], target_count: int) -> int:
+    """三方 API 路径：把前端「采集数量」按自研逻辑分摊到每个关键词。
+
+    复用 `ViralNoteCollector._calculate_target_per_keyword`，保证两条采集路径
+  在相同 target_count + 关键词数下得到一致的 per-keyword 目标。
+    """
+    from viral_agent.services.core.viral_collector import ViralNoteCollector
+
+    kw_count = max(1, len([k for k in keywords if str(k).strip()]))
+    total = max(5, int(target_count))
+    return ViralNoteCollector(cookies_str="")._calculate_target_per_keyword(
+        kw_count, total, _MIN_SAMPLE
+    )
+
+
+async def _collect_one_dimension_via_redbook(
+    keywords: List[str],
+    target_count: int,
+) -> List[Any]:
+    """三方 Redbook API 采集分支（爆文任务专用）。
+
+    与评论流水线共用 `search_notes_for_keywords`，但差异化配置：
+    - sort="popularity_descending"：服务端按互动量降序返回，不做本地按时间重排。
+    - per_keyword_target：与自研路径一致，由总量 target_count 按关键词数分摊
+      （见 `_per_keyword_target_for_redbook`），而非每词都采满 target_count。
+    - fetch_detail=True：补全全文 desc + 话题标签，供下游 Insight/RAG 使用。
+    - 不调用任何评论采集接口（不采集评论区数据）。
+    - 关键词数量不设上限（由调用方 `_kw_cap_for_dim("industry")` 控制）。
+
+    多关键词结果合并去重后按 interaction_score 做一次全局归并排序——三方接口
+    对单个关键词的分页结果已经是热度降序，这一步只是合并多个已排序流的收尾，
+    与自研 `ViralNoteCollector` 合并多关键词结果后的排序逻辑一致。
+    """
+    from viral_agent.models.viral_note import ViralNote
+    from ...infrastructure.crawlers.redbook_note_search import search_notes_for_keywords
+
+    per_kw = _per_keyword_target_for_redbook(keywords, target_count)
+    raw_notes = await search_notes_for_keywords(
+        keywords,
+        sort="popularity_descending",
+        per_keyword_target=per_kw,
+        fetch_detail=True,
+    )
+
+    notes: List[ViralNote] = []
+    for raw_note in raw_notes:
+        try:
+            notes.append(ViralNote.from_spider_data(_redbook_note_to_viral_note_fields(raw_note)))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[Crawler] Redbook note 转换为 ViralNote 失败，跳过: {exc}")
+
+    notes.sort(key=lambda n: n.interaction_score, reverse=True)
+    return notes
 
 
 def _normalize_note(note: Any, dimension: str, primary_keyword: str) -> Dict[str, Any]:
@@ -1689,6 +1860,20 @@ def _apply_min_interaction_filter(
     return [
         n for n in notes
         if int(n.get("interaction_score") or 0) >= min_interaction
+    ]
+
+
+def _apply_note_time_range_filter(
+    notes: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """按发布时间窗口过滤笔记：只保留 [_NOTE_TIME_RANGE_START_TS, _NOTE_TIME_RANGE_END_TS) 内的笔记。
+
+    发布时间缺失或无法解析时 `_published_ts` 返回 0.0，视为无法确认落在范围内，直接剔除，
+    避免把时间不明的笔记误判为"在范围内"混入分析结果。
+    """
+    return [
+        n for n in notes
+        if _NOTE_TIME_RANGE_START_TS <= _published_ts(n) < _NOTE_TIME_RANGE_END_TS
     ]
 
 

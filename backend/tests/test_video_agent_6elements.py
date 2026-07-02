@@ -13,7 +13,8 @@ _VALID_VIDEO_ANN = (
     '{"cover_type": "前后对比", "cover_text_type": "干货/经验分享", '
     '"title_type": "干货/经验分享", "opening_type": "痛点切入", '
     '"product_intro_type": "直接带出", "product_placement_type": "融合自己使用方法/感受讲卖点", '
-    '"pain_keywords": "暗沉/松垮", "content_direction": "口播单推"}'
+    '"pain_keywords": "暗沉/松垮", "content_direction": "口播单推", '
+    '"product_brand": "卡诗"}'
 )
 
 

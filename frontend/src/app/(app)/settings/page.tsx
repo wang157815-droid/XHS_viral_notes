@@ -35,6 +35,7 @@ interface SystemSettings {
   vision_model: string;
   embedding_model: string;
   video_analysis_enabled: boolean;
+  note_crawl_backend: "self" | "redbook_api";
   crawler_schedule: {
     enabled?: boolean;
   };
@@ -1470,6 +1471,22 @@ function AIModelSection({
               })
             }
           />
+        </Row>
+        <Row label="爆文笔记采集方式">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-[#8A8580]">
+              {system?.note_crawl_backend === "redbook_api" ? "三方 API（按互动量排序）" : "自研直连采集"}
+            </span>
+            <Toggle
+              on={system?.note_crawl_backend === "redbook_api"}
+              disabled={!canManageSystem}
+              onToggle={() =>
+                onUpdateSystem({
+                  note_crawl_backend: system?.note_crawl_backend === "redbook_api" ? "self" : "redbook_api",
+                })
+              }
+            />
+          </div>
         </Row>
       </Card>
 

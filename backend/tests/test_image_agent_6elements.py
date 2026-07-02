@@ -12,7 +12,8 @@ _VALID_IMAGE_ANN = (
     '"title_type": "笔记主题", "opening_type": "干货切入", '
     '"product_intro_type": "融入到干货/经验分享中", '
     '"product_placement_type": "融合自己使用方法/感受讲卖点", '
-    '"pain_keywords": "暗沉", "content_direction": "干货分享"}'
+    '"pain_keywords": "暗沉", "content_direction": "干货分享", '
+    '"product_brand": "雅诗兰黛"}'
 )
 
 
@@ -97,3 +98,28 @@ async def test_image_agent_rejects_none_product_fields():
     assert "i1" not in (mm.get("annotations") or {})
     assert mm["image_stats"]["success"] == 0
     assert mm["image_stats"]["failed"] == 1
+
+
+def test_coerce_annotation_keeps_product_brand_drops_unknown():
+    """_coerce_annotation 保留 product_brand 等白名单字段,丢弃未知字段。"""
+    from backend.app.application.agents.image_analysis_agent import (
+        ImageAnalysisAgent,
+        _ANNOTATION_KEYS,
+    )
+
+    parsed = {
+        "cover_type": "场景摆拍",
+        "cover_text_type": "干货/经验分享",
+        "title_type": "笔记主题",
+        "opening_type": "干货切入",
+        "product_intro_type": "直接带出",
+        "product_placement_type": "口播参数",
+        "pain_keywords": "续航",
+        "content_direction": "数码测评",
+        "product_brand": "大疆",
+        "unknown_field": "应被丢弃",
+    }
+    out = ImageAnalysisAgent._coerce_annotation(parsed)
+    assert out["product_brand"] == "大疆"
+    assert "unknown_field" not in out
+    assert set(out.keys()) == set(_ANNOTATION_KEYS)
