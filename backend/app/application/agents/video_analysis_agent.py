@@ -87,6 +87,7 @@ _ANNOTATION_KEYS = [
     "product_placement_type",
     "pain_keywords",
     "content_direction",
+    "product_brand",
 ]
 
 

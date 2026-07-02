@@ -12,6 +12,7 @@ v1（保留，当 comment_output["version"] != "v2" 时调用）：
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -41,8 +42,23 @@ def _to_xhs_url(url: str) -> str:
               .replace("webapi.rednote.com", "edith.xiaohongshu.com")
 
 
+# Excel 单元格不允许的控制字符:0x00-0x08、0x0B、0x0C、0x0E-0x1F。
+# 保留 0x09(\t)、0x0A(\n)、0x0D(\r)——wrap_text 需要 \n 换行。
+# 小红书评论/文案里偶尔混入这些控制符,会让 openpyxl 抛
+# IllegalCharacterError("... cannot be used in worksheets."),评论报告导出 500。
+_ILLEGAL_XLSX_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitize_for_xlsx(value: Any) -> Any:
+    """剥离 Excel 单元格不允许的控制字符,仅对字符串生效。"""
+    if isinstance(value, str):
+        return _ILLEGAL_XLSX_CHARS_RE.sub("", value)
+    return value
+
+
 def _cell_write(ws, row: int, col: int, value: Any, *, center: bool = False) -> None:
     """写入单元格并设置边框和对齐。"""
+    value = _sanitize_for_xlsx(value)
     cell = ws.cell(row=row, column=col, value=value)
     cell.border = _BORDER
     cell.alignment = _CENTER_ALIGN if center else _WRAP_ALIGN

@@ -448,7 +448,7 @@ class ViralNoteCollector:
         5. 校验最终样本量
 
         Args:
-            keywords: 搜索关键词列表（最多5个）
+            keywords: 搜索关键词列表（数量不设上限，由调用方按维度控制）
             target_count: 目标爬取总数量
             note_type: 笔记类型
             time_range: 时间范围
@@ -458,8 +458,6 @@ class ViralNoteCollector:
         Returns:
             按互动分数排序并截取的爆款笔记列表
         """
-        # 限制关键词数量
-        keywords = keywords[:5]
         self.search_keywords = keywords  # 保存多关键词列表
 
         # Cookie 有效性预检（失败直接抛出，前端展示授权引导）

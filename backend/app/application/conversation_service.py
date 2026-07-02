@@ -1124,6 +1124,7 @@ class ConversationService:
                                 if first.get("type") == "viral_analysis"
                                 else None
                             ),
+                            task_type=str(first.get("type") or "viral_analysis"),
                         )
                     self.store.append_message(conversation_id, assistant)
                     self._maybe_update_summary(conversation_id)
@@ -1363,6 +1364,7 @@ class ConversationService:
             raw_input=content,
             keywords=intent.extracted_keywords,
             canvas_url_hint=f"/workspace?task={result.record.task_id}",
+            task_type=result.record.task_type,
         )
         message = self._assistant(
             conversation_id,

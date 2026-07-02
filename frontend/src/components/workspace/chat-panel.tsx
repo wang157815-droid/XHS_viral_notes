@@ -178,7 +178,8 @@ export function ChatPanel({
 
   const parseKeywords = (text: string): string[] => {
     const matches = text.match(/「([^」]+)」|「(.+?)」/g) ?? [];
-    return matches.map((m) => m.replace(/[「」]/g, "")).slice(0, 5);
+    // 主关键词数量不设上限，仅保留一个宽松的安全上限防止异常输入
+    return matches.map((m) => m.replace(/[「」]/g, "")).slice(0, 50);
   };
 
   const kbMention = useMemo(() => getActiveKbMention(input, inputCaret), [input, inputCaret]);
@@ -1097,6 +1098,20 @@ function ConversationView({
   const taskMessage = taskMsgIndex >= 0 ? messages[taskMsgIndex] : null;
   const postTaskMessages = taskMsgIndex >= 0 ? messages.slice(taskMsgIndex + 1) : messages;
 
+  // task_type 决定 AgentTimeline 用哪套步骤目录渲染；直接按 task_handoff.task_id
+  // 精确匹配携带该字段的助手消息，不依赖上面用于切分历史的 taskMsgIndex（后者可能
+  // 落在触发消息本身而非携带 task_handoff 的助手回复上）。
+  const handoffMessage = messages.find((m) => m.task_handoff?.task_id === taskId) ?? null;
+  const taskType = handoffMessage?.task_handoff?.task_type;
+
+  // 携带 task_handoff 的助手确认回复（如"好的，已为「xxx」启动评论分析任务..."）
+  // 语义上是对触发消息的即时应答，应提到 AgentTimeline 之前展示，而不是和"分析完成"
+  // 等真正的后续消息一起堆在时间线下方。
+  const handoffIdxInPost = handoffMessage ? postTaskMessages.indexOf(handoffMessage) : -1;
+  const beforeHandoffMessages = handoffIdxInPost > 0 ? postTaskMessages.slice(0, handoffIdxInPost) : [];
+  const afterHandoffMessages =
+    handoffIdxInPost >= 0 ? postTaskMessages.slice(handoffIdxInPost + 1) : postTaskMessages;
+
   return (
     <div className="flex w-full flex-col gap-4">
       {/* 任务发起前的历史对话 */}
@@ -1109,9 +1124,13 @@ function ConversationView({
         taskMessage ? renderMessage(taskMessage) : null
       )}
 
-      <AgentTimeline state={streamState} taskId={taskId} />
+      {/* 助手的任务启动确认回复，紧跟在触发消息后、时间线之前 */}
+      {beforeHandoffMessages.map(renderMessage)}
+      {handoffMessage ? renderMessage(handoffMessage) : null}
 
-      {postTaskMessages.map(renderMessage)}
+      <AgentTimeline state={streamState} taskId={taskId} taskType={taskType} />
+
+      {afterHandoffMessages.map(renderMessage)}
 
       {showCompletionHint ? (
         <Message

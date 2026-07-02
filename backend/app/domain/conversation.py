@@ -72,6 +72,9 @@ class TaskHandoff:
     raw_input: str
     keywords: List[str] = field(default_factory=list)
     canvas_url_hint: Optional[str] = None
+    # 前端据此在任务一开始就选择正确的执行可视化步骤目录
+    # （viral_analysis → 爆文 10 步 AGENT_STEPS；comment_analysis → 评论 7 步 COMMENT_AGENT_STEPS）
+    task_type: str = "viral_analysis"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +83,7 @@ class TaskHandoff:
             "raw_input": self.raw_input,
             "keywords": self.keywords,
             "canvas_url_hint": self.canvas_url_hint,
+            "task_type": self.task_type,
         }
 
     @classmethod
@@ -92,6 +96,7 @@ class TaskHandoff:
             raw_input=str(data.get("raw_input") or ""),
             keywords=[str(item) for item in data.get("keywords") or []],
             canvas_url_hint=data.get("canvas_url_hint"),
+            task_type=str(data.get("task_type") or "viral_analysis"),
         )
 
 

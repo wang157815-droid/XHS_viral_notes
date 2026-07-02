@@ -39,6 +39,8 @@ DEFAULT_SYSTEM_SETTINGS: Dict[str, Any] = {
     "vision_model": (os.getenv("MULTIMODAL_MODEL_NAME", "qwen3-vl-plus").strip() or "qwen3-vl-plus"),
     "embedding_model": (os.getenv("EMBEDDING_MODEL", "text-embedding-v4").strip() or "text-embedding-v4"),
     "video_analysis_enabled": True,
+    # 爆文任务笔记采集后端："self"（自研 XHS 直连采集）| "redbook_api"（三方 Redbook API）
+    "note_crawl_backend": "self",
     "crawler_schedule": {
         "enabled": True,
     },

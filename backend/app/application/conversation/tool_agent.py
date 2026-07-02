@@ -117,7 +117,7 @@ class ConversationToolAgent:
         if intent_name == "comment_analysis":
             kw = slots.get("keywords") or intent.extracted_keywords or keywords or []
             if not kw:
-                kw = IntentRouter.extract_keywords(content)
+                kw = IntentRouter.extract_keywords(content, max_items=5)
             top_notes = int(slots.get("top_notes") or 0)  # 0 = 不限，爬到多少用多少
             top_comments = int(slots.get("top_comments_per_note") or 5)
             workflow_args = {

@@ -598,18 +598,41 @@ def test_competitor_sheet_seo_tu_columns_width_60(monkeypatch):
     assert ws.column_dimensions["U"].width == 60
 
 
-def test_infer_brand_from_title_lexicon():
+def test_infer_brand_adaptive():
+    """品牌列自适应:搜索词是已知品牌→用搜索词;品类词→用 LLM 标注的 product_brand;都无→回退搜索词。"""
     from backend.app.services.canvas_export import excel_exporter as ee
 
-    note = {"title": "雅诗兰黛小棕瓶夜间修护", "desc": "", "keyword": ""}
+    # 1. 搜索词是已知品牌(在品牌词表)→ 直接用搜索词(竞品/品牌维度)
+    note = {"source_keywords": ["雅诗兰黛", "雅诗兰黛"]}
     assert ee._infer_brand_for_export(note, {}, task_keywords=[]) == "雅诗兰黛"
 
+    # 2. 搜索词是品类词(不在品牌词表)+ LLM 标注了真实品牌 → 用 LLM 品牌(品类维度核心场景)
+    note = {"source_keywords": ["防脱洗发水"], "keyword": "防脱洗发水"}
+    ann = {"product_brand": "卡诗"}
+    assert ee._infer_brand_for_export(note, ann, task_keywords=[]) == "卡诗"
 
-def test_infer_brand_keyword_fallback_when_title_plain():
-    from backend.app.services.canvas_export import excel_exporter as ee
+    # 3. 搜索词不在词表 + LLM 品牌为"未知"占位 → 回退搜索词
+    note = {"source_keywords": ["防脱洗发水"]}
+    ann = {"product_brand": "未知"}
+    assert ee._infer_brand_for_export(note, ann, task_keywords=[]) == "防脱洗发水"
 
-    note = {"title": "双十一必囤清单来了", "desc": "", "keyword": "珀莱雅"}
-    assert ee._infer_brand_for_export(note, {}, task_keywords=[]) == "珀莱雅"
+    # 4. 搜索词不在词表 + 无 LLM 品牌 → 回退搜索词(去重拼接)
+    note = {"source_keywords": ["北欧", "巧克力"]}
+    assert ee._infer_brand_for_export(note, {}, task_keywords=[]) == "北欧 / 巧克力"
+
+    # 5. 搜索词在词表时,即使 LLM 品牌不同也优先用搜索词(竞品场景稳定)
+    note = {"source_keywords": ["Fazer"]}
+    ann = {"product_brand": "玛氏"}
+    assert ee._infer_brand_for_export(note, ann, task_keywords=[]) == "Fazer"
+
+    # 6. 无搜索词 + LLM 有品牌 → 用 LLM 品牌
+    note = {"keyword": ""}
+    ann = {"product_brand": "卡诗"}
+    assert ee._infer_brand_for_export(note, ann, task_keywords=[]) == "卡诗"
+
+    # 7. 都为空 → 空字符串
+    note = {"title": "纯科普笔记", "keyword": ""}
+    assert ee._infer_brand_for_export(note, {}, task_keywords=[]) == ""
 
 
 def test_sample_sheets_metric_columns_width_10(monkeypatch):

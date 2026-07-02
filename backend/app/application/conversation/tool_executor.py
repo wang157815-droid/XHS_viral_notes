@@ -89,7 +89,8 @@ class ConversationToolExecutor:
         ctx: ConversationToolExecutionContext,
     ) -> ChatMessage:
         args = call.arguments
-        keywords = self._clean_list(args.get("keywords")) or ctx.intent.extracted_keywords
+        # 爆文任务主关键词不设硬性上限（仅保留 50 的宽松安全上限）
+        keywords = self._clean_list(args.get("keywords"), max_items=50) or ctx.intent.extracted_keywords
         if not keywords:
             return self._ask_clarification(
                 ConversationToolCall(
@@ -255,6 +256,7 @@ class ConversationToolExecutor:
             raw_input=ctx.content,
             keywords=keywords,
             canvas_url_hint=f"/workspace?task={result.record.task_id}",
+            task_type=result.record.task_type,
         )
         message = self._assistant(
             ctx,
@@ -349,13 +351,15 @@ class ConversationToolExecutor:
             raw_input=ctx.content,
             keywords=keywords,
             canvas_url_hint=None,
+            task_type=result.record.task_type,
         )
+        from ..comment_pipeline import describe_collection_plan
         kw_display = "".join(f"「{kw}」" for kw in keywords)
         msg = self._assistant(
             ctx,
             (
-                f"好的，已为 {kw_display} 启动**评论分析任务**（ID: `{result.record.task_id}`）。\n"
-                f"正在采集{'全部' if not top_notes else f' Top {top_notes} '}条笔记，每条笔记取 Top {top_comments} 条高赞评论。\n"
+                f"好的，已为 {kw_display} 启动**评论分析任务**。\n"
+                f"{describe_collection_plan(top_notes, top_comments)}。\n"
                 f"分析完成后会自动推送下载链接，稍等片刻。"
             ),
             linked_task_id=result.record.task_id,
@@ -427,6 +431,7 @@ class ConversationToolExecutor:
                 canvas_url_hint=(
                     f"/workspace?task={first['task_id']}" if first.get("type") == "viral_analysis" else None
                 ),
+                task_type=str(first.get("type") or "viral_analysis"),
             )
         return msg
 
@@ -655,7 +660,7 @@ class ConversationToolExecutor:
         )
 
     @staticmethod
-    def _clean_list(value: Any) -> List[str]:
+    def _clean_list(value: Any, max_items: int = 5) -> List[str]:
         if not value:
             return []
         if isinstance(value, str):
@@ -667,7 +672,7 @@ class ConversationToolExecutor:
             text = str(item or "").strip()
             if text and text not in result:
                 result.append(text)
-        return result[:5]
+        return result[:max_items]
 
     @staticmethod
     def _build_chat_messages(recent_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

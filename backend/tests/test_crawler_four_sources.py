@@ -169,6 +169,9 @@ async def test_crawler_run_writes_sources_field(monkeypatch):
             self.video_addr = None
             self.nickname = "u"
             self.source_keywords = []
+            # 落在时间窗口过滤范围内（2025-10~2026-03），避免被 CrawlerAgent 的
+            # 发布时间窗口过滤剔除导致本测试断言变成空转。
+            self.upload_time = "2026-01-15 10:00:00"
 
     counter = {"i": 0}
 

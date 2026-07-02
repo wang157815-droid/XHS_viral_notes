@@ -101,8 +101,11 @@ export function reduceTaskEvent(
           done: isDone || (state.agentStatus[agentId]?.done ?? false),
         },
       };
-      // 同步标记 thinkingDone，停止思考光标闪烁
-      if (isDone) {
+      // 同步标记 thinkingDone，停止思考光标闪烁；仅当该 agent 确实曾经流式输出过
+      // thinking chunk 时才标记(agentId in state.agentThinking)。避免从不开启思考
+      // 模式的 agent(如评论分析流水线全阶段、CrawlerAgent/XhsAuthAgent 等非 LLM 步骤)
+      // 被误标为"有思考记录但已过期"，从而在前端渲染出一个空的思考占位框。
+      if (isDone && agentId in state.agentThinking) {
         next.agentThinkingDone = {
           ...state.agentThinkingDone,
           [agentId]: true,

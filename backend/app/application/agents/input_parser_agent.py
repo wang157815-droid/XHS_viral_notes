@@ -253,7 +253,8 @@ def _merge_parsed(base: Dict[str, Any], extracted: Dict[str, Any]) -> Dict[str, 
     out = dict(base)
     kw = extracted.get("keywords")
     if isinstance(kw, list) and kw:
-        out["keywords"] = [str(x) for x in kw][:5]
+        # 主关键词数量不再硬性截断到 5，仅保留一个宽松的安全上限防止异常输入
+        out["keywords"] = [str(x) for x in kw][:50]
     dims = extracted.get("dimensions")
     if isinstance(dims, dict):
         out["dimensions"] = {

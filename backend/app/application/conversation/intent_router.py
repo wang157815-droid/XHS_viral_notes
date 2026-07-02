@@ -94,9 +94,9 @@ class IntentRouter:
                 clarification_question=None if active_task_id else "当前还没有可导出的分析任务，请先生成爆文模型。",
             )
 
-        # 3. 评论分析意图（高置信触发词）
+        # 3. 评论分析意图（高置信触发词）；评论分析场景关键词仍保持克制上限
         if _COMMENT_ANALYSIS_TRIGGERS.search(text):
-            keywords = self.extract_keywords(text)
+            keywords = self.extract_keywords(text, max_items=5)
             return IntentClassification(
                 intent="comment_analysis",
                 confidence=0.90,
@@ -129,8 +129,16 @@ class IntentRouter:
         )
 
     @staticmethod
-    def extract_keywords(text: str, competitor_keywords: Optional[List[str]] = None) -> List[str]:
-        """从文本中提取主品关键词（供 LLM 分类器回填 slots 时备用）。"""
+    def extract_keywords(
+        text: str,
+        competitor_keywords: Optional[List[str]] = None,
+        max_items: int = 50,
+    ) -> List[str]:
+        """从文本中提取主品关键词（供 LLM 分类器回填 slots 时备用）。
+
+        max_items 默认放开到 50（对齐爆文任务主关键词不设硬性上限的策略）；
+        评论分析场景调用方显式传入 max_items=5 保持原有克制行为。
+        """
         quoted = re.findall(r"[「\"]([^」\"]{1,30})[」\"]", text)
         if quoted:
             competitors = set(competitor_keywords or [])
@@ -138,7 +146,7 @@ class IntentRouter:
                 item
                 for item in dict.fromkeys(item.strip() for item in quoted if item.strip())
                 if item not in competitors
-            ][:5]
+            ][:max_items]
 
         main_match = re.search(
             r"(?:搜索|采集|分析|看看|生成)(?:小红书)?([^，,。；;]+)",
@@ -168,7 +176,7 @@ class IntentRouter:
                 item = cleaned.strip()
             if len(item) >= 2 and item not in result:
                 result.append(item)
-            if len(result) >= 5:
+            if len(result) >= max_items:
                 break
         return result
 
