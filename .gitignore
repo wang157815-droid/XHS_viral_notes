@@ -150,3 +150,6 @@ db.sqlite3
 local_settings.py
 
 MediaCrawler/
+
+docs/ssh-key
+docs/ssh-key.pub

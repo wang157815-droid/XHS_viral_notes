@@ -876,6 +876,8 @@ async def _step1_crawl_notes(
     翻页/去重/detail 补全的通用循环已抽取到 `redbook_note_search.search_notes_for_keywords`
     （与爆文 CrawlerAgent 的第三方采集分支共用），本函数只负责拼装评论流水线专属参数
     （Tier2 精判 hook、`_emit_log` SSE 播报）和爬完后的业务排序。
+    关键节点同步 _emit_log(agent_id="CommentCrawler")，供前端时间线展示逐关键词/
+    逐页的实时采集进展。
     """
     from ..infrastructure.crawlers.redbook_note_search import search_notes_for_keywords
 
