@@ -262,6 +262,8 @@ class ConversationService:
                 "- 使用合法 Markdown：分点用 `- `，步骤用 `1. `，"
                 "代码/路径/字段名用反引号，标题只用 `##` 或 `###`，不滥用表格。\n"
                 "- 不要输出 HTML。\n"
+                "- **绝对不要假装已经执行了采集、生成或导出操作**——如果用户需要执行任务，"
+                "引导他们重新发一条明确的任务指令。"
                 + summary_block
             ),
         }
@@ -487,7 +489,9 @@ class ConversationService:
             competitor_keywords=competitor_keywords,
             advanced_config=advanced_config or {},
         )
-        call = self._resolve_pending_tool_call(conversation.metadata, content, decision.first_call)
+        call = self._resolve_pending_tool_call(
+            conversation.metadata, content, decision.first_call, conversation_id=conversation_id
+        )
         if not call:
             call = ConversationToolCall(name="answer_general", arguments={"question": content}, confidence=0.6)
         yield {"type": "tool_selected", "tool": call.to_dict()}
@@ -594,7 +598,9 @@ class ConversationService:
                 competitor_keywords=intent.competitor_keywords,
                 advanced_config=advanced_config,
             )
-            call = self._resolve_pending_tool_call(conversation.metadata, content, decision.first_call)
+            call = self._resolve_pending_tool_call(
+                conversation.metadata, content, decision.first_call, conversation_id=conversation_id
+            )
             if not call:
                 call = ConversationToolCall(name="answer_general", arguments={"question": content}, confidence=0.6)
             ctx = ConversationToolExecutionContext(
@@ -1365,11 +1371,20 @@ class ConversationService:
         except Exception:
             return None
 
+    # 用户取消任务的信号词（中英文）
+    _CANCEL_SIGNALS = (
+        "取消", "算了", "不了", "不做了", "不要了", "停止", "停", "放弃", "退出",
+        "不用了", "不需要了", "不要分析", "不分析了", "不搜了", "别搜了",
+        "cancel", "stop", "abort", "quit", "never mind",
+    )
+
     def _resolve_pending_tool_call(
         self,
         metadata: Dict[str, Any],
         content: str,
         selected: Optional[ConversationToolCall],
+        *,
+        conversation_id: Optional[str] = None,
     ) -> Optional[ConversationToolCall]:
         pending = metadata.get("pending_tool_decision") if isinstance(metadata, dict) else None
         if not isinstance(pending, dict):
@@ -1407,6 +1422,16 @@ class ConversationService:
             # ① 风险/竞品确认等待：必须优先处理，不能被 selected 绕过
             #    pending_args 里已有 risk_acknowledged=True / competitor_acknowledged=True
             if missing_fields and missing_fields.issubset(CONFIRMATION_FIELDS):
+                # 检查用户是否明确取消 —— 此时必须清除 pending 并回退到 answer_general，
+                # 否则无论用户说什么都会强制发起任务，用户无法撤销确认请求。
+                wants_cancel = any(sig in content for sig in self._CANCEL_SIGNALS)
+                if wants_cancel:
+                    if conversation_id:
+                        self.store.update_conversation(
+                            conversation_id, metadata_patch={"pending_tool_decision": None}
+                        )
+                    return selected
+
                 skip_signals = (
                     "不需要竞品", "跳过竞品", "不分析竞品", "不要竞品",
                     "只分析本品", "只看本品", "不用竞品", "略过竞品",
