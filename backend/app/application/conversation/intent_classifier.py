@@ -57,6 +57,11 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
   - 纯能力询问 / 概念解释（→ general_qa）
   - 标准爆文模型需求（→ xhs_analysis）/ 标准评论洞察需求（→ comment_analysis）
 关键词提取：把可识别的品牌/品类/产品词放入 slots.keywords（供下游参考，可为空）。
+**另外，以下"查询/操作系统数据"的请求也一律判为 agent_task**（Agent 有对应系统接口工具）：
+  - 知识库里有哪些文档 / 文档列表 / 文档数量（注意：问文档里的**内容**才是 knowledge_qa）
+  - 我的任务 / 历史任务 / 任务详情 / 任务进度 / 某任务的画布结果
+  - 暂停 / 恢复 / 取消 / 重试某个任务
+  - Cookie 健康度、小红书授权状态、爬虫状态、关注关键词、运营指标、系统设置/当前用的模型
 
 ### comment_analysis（发起评论分析任务）
 触发条件（必须同时满足 A 和 B）：
@@ -83,7 +88,8 @@ _INTENT_SYSTEM_PROMPT = """你是 RedMuse 爆文分析平台的意图识别模�
 触发条件：用户明确要求导出、下载、生成 Excel/JSON 文件
 
 ### knowledge_qa（知识库问答）
-触发条件：用户询问知识库、SOP、规则文档、案例、合规要求
+触发条件：用户询问知识库**文档里的内容**（SOP、规则、案例、合规要求等）
+禁止触发：问"知识库有哪些文档 / 文档列表"这类系统数据 → agent_task
 
 ### general_qa（普通问答）
 触发条件：功能询问、概念解释、数据解读、闲聊、追问原因、任何不属于以上意图的问题
@@ -200,6 +206,14 @@ sample_count（采集数量）：
 示例20（agent_task - 达人匹配/选题挖掘）：
 输入：根据「儿童钢琴」这个方向，帮我挖一批适合投放的小红书达人和可切入的选题
 输出：{"intent":"agent_task","confidence":0.88,"slots":{"keywords":["儿童钢琴"]},"missing_fields":[],"clarification_question":null,"reason":"达人匹配+选题挖掘属非标洞察，需自主规划"}
+
+示例21（agent_task - 查询系统数据）：
+输入：帮我看一下知识库中有哪些文档
+输出：{"intent":"agent_task","confidence":0.9,"slots":{"keywords":[]},"missing_fields":[],"clarification_question":null,"reason":"查询知识库文档列表属系统数据，由 Agent 调用系统接口工具"}
+
+示例22（agent_task - 任务操作）：
+输入：把我最近失败的那个任务重试一下
+输出：{"intent":"agent_task","confidence":0.9,"slots":{"keywords":[]},"missing_fields":[],"clarification_question":null,"reason":"查询并重试历史任务，需调用任务管理工具"}
 
 ## 输出格式（严格 JSON，禁止 markdown 包裹）
 

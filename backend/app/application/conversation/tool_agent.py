@@ -29,6 +29,17 @@ from .tool_schema import (
 # 仅保留以兼容历史会话中残留的 pending_tool_decision。
 ANALYSIS_CHOICE_TOOL = "__analysis_choice__"
 
+# 命中即视为"查询/操作系统数据"，交给 Agent 的系统接口工具（tools/system_api.py）
+_SYSTEM_QUERY_RE = re.compile(
+    r"知识库.{0,8}(哪些|什么|多少|列表|清单|目录)?.{0,4}文档"
+    r"|文档(列表|清单)"
+    r"|(我的|历史|最近的?|所有)任务"
+    r"|任务(列表|详情|进度|状态|画布)"
+    r"|(暂停|恢复|取消|重试).{0,10}任务"
+    r"|cookie|授权状态|爬虫状态|关注关键词|运营指标|指标汇总|系统设置",
+    re.IGNORECASE,
+)
+
 
 class ConversationToolAgent:
     """确定性 intent→tool 映射，不做意图判断。"""
@@ -52,6 +63,11 @@ class ConversationToolAgent:
         slots = intent.slots or {}
 
         agent_enabled = bool(settings.agent_runtime_enabled)
+
+        # 系统数据查询/操作（知识库文档列表、我的任务、Cookie/爬虫状态等）：
+        # 无论 LLM 判成 knowledge_qa / general_qa，都交给 Agent 调用系统接口工具。
+        if agent_enabled and intent_name in {"knowledge_qa", "general_qa", "unknown"} and _SYSTEM_QUERY_RE.search(content or ""):
+            return self._agent_task_decision(content, max(intent.confidence, 0.8), f"intent={intent_name} 命中系统数据查询 → 自主规划 Agent")
 
         # ─── agent_task（自主规划 Agent）────────────────────────────────────
         if intent_name == "agent_task":
