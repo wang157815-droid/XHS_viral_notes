@@ -1,0 +1,98 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: on-failure
+    environment:
+      - POSTGRES_USER=redmuse
+      - POSTGRES_PASSWORD=redmuse_dev
+      - POSTGRES_DB=redmuse
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./scripts/pg_init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redmuse -d redmuse"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    image: python:3.10-slim
+    working_dir: /app
+    restart: on-failure
+    command:
+      - sh
+      - -ec
+      - |
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends curl nodejs npm ffmpeg libgl1 libglib2.0-0 >/dev/null
+        if [ ! -f /venv/.ok-$$(md5sum requirements.txt | cut -d' ' -f1) ]; then
+          python -m venv /venv
+          /venv/bin/pip install -q -r requirements.txt chromadb opencv-python-headless sqlalchemy asyncpg alembic redis arq pgvector
+          touch /venv/.ok-$$(md5sum requirements.txt | cut -d' ' -f1)
+        fi
+        [ -d node_modules ] || npm install --silent
+        exec /venv/bin/python backend/run.py --host 0.0.0.0 --port 8100 --reload
+    volumes:
+      - .:/app
+      - venv:/venv
+    env_file:
+      - ./.env.base44-defaults
+      - /run/base44/app.env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=redmuse
+      - POSTGRES_PASSWORD=redmuse_dev
+      - POSTGRES_DB=redmuse
+      - BACKLOG_BACKEND=redis
+      - TASK_RUNNER=inprocess
+      - CORS_ORIGINS=https://3000-${BASE44_PUBLIC_HOST_SUFFIX}
+    depends_on:
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8100/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+
+  frontend:
+    image: node:20-bookworm-slim
+    working_dir: /app
+    restart: on-failure
+    command: ["sh", "-ec", "npm ci --include=optional && exec npx next dev -H 0.0.0.0 -p 3000"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - fe-node-modules:/app/node_modules
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=/api/v1
+      - BACKEND_INTERNAL_URL=http://backend:8100
+      - BASE44_PREVIEW_MODE
+      - BASE44_PUBLIC_HOST_SUFFIX
+      - WATCHPACK_POLLING=true
+    depends_on:
+      backend: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  pg-data:
+  venv:
+  fe-node-modules:

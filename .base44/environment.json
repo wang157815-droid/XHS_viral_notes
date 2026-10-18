@@ -1,0 +1,1 @@
+{"previewPort":3000,"healthPath":"/login","startCommand":"docker compose -f docker-compose.base44.yml up -d","secrets":[{"name":"JWT_SECRET","description":"JWT signing key for the web API","requiredAtBoot":true,"generatedForDevelopment":true}]}

@@ -704,3 +704,8 @@ MULTIMODAL_MODEL_NAME="qwen3-vl-plus"
 4. **Windows 开发注意**
    - 使用 `backend/run.py` 而非直接 `uvicorn`，避免 `ProactorEventLoop` 问题
    - PowerShell 执行脚本可能需要设置执行策略
+
+## Base44 sandbox setup
+- Run: `docker compose -f docker-compose.base44.yml up -d` (first boot ~3 min: pip/npm install into volumes).
+- Single origin on :3000: Next dev server rewrites `/api/*` to the `backend` service (:8100). The rewrite and `allowedDevOrigins` in `frontend/next.config.ts` are active only when `BASE44_PREVIEW_MODE === "1"`; unset = original behavior.
+- Dev login: `admin` / `admin-dev-password` (placeholders in `.env.base44-defaults`). Real XHS cookie / LLM keys are optional and set via secrets.
