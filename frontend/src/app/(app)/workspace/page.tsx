@@ -297,6 +297,8 @@ export default function WorkspacePage() {
       let assistantInserted = false;
       let thinkContent = "";
       let thinkDurationMs = 0;
+      // 思考耗时从发送请求起算（后端只统计 <think> 流式区间，整块返回时会接近 0）
+      const requestStartedAt = Date.now();
       // 自主 Agent 运行态累积：执行步骤 / 计划 / 流式产物，驱动步骤条与产物卡可视化
       let agentSteps: AgentRunStep[] = [];
       let agentPlan: AgentPlanStep[] = [];
@@ -531,7 +533,7 @@ export default function WorkspacePage() {
             }
             if (event.type === "thinking_done") {
               thinkContent = event.think || thinkContent;
-              thinkDurationMs = event.duration_ms || 0;
+              thinkDurationMs = Math.max(event.duration_ms || 0, Date.now() - requestStartedAt);
               upsertAssistant(makeAssistantMessage({ debug: { streaming: true, thinking_live: false, think_content: thinkContent, think_duration_ms: thinkDurationMs } }));
               return;
             }

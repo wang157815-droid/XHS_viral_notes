@@ -115,7 +115,10 @@ export function AgentThinking({
         steps={toThinkingSteps(steps)}
         elapsedSeconds={seconds}
         liveLabel={confirmation?.state === "pending" ? "等待你确认后继续" : label || "正在思考与执行"}
-        doneLabel={(s) => (steps.length ? `已思考 ${s} 秒 · ${steps.length} 步` : `已思考 ${s} 秒`)}
+        doneLabel={(s) => {
+          const head = s > 0 ? `已思考 ${s} 秒` : "已完成思考";
+          return steps.length ? `${head} · ${steps.length} 步` : head;
+        }}
       >
         {thinkContent ? (
           <p className="whitespace-pre-wrap border-l border-border pl-3 text-xs leading-5 text-muted-foreground">
