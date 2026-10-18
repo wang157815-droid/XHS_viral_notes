@@ -465,6 +465,7 @@ def register(registry: ToolRegistry) -> None:
             },
             handler=_collect_notes,
             cost="expensive",
+            requires_confirmation=True,  # 批量抓取：执行前需用户确认
             category="capability",
         )
     )
@@ -495,6 +496,7 @@ def register(registry: ToolRegistry) -> None:
             },
             handler=_fetch_notes_details,
             cost="expensive",
+            requires_confirmation=True,  # 批量抓取：执行前需用户确认
             category="capability",
         )
     )

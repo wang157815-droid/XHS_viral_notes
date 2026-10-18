@@ -17,6 +17,7 @@ import type {
   AdvancedConfig,
   AgentArtifact,
   AgentArtifactSections,
+  AgentConfirmation,
   AgentPlanStep,
   AgentRunStep,
   ChatMessage,
@@ -31,6 +32,7 @@ import type { TaskStreamState } from "@/lib/sse/event-reducer";
 import { motion, useReducedMotion } from "motion/react";
 import { BrandLink } from "@/components/layout/brand-link";
 import { AgentTimeline } from "./agent-timeline";
+import { AgentThinking } from "./agent-thinking";
 import {
   AdvancedParamsMenuSection,
   advancedOverridesDefault,
@@ -1195,147 +1197,6 @@ function ThinkBox({ content, durationMs, live }: { content: string; durationMs: 
   );
 }
 
-const AGENT_TOOL_LABELS: Record<string, string> = {
-  search_notes: "搜索笔记",
-  collect_notes: "采集笔记",
-  fetch_note_detail: "获取笔记详情",
-  fetch_notes_details: "批量补全详情",
-  fetch_comments: "采集评论",
-  query_dataset: "查询工作记忆",
-  list_working_memory: "盘点工作记忆",
-  set_plan: "制定计划",
-  update_plan: "更新计划",
-  present_artifact: "生成结构化产物",
-  export_report: "导出报告",
-  search_knowledge: "检索知识库",
-  web_search: "联网检索",
-  analyze_image: "图像分析",
-  analyze_video: "视频分析",
-  run_viral_analysis: "爆文分析流水线",
-  run_comment_analysis: "评论分析流水线",
-};
-
-const agentToolLabel = (tool: string) => AGENT_TOOL_LABELS[tool] || tool || "工具";
-
-const PLAN_STATUS_META: Record<AgentPlanStep["status"], { dot: string; text: string }> = {
-  pending: { dot: "border border-obsidian/25 bg-transparent", text: "text-obsidian/45" },
-  in_progress: { dot: "bg-dew animate-pulse", text: "text-obsidian/80" },
-  done: { dot: "bg-emerald-500", text: "text-obsidian/55 line-through decoration-obsidian/25" },
-  skip: { dot: "bg-obsidian/20", text: "text-obsidian/35 line-through decoration-obsidian/20" },
-};
-
-function AgentRunStepsBox({
-  steps,
-  plan,
-  live,
-}: {
-  steps: AgentRunStep[];
-  plan: AgentPlanStep[];
-  live: boolean;
-}) {
-  const [open, setOpen] = useState(live);
-  // 与 ThinkBox 一致：运行中自动展开（渲染期调整，避免 effect 内 setState 触发级联渲染）
-  if (live && !open) setOpen(true);
-
-  if (!steps.length && !plan.length) return null;
-
-  const doneCount = steps.filter((s) => s.status !== "running").length;
-  const running = steps.some((s) => s.status === "running");
-  const headline = live
-    ? running
-      ? "AI 自主执行中…"
-      : "AI 自主规划中…"
-    : `AI 自主执行（${steps.length} 步工具调用）`;
-
-  return (
-    <div className="mb-3 rounded-xl border border-obsidian/10 bg-obsidian/[0.03]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] text-obsidian/45 transition-colors hover:text-obsidian/70"
-      >
-        <svg
-          className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
-          viewBox="0 0 12 12"
-          fill="currentColor"
-        >
-          <path d="M4 2l5 4-5 4V2z" />
-        </svg>
-        <span>{headline}</span>
-        {live && running ? (
-          <span className="ml-1 inline-flex items-center gap-1 text-obsidian/35">
-            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-dew/70" />
-          </span>
-        ) : steps.length ? (
-          <span className="ml-1 text-obsidian/30">{`${doneCount}/${steps.length}`}</span>
-        ) : null}
-      </button>
-      {open ? (
-        <div className="space-y-3 border-t border-obsidian/8 px-3 py-2.5">
-          {plan.length ? (
-            <div>
-              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-obsidian/35">
-                执行计划
-              </div>
-              <ol className="space-y-1">
-                {plan.map((step) => {
-                  const meta = PLAN_STATUS_META[step.status] ?? PLAN_STATUS_META.pending;
-                  return (
-                    <li key={step.id} className="flex items-start gap-2 text-[13px]">
-                      <span className={`mt-[5px] h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
-                      <span className={meta.text}>{step.title}</span>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          ) : null}
-          {steps.length ? (
-            <div>
-              {plan.length ? (
-                <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-obsidian/35">
-                  执行过程
-                </div>
-              ) : null}
-              <ul className="space-y-1.5">
-                {steps.map((step) => (
-                  <li key={step.id} className="flex items-start gap-2 text-[13px] leading-relaxed">
-                    <AgentStepIcon status={step.status} />
-                    <span className="min-w-0">
-                      <span className="text-obsidian/75">{agentToolLabel(step.tool)}</span>
-                      {step.summary ? (
-                        <span className="text-obsidian/45">{` · ${step.summary}`}</span>
-                      ) : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function AgentStepIcon({ status }: { status: AgentRunStep["status"] }) {
-  if (status === "running") {
-    return <span className="mt-[5px] h-2 w-2 shrink-0 animate-ping rounded-full bg-dew/70" />;
-  }
-  if (status === "error") {
-    return (
-      <svg className="mt-[3px] h-3 w-3 shrink-0 text-rose-500" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm2.5 9.1L9.1 11.5 8 10.4l-1.1 1.1-1.4-1.4L6.6 9 5.5 7.9l1.4-1.4L8 7.6l1.1-1.1 1.4 1.4L9.4 9l1.1 1.1z" />
-      </svg>
-    );
-  }
-  return (
-    <svg className="mt-[3px] h-3 w-3 shrink-0 text-emerald-500" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM6.8 11L3.9 8.1l1.1-1.1 1.8 1.8 3.9-3.9 1.1 1.1L6.8 11z" />
-    </svg>
-  );
-}
-
 function AgentArtifactCard({ artifact }: { artifact: AgentArtifact }) {
   return (
     <div className="mt-3 overflow-hidden rounded-xl border border-obsidian/12 bg-white/60">
@@ -1441,6 +1302,9 @@ function MessageContent({ message }: { message: ChatMessage }) {
     : [];
   const artifacts: AgentArtifact[] = Array.isArray(message.artifacts) ? message.artifacts : [];
   const hasAgentRun = agentSteps.length > 0 || agentPlan.length > 0;
+  const agentConfirmation = (debug["agent_confirmation"] as AgentConfirmation | undefined) ?? null;
+  const agentStartedAt = typeof debug["agent_started_at"] === "number" ? debug["agent_started_at"] : 0;
+  const agentDurationMs = typeof debug["agent_duration_ms"] === "number" ? debug["agent_duration_ms"] : 0;
 
   const userAttachments: AttachmentRecord[] =
     message.role === "user" && Array.isArray(message.attachments)
@@ -1451,7 +1315,16 @@ function MessageContent({ message }: { message: ChatMessage }) {
   if (streaming && !message.content) {
     return (
       <div>
-        {hasAgentRun ? <AgentRunStepsBox steps={agentSteps} plan={agentPlan} live /> : null}
+        {hasAgentRun || agentStartedAt ? (
+          <AgentThinking
+            steps={agentSteps}
+            plan={agentPlan}
+            live
+            startedAt={agentStartedAt}
+            confirmation={agentConfirmation}
+            conversationId={message.conversation_id}
+          />
+        ) : null}
         {artifacts.map((artifact) => (
           <AgentArtifactCard key={artifact.artifact_id} artifact={artifact} />
         ))}
@@ -1473,7 +1346,16 @@ function MessageContent({ message }: { message: ChatMessage }) {
   return (
     <div>
       {userAttachments.length > 0 ? <ConversationUserAttachments items={userAttachments} /> : null}
-      {hasAgentRun ? <AgentRunStepsBox steps={agentSteps} plan={agentPlan} live={false} /> : null}
+      {hasAgentRun || agentConfirmation ? (
+        <AgentThinking
+          steps={agentSteps}
+          plan={agentPlan}
+          live={false}
+          durationMs={agentDurationMs}
+          confirmation={agentConfirmation}
+          conversationId={message.conversation_id}
+        />
+      ) : null}
       {thinkContent ? <ThinkBox content={thinkContent} durationMs={thinkDurationMs} live={false} /> : null}
       {message.content.trim() ? <MarkdownContent content={message.content} /> : null}
       {streaming ? <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-dew align-[-2px]" /> : null}

@@ -1054,6 +1054,8 @@ class ConversationService:
             conversation_id=conversation_id,
             current_user=current_user,
             advanced_config=advanced_config or {},
+            # 流式会话可交互：关键步骤（采集 / 创建任务 / 生成产物）执行前请求用户确认
+            extra={"interactive_confirm": True},
         )
         trace = AgentRunTrace()
         yield {"type": "status", "status": "agent_started", "message": "已进入 AI 自主分析，开始规划..."}

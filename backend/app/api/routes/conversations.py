@@ -443,6 +443,37 @@ async def send_message(
     )
 
 
+class AgentConfirmationRequest(BaseModel):
+    approved: bool
+
+
+@router.post("/{conversation_id}/agent-confirmations/{confirmation_id}")
+async def resolve_agent_confirmation(
+    conversation_id: str,
+    confirmation_id: str,
+    payload: AgentConfirmationRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """回传用户对 Agent 关键步骤的确认 / 拒绝。"""
+    from ...application.agent_runtime.confirmation import confirmation_broker
+
+    _ensure_conversation_enabled()
+    _require_conversation_write_role(current_user)
+    conversation = _require_owned_conversation(conversation_id, current_user)
+    delivered = confirmation_broker.resolve(
+        confirmation_id,
+        approved=payload.approved,
+        owner_user_id=conversation.owner_user_id,
+        conversation_id=conversation_id,
+    )
+    if not delivered:
+        raise HTTPException(
+            status_code=404,
+            detail=build_error(ErrorCode.INPUT_NOT_FOUND, "确认请求不存在或已失效")["error"],
+        )
+    return ok({"confirmation_id": confirmation_id, "approved": payload.approved})
+
+
 @router.post("/{conversation_id}/messages/stream")
 async def send_message_stream(
     conversation_id: str,

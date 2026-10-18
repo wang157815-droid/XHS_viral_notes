@@ -8,10 +8,10 @@ from __future__ import annotations
 from loguru import logger
 
 from ..tool_registry import ToolRegistry, tool_registry
-from . import artifact, knowledge, memory, multimodal, notes, planning, report, web, workflows
+from . import artifact, knowledge, memory, multimodal, notes, planning, report, stages, web, workflows
 
 
-_MODULES = [notes, memory, planning, artifact, knowledge, web, multimodal, report, workflows]
+_MODULES = [notes, memory, planning, artifact, knowledge, web, multimodal, report, stages, workflows]
 
 
 def register_default_tools(registry: ToolRegistry | None = None) -> ToolRegistry:

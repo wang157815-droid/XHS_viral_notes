@@ -184,6 +184,15 @@ export interface AgentPlanStep {
   status: "pending" | "in_progress" | "done" | "skip";
 }
 
+// 自主 Agent 关键步骤确认（agent_confirm_required / agent_confirm_resolved 状态事件）
+export interface AgentConfirmation {
+  id: string;
+  tool: string;
+  message?: string;
+  arguments?: Record<string, unknown>;
+  state: "pending" | "submitting" | "approved" | "rejected" | "timeout";
+}
+
 // 自主 Agent 运行时单步执行记录（前端从 agent_tool_call / agent_tool_result 状态事件累积）
 export interface AgentRunStep {
   id: string;
@@ -235,6 +244,9 @@ export type ConversationStreamEvent =
       iteration?: number;
       plan?: AgentPlanStep[];
       arguments?: Record<string, unknown>;
+      confirmation_id?: string;
+      decision?: "approved" | "rejected" | "timeout";
+      timeout_seconds?: number;
     }
   | { type: "artifact"; artifact: AgentArtifact; iteration?: number }
   | { type: "tool_selected"; tool: { name: string; arguments?: Record<string, unknown>; confidence?: number; reason?: string } }

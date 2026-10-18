@@ -56,6 +56,8 @@ class AgentRuntimeConfig:
     per_tool_timeout: float = 120.0
     per_tool_timeout_cheap: float = 60.0
     per_tool_timeout_expensive: float = 200.0
+    # 关键步骤确认等待上限（秒），超时视为未确认
+    confirm_timeout: float = 300.0
     final_max_tokens: int = 1800
     history_messages: int = 6
 
@@ -120,6 +122,7 @@ class AgentRuntime:
         expensive_units = 0
         final_content = ""
         forced_final = False
+        executed_effects: set[str] = set()  # 已确认并执行过的副作用调用（防重复执行）
 
         for iteration in range(1, cfg.max_iters + 1):
             trace.iterations = iteration
@@ -201,6 +204,29 @@ class AgentRuntime:
                             "请基于已获取数据继续分析，不要再采集。"
                         )
                         continue
+
+                # 关键步骤确认闸：有副作用的工具（采集 / 创建任务 / 写入产物）先经用户确认
+                if spec and spec.requires_confirmation and ctx.extra.get("interactive_confirm"):
+                    effect_key = f"{name}:{self._short_args(args)}"
+                    if effect_key in executed_effects:
+                        observations.append(
+                            f"[{name}] 相同参数的该操作本轮已执行过，已跳过重复执行，请直接使用已有结果。"
+                        )
+                        continue
+                    approved = None
+                    async for ev in self._await_confirmation(name, args, spec.description, ctx, iteration):
+                        if ev.get("type") == "_decision":
+                            approved = ev["approved"]
+                        else:
+                            yield ev
+                    if not approved:
+                        trace.tool_calls.append({"name": name, "ok": False, "arguments": args, "rejected": True})
+                        observations.append(
+                            f"[{name}] 用户未确认执行（已拒绝或超时），该操作未执行。"
+                            "请不要再次请求同一操作，基于已有信息继续或向用户说明。"
+                        )
+                        continue
+                    executed_effects.add(effect_key)
 
                 yield {
                     "type": "status",
@@ -330,6 +356,72 @@ class AgentRuntime:
         return trace
 
     # ── 内部工具 ──────────────────────────────────────────────────────────
+    async def _await_confirmation(
+        self,
+        name: str,
+        args: Dict[str, Any],
+        description: str,
+        ctx: ToolContext,
+        iteration: int,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """推送确认请求并等待用户决定；最后产出内部事件 {"type": "_decision"}。
+
+        等待期间每 15s 推一次 agent_confirm_waiting 心跳，避免代理断开空闲 SSE。
+        """
+        from .confirmation import confirmation_broker
+
+        pending = confirmation_broker.create(
+            owner_user_id=ctx.owner_user_id,
+            conversation_id=ctx.conversation_id,
+            tool=name,
+            arguments=args,
+        )
+        timeout = self.config.confirm_timeout
+        yield {
+            "type": "status",
+            "status": "agent_confirm_required",
+            "confirmation_id": pending.confirmation_id,
+            "tool": name,
+            "arguments": args,
+            "message": description.split("。")[0][:160],
+            "timeout_seconds": int(timeout),
+            "iteration": iteration,
+        }
+        approved = False
+        decided = False
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    approved = await asyncio.wait_for(
+                        asyncio.shield(pending.future), timeout=min(15.0, remaining)
+                    )
+                    decided = True
+                    break
+                except asyncio.TimeoutError:
+                    yield {
+                        "type": "status",
+                        "status": "agent_confirm_waiting",
+                        "confirmation_id": pending.confirmation_id,
+                        "iteration": iteration,
+                    }
+        finally:
+            confirmation_broker.discard(pending.confirmation_id)
+        decision = "approved" if approved else ("rejected" if decided else "timeout")
+        logger.info("[AgentRuntime] 确认 tool={} decision={}", name, decision)
+        yield {
+            "type": "status",
+            "status": "agent_confirm_resolved",
+            "confirmation_id": pending.confirmation_id,
+            "tool": name,
+            "decision": decision,
+            "iteration": iteration,
+        }
+        yield {"type": "_decision", "approved": bool(approved)}
+
     async def _stream_final_answer(
         self, messages: List[Dict[str, Any]], *, task_id: str
     ) -> AsyncIterator[Dict[str, Any]]:

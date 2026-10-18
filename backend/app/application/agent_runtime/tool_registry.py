@@ -81,7 +81,7 @@ class ToolSpec:
     handler: ToolHandler
     cost: ToolCost = "cheap"
     requires_confirmation: bool = False
-    category: str = "capability"  # capability | macro
+    category: str = "capability"  # capability | stage | macro
 
     def to_openai_tool(self) -> Dict[str, Any]:
         return {
@@ -144,8 +144,8 @@ class ToolRegistry:
         for spec in self._specs.values():
             if allow is not None and spec.name not in allow:
                 continue
-            tag = "宏工具" if spec.category == "macro" else "能力工具"
-            flag = "（昂贵，需确认）" if spec.requires_confirmation else ""
+            tag = {"macro": "宏工具", "stage": "阶段工具"}.get(spec.category, "能力工具")
+            flag = "（需用户确认）" if spec.requires_confirmation else ""
             lines.append(f"- {spec.name}[{tag}]{flag}: {spec.description}")
         return "\n".join(lines)
 

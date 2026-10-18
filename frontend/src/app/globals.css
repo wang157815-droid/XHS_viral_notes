@@ -27,6 +27,14 @@
   --color-moss: var(--redmuse-moss);
   --color-dew: var(--redmuse-dew);
   --color-fog: var(--redmuse-fog);
+  /* shadcn 语义 token（components/ui 使用），映射到 RedMuse 色板 */
+  --color-muted: var(--redmuse-fog);
+  --color-muted-foreground: var(--redmuse-muted);
+  --color-primary: var(--redmuse-obsidian);
+  --color-primary-foreground: var(--redmuse-papyrus);
+  --color-card: #ffffff;
+  --color-border: var(--redmuse-border);
+  --color-ring: var(--redmuse-dew);
   --font-sans: var(--font-inter), "Helvetica Neue", "PingFang SC", ui-sans-serif, system-ui;
   --font-serif: var(--font-playfair), "Georgia", "Source Han Serif SC", serif;
   --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;

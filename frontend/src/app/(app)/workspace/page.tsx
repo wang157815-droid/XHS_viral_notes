@@ -30,6 +30,7 @@ import {
 } from "@/lib/conversation-api";
 import type {
   AgentArtifact,
+  AgentConfirmation,
   AgentPlanStep,
   AgentRunStep,
   CanvasSchema,
@@ -298,6 +299,10 @@ export default function WorkspacePage() {
       let agentSteps: AgentRunStep[] = [];
       let agentPlan: AgentPlanStep[] = [];
       let streamedArtifacts: AgentArtifact[] = [];
+      // 关键步骤确认 + 思考计时（驱动思考过程 UI 的"已思考 Ns"）
+      let agentConfirmation: AgentConfirmation | null = null;
+      let agentStartedAt = 0;
+      let agentDurationMs = 0;
       try {
         if (!conversationId) {
           const surface = surfaceFromQuery(searchParams.get("surface")) ?? "insight";
@@ -346,6 +351,9 @@ export default function WorkspacePage() {
           const agentDebug: Record<string, unknown> = {};
           if (agentSteps.length) agentDebug.agent_steps = agentSteps;
           if (agentPlan.length) agentDebug.agent_plan = agentPlan;
+          if (agentConfirmation) agentDebug.agent_confirmation = agentConfirmation;
+          if (agentStartedAt) agentDebug.agent_started_at = agentStartedAt;
+          if (agentDurationMs) agentDebug.agent_duration_ms = agentDurationMs;
           return {
             message_id: assistantMessageId,
             conversation_id: currentConversationId,
@@ -387,6 +395,10 @@ export default function WorkspacePage() {
           }
           if (agentSteps.length) mergedDebug.agent_steps = agentSteps;
           if (agentPlan.length) mergedDebug.agent_plan = agentPlan;
+          if (agentConfirmation) mergedDebug.agent_confirmation = agentConfirmation;
+          if (agentStartedAt) {
+            mergedDebug.agent_duration_ms = agentDurationMs || Date.now() - agentStartedAt;
+          }
           const enriched: ChatMessage = {
             ...message,
             debug: mergedDebug,
@@ -438,7 +450,20 @@ export default function WorkspacePage() {
             }
             if (event.type === "status") {
               // 自主 Agent 运行态：累积执行步骤与计划
-              if (event.status === "agent_tool_call") {
+              if (event.status === "agent_confirm_waiting") return; // 等待确认的心跳，无需重渲染
+              if (event.status === "agent_started") {
+                agentStartedAt = Date.now();
+              } else if (event.status === "agent_confirm_required" && event.confirmation_id) {
+                agentConfirmation = {
+                  id: event.confirmation_id,
+                  tool: event.tool ?? "",
+                  message: event.message,
+                  arguments: event.arguments,
+                  state: "pending",
+                };
+              } else if (event.status === "agent_confirm_resolved" && agentConfirmation) {
+                agentConfirmation = { ...agentConfirmation, state: event.decision ?? "rejected" };
+              } else if (event.status === "agent_tool_call") {
                 agentSteps = [
                   ...agentSteps,
                   {
@@ -467,7 +492,9 @@ export default function WorkspacePage() {
                 agentPlan = event.plan;
               }
               const agentLabel =
-                event.status === "agent_tool_call"
+                event.status === "agent_confirm_required"
+                  ? "等待你确认关键步骤…"
+                  : event.status === "agent_tool_call"
                   ? `正在调用工具 ${event.tool ?? ""}…`
                   : event.status === "agent_tool_result"
                     ? `工具 ${event.tool ?? ""} 完成`
@@ -475,7 +502,9 @@ export default function WorkspacePage() {
               const label =
                 event.status === "retrieving_knowledge"
                   ? "正在检索知识库..."
-                  : event.message || agentLabel || "正在生成回答...";
+                  : event.status === "agent_confirm_required"
+                    ? agentLabel
+                    : event.message || agentLabel || "正在生成回答...";
               upsertAssistant(makeAssistantMessage({ content: "", debug: { status: event.status, label } }));
               return;
             }
@@ -489,6 +518,7 @@ export default function WorkspacePage() {
               return;
             }
             if (event.type === "message_start") {
+              if (agentStartedAt && !agentDurationMs) agentDurationMs = Date.now() - agentStartedAt;
               upsertAssistant(makeAssistantMessage({ message_id: event.message_id, content: "" }));
               return;
             }

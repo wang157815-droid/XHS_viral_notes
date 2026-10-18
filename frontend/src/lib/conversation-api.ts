@@ -25,6 +25,19 @@ export async function createConversation(title?: string, metadata?: Record<strin
   );
 }
 
+/** 回传用户对自主 Agent 关键步骤的确认 / 拒绝 */
+export async function resolveAgentConfirmation(
+  conversationId: string,
+  confirmationId: string,
+  approved: boolean,
+) {
+  return apiPost<{ confirmation_id: string; approved: boolean }>(
+    `/conversations/${encodeURIComponent(conversationId)}/agent-confirmations/${encodeURIComponent(confirmationId)}`,
+    { approved },
+    { withAuth: true },
+  );
+}
+
 export async function patchConversationTitle(conversationId: string, title: string) {
   return apiPatch<Conversation>(`/conversations/${encodeURIComponent(conversationId)}`, { title }, { withAuth: true });
 }
