@@ -708,4 +708,4 @@ MULTIMODAL_MODEL_NAME="qwen3-vl-plus"
 ## Base44 sandbox setup
 - Run: `docker compose -f docker-compose.base44.yml up -d` (first boot ~3 min: pip/npm install into volumes).
 - Single origin on :3000: Next dev server rewrites `/api/*` to the `backend` service (:8100). The rewrite and `allowedDevOrigins` in `frontend/next.config.ts` are active only when `BASE44_PREVIEW_MODE === "1"`; unset = original behavior.
-- Dev login: `admin` / `admin-dev-password` (placeholders in `.env.base44-defaults`). Real XHS cookie / LLM keys are optional and set via secrets.
+- Dev login: `admin` / `123456` (placeholders in `.env.base44-defaults`). Real XHS cookie / LLM keys are optional and set via secrets.
