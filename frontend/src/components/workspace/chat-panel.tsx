@@ -1369,6 +1369,36 @@ function splitMarkdownBlocks(content: string): MarkdownBlock[] {
   return blocks.length ? blocks : [{ type: "text", content }];
 }
 
+function isTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
+}
+
+/** 拆分表格行；支持 \| 转义，以及行内代码中的 | */
+function splitTableRow(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inCode = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\\" && line[i + 1] === "|") {
+      current += "|";
+      i += 1;
+    } else if (ch === "`") {
+      inCode = !inCode;
+      current += ch;
+    } else if (ch === "|" && !inCode) {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current.trim());
+  if (line.trim().startsWith("|")) cells.shift();
+  if (line.trim().endsWith("|")) cells.pop();
+  return cells;
+}
+
 function renderMarkdownText(content: string, blockIndex: number): ReactNode[] {
   const nodes: ReactNode[] = [];
   const lines = content.replace(/\r\n/g, "\n").split("\n");
@@ -1454,6 +1484,44 @@ function renderMarkdownText(content: string, blockIndex: number): ReactNode[] {
             <li key={idx}>{renderInlineMarkdown(item)}</li>
           ))}
         </ol>,
+      );
+      continue;
+    }
+
+    if (trimmed.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      flushParagraph();
+      const header = splitTableRow(trimmed);
+      const rows: string[][] = [];
+      i += 1;
+      while (i + 1 < lines.length && lines[i + 1].trim().includes("|")) {
+        rows.push(splitTableRow(lines[i + 1].trim()));
+        i += 1;
+      }
+      nodes.push(
+        <div key={`${blockIndex}-table-${nodes.length}`} className="overflow-x-auto">
+          <table className="w-full border-collapse text-left text-[13.5px] leading-[1.6]">
+            <thead>
+              <tr className="border-b border-[#E8E5E0] bg-[#FAF8F5]">
+                {header.map((cell, ci) => (
+                  <th key={ci} className="whitespace-nowrap px-3 py-2 font-semibold text-[#2D2A26]">
+                    {renderInlineMarkdown(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri} className="border-b border-[#F0EDE8] align-top last:border-0">
+                  {header.map((_, ci) => (
+                    <td key={ci} className="px-3 py-2 text-obsidian/80">
+                      {renderInlineMarkdown(row[ci] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
       );
       continue;
     }
