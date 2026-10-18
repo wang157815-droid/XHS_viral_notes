@@ -35,11 +35,11 @@ async def test_tool_agent_fallback_refine_asks_clarification_without_module(monk
 
 
 @pytest.mark.asyncio
-async def test_tool_agent_xhs_analysis_direct_when_choice_disabled(monkeypatch):
-    """关闭反问开关时，xhs_analysis 直接映射到 start_xhs_analysis（旧行为保留）。"""
+async def test_tool_agent_xhs_analysis_direct_when_agent_disabled(monkeypatch):
+    """关闭 Agent 运行时时，xhs_analysis 直接映射到 start_xhs_analysis（固定 workflow）。"""
     from backend.app.application.conversation import tool_agent as tool_agent_mod
 
-    monkeypatch.setattr(tool_agent_mod.settings, "agent_runtime_offer_choice", False)
+    monkeypatch.setattr(tool_agent_mod.settings, "agent_runtime_enabled", False)
     agent = ConversationToolAgent()
     decision = await agent.decide(
         content="重新搜索小红书「防晒」生成新的爆文模型",
@@ -57,17 +57,17 @@ async def test_tool_agent_xhs_analysis_direct_when_choice_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tool_agent_xhs_analysis_offers_workflow_vs_agent_choice(monkeypatch):
-    """开启反问开关时（默认），xhs_analysis 先反问『定制 workflow vs AI 自主』。"""
+@pytest.mark.parametrize("intent_name", ["xhs_analysis", "comment_analysis"])
+async def test_tool_agent_analysis_routes_to_agent_without_asking(monkeypatch, intent_name):
+    """Agent 开启时，爆文/评论分析不再反问执行模式，直接交给自主规划 Agent。"""
     from backend.app.application.conversation import tool_agent as tool_agent_mod
 
     monkeypatch.setattr(tool_agent_mod.settings, "agent_runtime_enabled", True)
-    monkeypatch.setattr(tool_agent_mod.settings, "agent_runtime_offer_choice", True)
     agent = ConversationToolAgent()
     decision = await agent.decide(
         content="搜索小红书「防晒」生成爆文模型",
         conversation=Conversation(conversation_id="c1", owner_user_id="u1", title="t"),
-        intent=IntentClassification(intent="xhs_analysis", confidence=0.9, extracted_keywords=["防晒"]),
+        intent=IntentClassification(intent=intent_name, confidence=0.9, extracted_keywords=["防晒"]),
         recent_messages=[],
         active_task_id=None,
         task_status=None,
@@ -75,11 +75,8 @@ async def test_tool_agent_xhs_analysis_offers_workflow_vs_agent_choice(monkeypat
     )
 
     assert decision.first_call is not None
-    assert decision.first_call.name == "ask_clarification"
-    assert decision.first_call.arguments["pending_tool_name"] == tool_agent_mod.ANALYSIS_CHOICE_TOOL
-    pending = decision.first_call.arguments["pending_arguments"]
-    assert pending["workflow_tool"] == "start_xhs_analysis"
-    assert pending["workflow_arguments"]["keywords"] == ["防晒"]
+    assert decision.first_call.name == "run_agent_task"
+    assert "防晒" in decision.first_call.arguments["goal"]
 
 
 @pytest.mark.asyncio

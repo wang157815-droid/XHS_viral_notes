@@ -20,10 +20,9 @@ class Settings(BaseModel):
     # ------------------------------------------------------------------ #
     # 自主规划 Agent 运行时（phase3）
     # ------------------------------------------------------------------ #
-    # 总开关：关闭后 agent_task 意图降级为普通问答，xhs/comment 不再反问执行模式
+    # 总开关：开启时 agent_task / xhs_analysis / comment_analysis 统一走自主规划 Agent；
+    # 关闭后 agent_task 降级为普通问答，xhs/comment 走固定 workflow
     agent_runtime_enabled: bool = _env_bool("AGENT_RUNTIME_ENABLED", True)
-    # 命中成熟 workflow（爆文/评论分析）时是否反问"定制 workflow vs AI 自主分析"
-    agent_runtime_offer_choice: bool = _env_bool("AGENT_RUNTIME_OFFER_CHOICE", True)
     # loop 护栏
     agent_runtime_max_iters: int = int(os.getenv("AGENT_RUNTIME_MAX_ITERS", "8"))
     agent_runtime_tool_budget: int = int(os.getenv("AGENT_RUNTIME_TOOL_BUDGET", "16"))

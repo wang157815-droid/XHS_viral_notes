@@ -25,8 +25,8 @@ from .tool_schema import (
     ConversationToolDecision,
 )
 
-# 反问"workflow vs AI自主"时存入 pending_tool_decision 的占位 tool 名，
-# 由 conversation_service._resolve_pending_tool_call 识别并解析用户选择。
+# 旧版反问"workflow vs AI自主"的占位 tool 名；现已统一走自主规划，
+# 仅保留以兼容历史会话中残留的 pending_tool_decision。
 ANALYSIS_CHOICE_TOOL = "__analysis_choice__"
 
 
@@ -52,7 +52,6 @@ class ConversationToolAgent:
         slots = intent.slots or {}
 
         agent_enabled = bool(settings.agent_runtime_enabled)
-        offer_choice = agent_enabled and bool(settings.agent_runtime_offer_choice)
 
         # ─── agent_task（自主规划 Agent）────────────────────────────────────
         if intent_name == "agent_task":
@@ -68,16 +67,7 @@ class ConversationToolAgent:
                         )
                     ]
                 )
-            return ConversationToolDecision(
-                calls=[
-                    ConversationToolCall(
-                        name="run_agent_task",
-                        arguments={"goal": content},
-                        confidence=intent.confidence,
-                        reason="intent=agent_task → 自主规划 Agent",
-                    )
-                ]
-            )
+            return self._agent_task_decision(content, intent.confidence, "intent=agent_task → 自主规划 Agent")
 
         # ─── xhs_analysis ───────────────────────────────────────────────────
         if intent_name == "xhs_analysis":
@@ -92,16 +82,9 @@ class ConversationToolAgent:
                 "skip_competitor": skip_competitor,
                 "confirm_new_task": bool(active_task_id),
             }
-            if offer_choice:
-                return self._offer_analysis_choice(
-                    workflow_tool="start_xhs_analysis",
-                    workflow_arguments=workflow_args,
-                    agent_goal=content,
-                    keywords=kw,
-                    kind="爆文模型",
-                    workflow_desc="标准爆文模型矩阵 + Canvas（9 模块）",
-                    confidence=intent.confidence,
-                )
+            if agent_enabled:
+                # 统一走自主规划：由 Agent 自行决定是否调用流水线阶段工具
+                return self._agent_task_decision(content, intent.confidence, "intent=xhs_analysis → 自主规划 Agent")
             return ConversationToolDecision(
                 calls=[
                     ConversationToolCall(
@@ -125,16 +108,9 @@ class ConversationToolAgent:
                 "top_notes": top_notes,
                 "top_comments_per_note": top_comments,
             }
-            if offer_choice:
-                return self._offer_analysis_choice(
-                    workflow_tool="start_comment_analysis",
-                    workflow_arguments=workflow_args,
-                    agent_goal=content,
-                    keywords=kw,
-                    kind="评论洞察",
-                    workflow_desc="标准评论洞察报告（Excel）",
-                    confidence=intent.confidence,
-                )
+            if agent_enabled:
+                # 统一走自主规划：由 Agent 自行决定是否调用流水线阶段工具
+                return self._agent_task_decision(content, intent.confidence, "intent=comment_analysis → 自主规划 Agent")
             return ConversationToolDecision(
                 calls=[
                     ConversationToolCall(
@@ -252,51 +228,9 @@ class ConversationToolAgent:
         )
 
     @staticmethod
-    def _offer_analysis_choice(
-        *,
-        workflow_tool: str,
-        workflow_arguments: Dict[str, Any],
-        agent_goal: str,
-        keywords: List[str],
-        kind: str,
-        workflow_desc: str,
-        confidence: float,
-    ) -> ConversationToolDecision:
-        """命中成熟 workflow 时，反问『定制 workflow vs AI 自主分析』并告知优缺点。
-
-        把两种方案的执行信息存入 pending_tool_decision（占位 tool=__analysis_choice__），
-        待用户回复后由 conversation_service._resolve_pending_tool_call 解析为具体工具调用。
-        """
-        kw_display = "".join(f"「{k}」" for k in keywords) or "该"
-        question = (
-            f"你对 {kw_display}{kind} 的需求，我可以用两种方式完成，你想用哪种？\n\n"
-            f"**① 定制化 workflow（成熟流水线）**\n"
-            f"- 优点：流程稳定、产出规范（{workflow_desc}）、速度更快、结果可直接复用\n"
-            f"- 局限：只产出标准结构，难以满足超出该范式的定制化要求\n\n"
-            f"**② AI 自主分析（Agent 自行规划执行）**\n"
-            f"- 优点：按你的具体要求灵活规划，逐条拆解、组合搜索/详情/评论/知识库/联网等能力，适配非标需求\n"
-            f"- 局限：耗时更长、产出结构更自由、采集规模受预算上限约束\n\n"
-            f"回复「1」或「workflow」走定制流水线；回复「2」或「自主」让 AI 自主分析。"
-        )
+    def _agent_task_decision(goal: str, confidence: float, reason: str) -> ConversationToolDecision:
         return ConversationToolDecision(
-            calls=[
-                ConversationToolCall(
-                    name="ask_clarification",
-                    arguments={
-                        "question": question,
-                        "missing_fields": ["analysis_mode"],
-                        "pending_tool_name": ANALYSIS_CHOICE_TOOL,
-                        "pending_arguments": {
-                            "workflow_tool": workflow_tool,
-                            "workflow_arguments": workflow_arguments,
-                            "agent_goal": agent_goal,
-                            "kind": kind,
-                        },
-                    },
-                    confidence=confidence,
-                    reason=f"offer workflow-vs-agent choice for {kind}",
-                )
-            ]
+            calls=[ConversationToolCall(name="run_agent_task", arguments={"goal": goal}, confidence=confidence, reason=reason)]
         )
 
     @staticmethod
