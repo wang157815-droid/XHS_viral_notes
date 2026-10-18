@@ -705,3 +705,12 @@ MULTIMODAL_MODEL_NAME="qwen3-vl-plus"
 4. **Windows 开发注意**
    - 使用 `backend/run.py` 而非直接 `uvicorn`，避免 `ProactorEventLoop` 问题
    - PowerShell 执行脚本可能需要设置执行策略
+
+---
+
+## Base44 沙箱环境（docker-compose.base44.yml）
+
+- `docker compose -f docker-compose.base44.yml up -d`：nginx(3000) → Next dev(frontend) + FastAPI(8100, 热重载)，单一源，`/api/` 走 nginx。
+- 后端镜像 `.base44/Dockerfile.backend` 需要 Node（PyExecJS 在 import 时编译 `static/xhs_xs_xsc_56.js`），启动时在根目录 `npm install`。
+- `next.config.ts` 仅在 `BASE44_PREVIEW_MODE=1` 时追加 `allowedDevOrigins`；未设置时行为不变。
+- 开发 admin 账号：`admin` / `admin-dev-password`（见 `.env.base44-defaults`）。真实 LLM/Cookie 密钥通过平台 secrets 提供。

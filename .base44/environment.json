@@ -1,0 +1,12 @@
+{
+  "previewPort": 3000,
+  "healthPath": "/",
+  "startCommand": "docker compose -f docker-compose.base44.yml up -d",
+  "secrets": [
+    {"name": "JWT_SECRET", "description": "JWT signing key (dev placeholder generated)", "requiredAtBoot": true, "generatedForDevelopment": true},
+    {"name": "OPENAI_API_KEY", "description": "LLM key (DeepSeek/OpenAI-compatible) for analysis", "requiredAtBoot": false},
+    {"name": "EMBEDDING_API_KEY", "description": "Embedding key (DashScope) for RAG", "requiredAtBoot": false},
+    {"name": "DASHSCOPE_API_KEY", "description": "DashScope key for multimodal/video analysis", "requiredAtBoot": false},
+    {"name": "COOKIE", "description": "Xiaohongshu login cookie for crawling", "requiredAtBoot": false}
+  ]
+}

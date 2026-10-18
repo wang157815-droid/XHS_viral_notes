@@ -1,0 +1,10 @@
+FROM python:3.10-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential git ffmpeg libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=node:20-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:20-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir chromadb opencv-python-headless
+ENV PYTHONUNBUFFERED=1
