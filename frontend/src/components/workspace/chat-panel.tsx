@@ -1157,46 +1157,6 @@ function ConversationView({
   );
 }
 
-function ThinkBox({ content, durationMs, live }: { content: string; durationMs: number; live?: boolean }) {
-  const [open, setOpen] = useState(live ?? false);
-  const secs = durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : "";
-
-  // 思考进行中时自动展开
-  if (live && !open) setOpen(true);
-
-  return (
-    <div className="mb-3 rounded-xl border border-obsidian/10 bg-obsidian/[0.03]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] text-obsidian/45 transition-colors hover:text-obsidian/70"
-      >
-        <svg
-          className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
-          viewBox="0 0 12 12"
-          fill="currentColor"
-        >
-          <path d="M4 2l5 4-5 4V2z" />
-        </svg>
-        <span>思考过程</span>
-        {live ? (
-          <span className="ml-1 inline-flex items-center gap-1 text-obsidian/35">
-            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-dew/70" />
-            <span>思考中...</span>
-          </span>
-        ) : secs ? (
-          <span className="ml-1 text-obsidian/30">{secs}</span>
-        ) : null}
-      </button>
-      {open && content ? (
-        <div className="border-t border-obsidian/8 px-3 py-2.5 text-[13px] leading-relaxed text-obsidian/55 whitespace-pre-wrap">
-          {content}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function AgentArtifactCard({ artifact }: { artifact: AgentArtifact }) {
   return (
     <div className="mt-3 overflow-hidden rounded-xl border border-obsidian/12 bg-white/60">
@@ -1290,7 +1250,6 @@ function AgentArtifactSectionsView({
 function MessageContent({ message }: { message: ChatMessage }) {
   const debug = message.debug ?? {};
   const streaming = debug["streaming"] === true;
-  const thinkingLive = debug["thinking_live"] === true;
   const label = typeof debug["label"] === "string" ? debug["label"] : "正在生成回答...";
   const thinkContent = typeof debug["think_content"] === "string" ? debug["think_content"] : "";
   const thinkDurationMs = typeof debug["think_duration_ms"] === "number" ? debug["think_duration_ms"] : 0;
@@ -1311,34 +1270,25 @@ function MessageContent({ message }: { message: ChatMessage }) {
       ? (message.attachments as AttachmentRecord[])
       : [];
 
-  // 思考中（尚无正式回答内容）
+  const thoughtDurationMs = agentDurationMs || thinkDurationMs;
+
+  // 思考中（尚无正式回答内容）：统一使用思考执行 UI
   if (streaming && !message.content) {
     return (
       <div>
-        {hasAgentRun || agentStartedAt ? (
-          <AgentThinking
-            steps={agentSteps}
-            plan={agentPlan}
-            live
-            startedAt={agentStartedAt}
-            confirmation={agentConfirmation}
-            conversationId={message.conversation_id}
-          />
-        ) : null}
+        <AgentThinking
+          steps={agentSteps}
+          plan={agentPlan}
+          live
+          startedAt={agentStartedAt || Date.parse(message.created_at) || undefined}
+          confirmation={agentConfirmation}
+          conversationId={message.conversation_id}
+          label={hasAgentRun ? undefined : label}
+          thinkContent={thinkContent}
+        />
         {artifacts.map((artifact) => (
           <AgentArtifactCard key={artifact.artifact_id} artifact={artifact} />
         ))}
-        {thinkContent || thinkingLive ? (
-          <ThinkBox content={thinkContent} durationMs={thinkDurationMs} live={thinkingLive} />
-        ) : null}
-        {!thinkingLive ? (
-          <div className="flex items-center gap-2 text-[15px] text-obsidian/48">
-            <span className="inline-flex h-4 w-4 items-center justify-center">
-              <span className="h-2 w-2 animate-ping rounded-full bg-dew" />
-            </span>
-            <span>{thinkContent ? "正在生成回答..." : label}</span>
-          </div>
-        ) : null}
       </div>
     );
   }
@@ -1346,17 +1296,17 @@ function MessageContent({ message }: { message: ChatMessage }) {
   return (
     <div>
       {userAttachments.length > 0 ? <ConversationUserAttachments items={userAttachments} /> : null}
-      {hasAgentRun || agentConfirmation ? (
+      {hasAgentRun || agentConfirmation || thinkContent ? (
         <AgentThinking
           steps={agentSteps}
           plan={agentPlan}
           live={false}
-          durationMs={agentDurationMs}
+          durationMs={thoughtDurationMs}
           confirmation={agentConfirmation}
           conversationId={message.conversation_id}
+          thinkContent={thinkContent}
         />
       ) : null}
-      {thinkContent ? <ThinkBox content={thinkContent} durationMs={thinkDurationMs} live={false} /> : null}
       {message.content.trim() ? <MarkdownContent content={message.content} /> : null}
       {streaming ? <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-dew align-[-2px]" /> : null}
       {artifacts.map((artifact) => (

@@ -75,6 +75,8 @@ export function AgentThinking({
   durationMs,
   confirmation,
   conversationId,
+  label,
+  thinkContent,
 }: {
   steps: AgentRunStep[];
   plan: AgentPlanStep[];
@@ -83,9 +85,13 @@ export function AgentThinking({
   durationMs?: number;
   confirmation?: AgentConfirmation | null;
   conversationId: string;
+  /** 进行中的标题（默认"正在思考与执行"） */
+  label?: string;
+  /** 模型推理过程文本（reasoning），展示在步骤之后 */
+  thinkContent?: string;
 }) {
   const seconds = useElapsedSeconds(live, startedAt, durationMs);
-  if (!steps.length && !plan.length && !live && !confirmation) return null;
+  if (!steps.length && !plan.length && !live && !confirmation && !thinkContent) return null;
 
   return (
     <div className="mb-3">
@@ -93,9 +99,14 @@ export function AgentThinking({
         live={live}
         steps={toThinkingSteps(steps)}
         elapsedSeconds={seconds}
-        liveLabel={confirmation?.state === "pending" ? "等待你确认后继续" : "正在思考与执行"}
-        doneLabel={(s) => `已思考 ${s} 秒 · ${steps.length} 步`}
+        liveLabel={confirmation?.state === "pending" ? "等待你确认后继续" : label || "正在思考与执行"}
+        doneLabel={(s) => (steps.length ? `已思考 ${s} 秒 · ${steps.length} 步` : `已思考 ${s} 秒`)}
       >
+        {thinkContent ? (
+          <p className="whitespace-pre-wrap border-l border-border pl-3 text-xs leading-5 text-muted-foreground">
+            {thinkContent}
+          </p>
+        ) : null}
         {plan.length ? (
           <div className="mt-2 rounded-[12px] border border-border bg-card/70 px-3 py-2.5">
             <div className="mb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground">执行计划</div>
