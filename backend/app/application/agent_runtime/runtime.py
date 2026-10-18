@@ -1,6 +1,9 @@
-"""AgentRuntime —— 原生 function-calling loop 执行器。
+"""AgentRuntime —— ReAct（Thought → Action → Observation）循环执行器。
 
-范式：每一轮用 model_gateway.chat_with_tools() 让模型决定"调用工具"还是"给出最终答案"。
+范式：每一轮用 model_gateway.chat_with_tools() 让模型先写出本步思考（Thought），
+再决定"调用一个工具"（Action）还是"给出最终答案"；工具结果作为观察（Observation）回注，
+模型据此进入下一轮思考。single_step=True 时每轮只执行一个行动（多余的调用被推迟到下一轮重新决策），
+保证"想一步、做一步、看一步"。思考以 agent_thought 状态事件外发给前端。
 工具执行结果以 user 消息形式回注（对 DeepSeek/GLM/Qwen 等是否原生支持 tools 都鲁棒，
 也兼容 gateway 的 JSON fallback 路径），直到模型不再请求工具或触发预算/步数上限。
 
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -33,6 +37,9 @@ from .tool_registry import ToolContext, ToolRegistry, ToolResult, tool_registry
 
 
 _OBS_MAX_CHARS = 4000  # 单个工具观察回注模型的最大字符数（防止 context 爆炸）
+# 最终回答开头若模型仍带了"思考：…"段落，去掉它（只去首段，正文不动）
+_LEADING_THOUGHT_RE = re.compile(r"^\s*(?:\*\*)?(?:思考|Thought)(?:\*\*)?\s*[:：][^\n]*(?:\n|$)")
+_THOUGHT_MAX_CHARS = 600  # 单步思考外发/入历史的最大字符数（推理模型的思考链可能很长）
 # natural-finish 复用已生成内容时的"打字机"合成流式参数：
 # 固定分片数 + 真实小延时，保证前端逐步渲染（asyncio.sleep(0) 不产生真实间隔会被一次性 flush）。
 _REPLAY_TARGET_CHUNKS = 50   # 目标分片数（分片大小随文本长度自适应）
@@ -43,8 +50,10 @@ _REPLAY_DELAY = 0.025        # 每片之间的真实延时（秒）→ 总时长
 @dataclass
 class AgentRuntimeConfig:
     agent_id: str = "PlannerAgent"
-    max_iters: int = 8
+    max_iters: int = 12
     tool_budget: int = 16
+    # ReAct：每轮只执行一个行动，观察结果后再进入下一轮思考
+    single_step: bool = True
     # 昂贵工具的两道闸：
     # - max_expensive_calls：昂贵工具"调用次数"上限（批量工具算 1 次）；
     # - expensive_unit_budget：昂贵工具消耗的"单位"（≈上游 API 请求数）总预算。
@@ -158,9 +167,13 @@ class AgentRuntime:
                     yield ev
                 return
 
-            tool_calls = resp.get("tool_calls") or []
+            tool_calls = [c for c in (resp.get("tool_calls") or []) if c.get("name")]
             assistant_text = str(resp.get("content") or "").strip()
             plan_ms = int((time.monotonic() - plan_start) * 1000)
+
+            deferred: List[Dict[str, Any]] = []
+            if cfg.single_step and len(tool_calls) > 1:
+                tool_calls, deferred = tool_calls[:1], tool_calls[1:]
             logger.info(
                 "[AgentRuntime] task={} 第 {} 轮规划完成 ms={} 决策={}",
                 task_id, iteration, plan_ms,
@@ -168,16 +181,29 @@ class AgentRuntime:
             )
 
             if not tool_calls:
-                final_content = assistant_text
+                final_content = _LEADING_THOUGHT_RE.sub("", assistant_text, count=1).strip()
                 trace.stop_reason = "model_final"
                 break
 
-            # 记录模型本轮决策（以文本形式入历史，保证 provider 无关的鲁棒性）
+            # Thought：模型正文 > 推理链 > JSON fallback 的 reason
+            thought = self._extract_thought(assistant_text, resp, tool_calls)
+            if thought:
+                yield {
+                    "type": "status",
+                    "status": "agent_thought",
+                    "thought": thought,
+                    "iteration": iteration,
+                }
+
+            # 记录本轮 Thought + Action（以文本形式入历史，保证 provider 无关的鲁棒性）
             decided = "；".join(
                 f"{c.get('name')}({self._short_args(c.get('arguments'))})" for c in tool_calls
             )
             messages.append(
-                {"role": "assistant", "content": assistant_text or f"[决定调用工具] {decided}"}
+                {
+                    "role": "assistant",
+                    "content": f"{thought}\n\n→ 调用 {decided}" if thought else f"→ 调用 {decided}",
+                }
             )
 
             observations: List[str] = []
@@ -291,14 +317,23 @@ class AgentRuntime:
 
                 observations.append(f"[{name}] 结果：\n{self._truncate(result.content)}")
 
+            if deferred:
+                names = "、".join(str(c.get("name")) for c in deferred)
+                observations.append(
+                    f"（每一步只执行一个行动：本轮推迟了 {names}，未执行。"
+                    "请先根据上面的观察重新判断是否仍需要它们。）"
+                )
+                logger.info("[AgentRuntime] task={} 第 {} 轮推迟工具 {}", task_id, iteration, names)
+
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        "工具执行结果如下：\n\n"
+                        f"观察（第 {iteration} 步）：\n\n"
                         + "\n\n".join(observations)
-                        + "\n\n请基于以上真实结果继续：若信息不足可继续调用工具，"
-                        "否则直接给出最终中文 Markdown 回答。"
+                        + "\n\n请先用 1-2 句话写出你从这个观察中得到了什么、下一步要做什么及原因，"
+                        "然后只调用一个工具；若信息已足够，直接给出最终中文 Markdown 回答"
+                        "（最终回答里不要再写思考过程）。"
                     ),
                 }
             )
@@ -454,6 +489,16 @@ class AgentRuntime:
             yield {"type": "message_delta", "message_id": message_id, "delta": text[i : i + step]}
             await asyncio.sleep(_REPLAY_DELAY)
         yield {"type": "message_done", "message_id": message_id, "content": text}
+
+    @staticmethod
+    def _extract_thought(
+        assistant_text: str, resp: Dict[str, Any], tool_calls: List[Dict[str, Any]]
+    ) -> str:
+        text = assistant_text or str(resp.get("reasoning") or "").strip()
+        if not text:
+            text = next((str(c.get("reason")) for c in tool_calls if c.get("reason")), "")
+        text = text.strip()
+        return text if len(text) <= _THOUGHT_MAX_CHARS else text[:_THOUGHT_MAX_CHARS] + "…"
 
     @staticmethod
     def _truncate(text: str) -> str:

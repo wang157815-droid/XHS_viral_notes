@@ -302,6 +302,7 @@ export default function WorkspacePage() {
       // 自主 Agent 运行态累积：执行步骤 / 计划 / 流式产物，驱动步骤条与产物卡可视化
       let agentSteps: AgentRunStep[] = [];
       let agentPlan: AgentPlanStep[] = [];
+      let pendingThought = ""; // 最近一次 agent_thought，挂到下一个工具步骤上
       let streamedArtifacts: AgentArtifact[] = [];
       // 关键步骤确认 + 思考计时（驱动思考过程 UI 的"已思考 Ns"）
       let agentConfirmation: AgentConfirmation | null = null;
@@ -467,6 +468,8 @@ export default function WorkspacePage() {
                 };
               } else if (event.status === "agent_confirm_resolved" && agentConfirmation) {
                 agentConfirmation = { ...agentConfirmation, state: event.decision ?? "rejected" };
+              } else if (event.status === "agent_thought") {
+                pendingThought = event.thought ?? "";
               } else if (event.status === "agent_tool_call") {
                 agentSteps = [
                   ...agentSteps,
@@ -475,8 +478,10 @@ export default function WorkspacePage() {
                     iteration: event.iteration ?? 0,
                     tool: event.tool ?? "",
                     status: "running",
+                    thought: pendingThought || undefined,
                   },
                 ];
+                pendingThought = "";
               } else if (event.status === "agent_tool_result") {
                 let idx = -1;
                 for (let i = agentSteps.length - 1; i >= 0; i -= 1) {
@@ -498,6 +503,8 @@ export default function WorkspacePage() {
               const agentLabel =
                 event.status === "agent_confirm_required"
                   ? "等待你确认关键步骤…"
+                  : event.status === "agent_thought"
+                  ? "已想好下一步，准备行动…"
                   : event.status === "agent_tool_call"
                   ? `正在调用工具 ${event.tool ?? ""}…`
                   : event.status === "agent_tool_result"

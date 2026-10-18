@@ -4,7 +4,7 @@ import * as React from "react";
 import { ArrowUp, Check, ChevronRight, Sparkles, Square, X } from "lucide-react";
 
 export type ThinkingStatus = "idle" | "thinking" | "answering" | "done";
-export type ThinkingStep = { id: string; text: string; detail?: string; status?: "active" | "complete" | "error" };
+export type ThinkingStep = { id: string; text: string; detail?: string; thought?: string; status?: "active" | "complete" | "error" };
 export type ThinkingSubmitOptions = { think: boolean };
 export type ThinkingPromptInputProps = {
   status?: ThinkingStatus;
@@ -142,6 +142,7 @@ export function ThinkingTrace({
                   )}
                 </span>
                 <span className="min-w-0">
+                  {step.thought ? <span className="mb-0.5 block whitespace-pre-wrap break-words text-xs leading-5 text-foreground/75">{step.thought}</span> : null}
                   <span className={step.status === "active" ? "text-foreground" : step.status === "error" ? "text-[#9A5558]" : "text-muted-foreground"}>{step.text}</span>
                   {step.detail ? <span className="block break-words text-[11px] leading-4 text-muted-foreground/80">{step.detail}</span> : null}
                 </span>

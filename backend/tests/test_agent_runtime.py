@@ -649,3 +649,39 @@ async def test_runtime_emits_plan_events():
     assert len(plans) >= 2
     assert plans[0]["plan"][0]["title"] == "采集"
     assert any(s["id"] == "s1" and s["status"] == "done" for s in plans[-1]["plan"])
+
+
+@pytest.mark.asyncio
+async def test_runtime_react_single_step_and_thought():
+    """ReAct：每轮只执行一个行动，多余调用推迟；思考以 agent_thought 事件外发并入历史。"""
+    reg = ToolRegistry()
+    log: list = []
+    reg.register(_echo_spec(log))
+    seen_messages: list = []
+
+    class RecordingGateway(FakeGateway):
+        async def chat_with_tools(self, agent_id, messages, **kw):
+            seen_messages.append([dict(m) for m in messages])
+            return await super().chat_with_tools(agent_id, messages, **kw)
+
+    gw = RecordingGateway(
+        script=[
+            {
+                "content": "先回显 a 看看结果",
+                "tool_calls": [
+                    {"id": "1", "name": "echo", "arguments": {"text": "a"}},
+                    {"id": "2", "name": "echo", "arguments": {"text": "b"}},
+                ],
+            },
+            {"content": "", "reasoning": "a 已回显，再回显 b", "tool_calls": [{"id": "3", "name": "echo", "arguments": {"text": "b"}}]},
+            {"content": "完成", "tool_calls": []},
+        ]
+    )
+    rt = AgentRuntime(registry=reg, gateway=gw, config=AgentRuntimeConfig())
+    events = await _drain(rt, goal="问题", ctx=_ctx())
+    assert [a for _, a in log] == [{"text": "a"}, {"text": "b"}]
+    thoughts = [e["thought"] for e in events if e.get("status") == "agent_thought"]
+    assert thoughts == ["先回显 a 看看结果", "a 已回显，再回显 b"]
+    second_round = seen_messages[1]
+    assert second_round[-2]["content"].startswith("先回显 a 看看结果")
+    assert "推迟了 echo" in second_round[-1]["content"]

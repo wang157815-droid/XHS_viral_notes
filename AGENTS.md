@@ -706,7 +706,7 @@ MULTIMODAL_MODEL_NAME="qwen3-vl-plus"
    - PowerShell 执行脚本可能需要设置执行策略
 
 ## 自主 Agent 工具化（agent_runtime）
-- 循环：`backend/app/application/agent_runtime/runtime.py`（function-calling loop，预算/超时护栏）；工具注册在 `agent_runtime/tools/`。
+- 循环：`backend/app/application/agent_runtime/runtime.py`（ReAct：思考 → 单个行动 → 观察，预算/超时护栏）；工具注册在 `agent_runtime/tools/`。`single_step=True` 时每轮只执行第一个 tool_call，其余推迟并在观察里告知模型；思考取 content > `reasoning_content` > JSON fallback 的 `thought`/`reason`，以 `agent_thought` 状态事件外发，前端挂到下一个工具步骤（`AgentRunStep.thought`）上展示。
 - 阶段工具 `tools/stages.py`：把 6 阶段流水线拆成 `create_analysis_task` → `parse_task_input` → `crawl_task_notes` → `analyze_task_images/videos` → `build_viral_model` → `generate_task_insights`/`retrieve_task_knowledge` → `render_task_canvas`（+ `get_task_progress`），Agent 自由编排；工具内校验归属、前置阶段、单任务互斥、失败上限 2 次。阶段完成状态存 `datas/agent_stage_runs/<task_id>.json`。
 - 关键步骤确认：`requires_confirmation=True` 的工具在流式会话（`ctx.extra.interactive_confirm`）里先推 `agent_confirm_required`，前端调 `POST /conversations/{id}/agent-confirmations/{cid}`；超时 300s 视为拒绝；非流式入口不拦截。
 - 前端：`components/ui/thinking-prompt-input.tsx`（含可复用 `ThinkingTrace`），会话里由 `components/workspace/agent-thinking.tsx` 渲染思考过程 + 确认卡。注意本项目 `rounded-xl/2xl` 被改为 32/48px。

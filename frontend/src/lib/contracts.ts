@@ -200,6 +200,8 @@ export interface AgentRunStep {
   tool: string;
   status: "running" | "ok" | "error";
   summary?: string;
+  /** 本步行动前模型的思考（agent_thought 事件） */
+  thought?: string;
 }
 
 export interface ChatMessage {
@@ -247,6 +249,7 @@ export type ConversationStreamEvent =
       confirmation_id?: string;
       decision?: "approved" | "rejected" | "timeout";
       timeout_seconds?: number;
+      thought?: string;
     }
   | { type: "artifact"; artifact: AgentArtifact; iteration?: number }
   | { type: "tool_selected"; tool: { name: string; arguments?: Record<string, unknown>; confidence?: number; reason?: string } }

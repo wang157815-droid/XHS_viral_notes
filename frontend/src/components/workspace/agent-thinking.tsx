@@ -65,6 +65,7 @@ function toThinkingSteps(steps: AgentRunStep[]): ThinkingStep[] {
   return steps.map((step) => ({
     id: step.id,
     text: agentToolLabel(step.tool),
+    thought: step.thought,
     detail: step.summary,
     status: step.status === "running" ? "active" : step.status === "error" ? "error" : "complete",
   }));

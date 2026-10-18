@@ -232,7 +232,7 @@ class ModelGateway:
         params = self._merge_params(profile, overrides)
         start = time.monotonic()
         try:
-            content, tool_calls, usage = await self._invoke_chat_with_tools(
+            content, tool_calls, usage, reasoning = await self._invoke_chat_with_tools(
                 provider,
                 profile,
                 messages,
@@ -253,6 +253,7 @@ class ModelGateway:
             )
             return {
                 "content": content,
+                "reasoning": reasoning,
                 "tool_calls": tool_calls,
                 "profile_id": profile.profile_id,
                 "model_name": profile.model_name,
@@ -478,7 +479,7 @@ class ModelGateway:
         tools: List[Dict[str, Any]],
         tool_choice: str | Dict[str, Any],
         params: Dict[str, Any],
-    ) -> tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+    ) -> tuple[str, List[Dict[str, Any]], Dict[str, Any], str]:
         openai = self._load_openai()
         client = openai.OpenAI(base_url=provider.base_url, api_key=provider.api_key)
         timeout = params.pop("timeout", profile.timeout_seconds)
@@ -498,6 +499,8 @@ class ModelGateway:
                 choice = response.choices[0]
                 message = choice.message
                 content = (message.content or "").strip() if message else ""
+                # DeepSeek/Qwen 等推理模型：思考链在独立的 reasoning_content 字段
+                reasoning = str(getattr(message, "reasoning_content", None) or "").strip() if message else ""
                 tool_calls: List[Dict[str, Any]] = []
                 for call in getattr(message, "tool_calls", None) or []:
                     fn = getattr(call, "function", None)
@@ -518,7 +521,7 @@ class ModelGateway:
                     "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
                     "total_tokens": getattr(response.usage, "total_tokens", 0) if response.usage else 0,
                 }
-                return content, tool_calls, usage
+                return content, tool_calls, usage, reasoning
             except Exception as exc:
                 last_error = exc
                 if self._is_retryable(exc) and attempt < retries:
@@ -558,7 +561,7 @@ class ModelGateway:
                 "role": "system",
                 "content": (
                     "当前模型不使用原生 tool calling。请只输出 JSON，不要解释："
-                    '{"tool_calls":[{"name":"工具名","arguments":{},"confidence":0.0,"reason":"原因"}],"content":""}。'
+                    '{"thought":"本步思考","tool_calls":[{"name":"工具名","arguments":{},"confidence":0.0,"reason":"原因"}],"content":""}。'
                     f"可选工具：{', '.join(name for name in tool_names if name)}。"
                 ),
             },
@@ -599,7 +602,9 @@ class ModelGateway:
             )
         return {
             **result,
-            "content": str(parsed.get("content") or result.get("content") or ""),
+            # 有 tool_calls 时原始 JSON 不是回答，不能回退为 content
+            "content": str(parsed.get("content") or ("" if normalized else result.get("content")) or ""),
+            "reasoning": str(parsed.get("thought") or ""),
             "tool_calls": normalized,
             "fallback_from": original_error.code,
         }
