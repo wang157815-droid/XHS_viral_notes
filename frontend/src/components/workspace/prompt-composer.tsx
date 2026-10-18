@@ -30,6 +30,7 @@ import {
   type KbDocRow,
 } from "./knowledge-mention";
 import { SUGGESTION_TAGS } from "./mock-canvas-data";
+import { PlanModeToggle } from "./plan-mode-toggle";
 import {
   ComposerDraftThumbnailsRow,
   isAllowedComposerAttachmentFile,
@@ -62,6 +63,8 @@ interface PromptComposerProps {
   onTriggerLocalMedia?: () => void;
   /** 拖入文件或外部追加草稿（与 ChatPanel 共用白名单过滤） */
   onPickLocalFiles?: (files: File[]) => void;
+  planMode?: boolean;
+  onPlanModeChange?: (value: boolean) => void;
 }
 
 export function PromptComposer({
@@ -74,6 +77,8 @@ export function PromptComposer({
   onAdvancedChange,
   onSubmit,
   onPickSuggestion,
+  planMode = false,
+  onPlanModeChange,
   knowledgeRefs = [],
   localMediaDrafts = [],
   onRemoveKnowledgeRef,
@@ -341,6 +346,10 @@ export function PromptComposer({
     </div>
   );
 
+  const planToggle = onPlanModeChange ? (
+    <PlanModeToggle value={planMode} onChange={onPlanModeChange} disabled={disabled} />
+  ) : null;
+
   const sendButton = (
     <button
       type="button"
@@ -487,7 +496,7 @@ export function PromptComposer({
                     </span>
                   ))}
                 </div>
-                <div className="flex h-10 shrink-0 items-center pb-px">{sendButton}</div>
+                <div className="flex h-10 shrink-0 items-center gap-1.5 pb-px">{planToggle}{sendButton}</div>
               </div>
             </>
           ) : (
@@ -539,7 +548,7 @@ export function PromptComposer({
                   }}
                 />
               </div>
-              <div className="flex h-10 shrink-0 items-center">{sendButton}</div>
+              <div className="flex h-10 shrink-0 items-center gap-1.5">{planToggle}{sendButton}</div>
             </div>
           )}
         </motion.div>

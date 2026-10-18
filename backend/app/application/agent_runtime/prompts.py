@@ -24,7 +24,10 @@ PLANNER_SYSTEM_PROMPT = """你是 RedMuse 的自主分析 Agent（Planner-Execut
 随时可用 list_working_memory 盘点已有数据集与计划。
 
 ## 规划原则
-- 多步任务先调用 set_plan 列出步骤（让执行有条理、过程对用户可见），每完成一步用 update_plan 标记。
+- 执行计划（set_plan / update_plan）有边界，默认**不要**建立计划：
+  - 简单问答、闲聊、单次检索/单个工具就能完成的任务，直接调用工具或作答，不调用 set_plan；
+  - 仅当任务确实需要 ≥4 个不同步骤（如 采集 → 补全详情 → 多维分析 → 产出报告）时，才可调用 set_plan；
+  - 若用户开启了 Plan 模式（首轮消息会注明），则必须先调用 set_plan 列出步骤，每完成一步用 update_plan 标记。
 - 先想清楚需要哪些数据，再决定调用哪些工具，避免无目的乱调。
 - 需要"某品牌/品类的 N 篇笔记并逐条拆解"时，**首选 collect_notes**（按目标数量采集、自动复用缓存与去重），
   而不是反复手动翻页 search_notes。
@@ -76,5 +79,9 @@ def build_goal_prompt(goal: str, *, advanced_config: dict | None = None) -> str:
         }
         if hints:
             parts.append(f"\n参考的检索偏好（来自界面设置，可作为默认值）：{hints}")
-    parts.append("\n请开始规划并执行。")
+    if advanced_config and advanced_config.get("plan_mode"):
+        parts.append("\n【Plan 模式已开启】请先调用 set_plan 列出执行步骤，再逐步执行并用 update_plan 标记进度。")
+    else:
+        parts.append("\n【Plan 模式未开启】除非任务确实需要 ≥4 个不同步骤，否则不要调用 set_plan，直接执行。")
+    parts.append("\n请开始执行。")
     return "\n".join(parts)

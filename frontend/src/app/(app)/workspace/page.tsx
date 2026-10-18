@@ -239,6 +239,7 @@ export default function WorkspacePage() {
       rawInput,
       keywords,
       advanced,
+      planMode = false,
       attachments = [],
       knowledgeRefs = [],
       localMediaFiles,
@@ -246,6 +247,7 @@ export default function WorkspacePage() {
       rawInput: string;
       keywords: string[];
       advanced: AdvancedConfig;
+      planMode?: boolean;
       attachments?: Array<{
         file_id: string;
         filename: string;
@@ -437,7 +439,7 @@ export default function WorkspacePage() {
             conversationId: currentConversationId,
             content: rawInput,
             keywords,
-            advancedConfig: advanced as unknown as Record<string, unknown>,
+            advancedConfig: { ...advanced, plan_mode: planMode },
             activeTaskId: taskId,
             clientMessageId,
             attachments: mergedAttachments as unknown as Array<Record<string, unknown>>,

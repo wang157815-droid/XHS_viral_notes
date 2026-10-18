@@ -46,6 +46,7 @@ import {
   type KbDocRow,
 } from "./knowledge-mention";
 import { PromptComposer, type LocalMediaDraft } from "./prompt-composer";
+import { PlanModeToggle } from "./plan-mode-toggle";
 import { ConversationUserAttachments, type AttachmentRecord } from "./conversation-attachments";
 import {
   ComposerDraftThumbnailsRow,
@@ -81,6 +82,7 @@ interface ChatPanelProps {
     rawInput: string;
     keywords: string[];
     advanced: AdvancedConfig;
+    planMode?: boolean;
     attachments?: ConversationAttachmentPayload[];
     knowledgeRefs?: KnowledgeRefPayload[];
     localMediaFiles?: File[];
@@ -145,6 +147,7 @@ export function ChatPanel({
     onDraftChangeRef.current?.(input);
   }, [input]);
   const [advanced, setAdvanced] = useState<AdvancedConfig>(DEFAULT_ADVANCED);
+  const [planMode, setPlanMode] = useState(false);
   const [knowledgeRefs, setKnowledgeRefs] = useState<KnowledgeRefPayload[]>([]);
   const [localMediaDrafts, setLocalMediaDrafts] = useState<LocalMediaDraft[]>([]);
   const [inputCaret, setInputCaret] = useState(0);
@@ -400,6 +403,7 @@ export function ChatPanel({
       rawInput: text,
       keywords: kw,
       advanced,
+      planMode,
       attachments: uploadedAttachments.length ? uploadedAttachments : [],
       knowledgeRefs: refs,
       localMediaFiles: undefined,
@@ -429,6 +433,7 @@ export function ChatPanel({
       rawInput: text,
       keywords: kw,
       advanced,
+      planMode,
       attachments: uploadedAttachments.length ? uploadedAttachments : [],
       knowledgeRefs: refs,
       localMediaFiles: undefined,
@@ -621,6 +626,10 @@ export function ChatPanel({
     </div>
   );
 
+  const planToggle = (
+    <PlanModeToggle value={planMode} onChange={setPlanMode} disabled={!canWriteConversation} />
+  );
+
   const chatFooterSendButton = (
     <button
       type="button"
@@ -671,6 +680,8 @@ export function ChatPanel({
             onAdvancedChange={setAdvanced}
             onSubmit={handleSend}
             onPickSuggestion={handleSuggestion}
+            planMode={planMode}
+            onPlanModeChange={setPlanMode}
             knowledgeRefs={knowledgeRefs}
             localMediaDrafts={localMediaDrafts}
             onRemoveKnowledgeRef={removeKnowledgeRef}
@@ -909,7 +920,7 @@ export function ChatPanel({
                     </span>
                   ))}
                 </div>
-                <div className="flex h-10 shrink-0 items-center pb-px">{chatFooterSendButton}</div>
+                <div className="flex h-10 shrink-0 items-center gap-1.5 pb-px">{planToggle}{chatFooterSendButton}</div>
               </div>
             </>
           ) : (
@@ -962,7 +973,7 @@ export function ChatPanel({
                   }}
                 />
               </div>
-              <div className="flex h-10 shrink-0 items-center">{chatFooterSendButton}</div>
+              <div className="flex h-10 shrink-0 items-center gap-1.5">{planToggle}{chatFooterSendButton}</div>
             </div>
           )}
         </motion.div>
