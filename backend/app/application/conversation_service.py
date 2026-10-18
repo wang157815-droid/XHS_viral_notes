@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1063,12 +1064,39 @@ class ConversationService:
         content_parts: List[str] = []
         collected_artifacts: List[Dict[str, Any]] = []
         message_id: Optional[str] = None
+        # 思考过程持久化：与前端 AgentRunStep / AgentPlanStep 结构一致，刷新页面后可回放
+        agent_steps: List[Dict[str, Any]] = []
+        agent_plan: List[Dict[str, Any]] = []
+        pending_thought = ""
+        agent_started = time.monotonic()
+        agent_duration_ms = 0
         try:
             async for event in runtime.run_stream(
                 goal=goal, ctx=rt_ctx, history=recent_messages, trace=trace
             ):
                 etype = event.get("type")
                 if etype == "status":
+                    status = event.get("status")
+                    if status == "agent_thought":
+                        pending_thought = str(event.get("thought") or "")
+                    elif status == "agent_tool_call":
+                        step: Dict[str, Any] = {
+                            "id": f"step_{len(agent_steps) + 1}",
+                            "iteration": event.get("iteration") or 0,
+                            "tool": event.get("tool") or "",
+                            "status": "running",
+                        }
+                        if pending_thought:
+                            step["thought"] = pending_thought
+                        agent_steps.append(step)
+                        pending_thought = ""
+                    elif status == "agent_tool_result":
+                        running = next((s for s in reversed(agent_steps) if s["status"] == "running"), None)
+                        if running:
+                            running["status"] = "error" if event.get("ok") is False else "ok"
+                            running["summary"] = event.get("summary")
+                    elif status == "agent_plan" and isinstance(event.get("plan"), list):
+                        agent_plan = event["plan"]
                     yield event
                     continue
                 if etype == "artifact":
@@ -1079,6 +1107,8 @@ class ConversationService:
                     continue
                 if etype == "message_start":
                     message_id = str(event.get("message_id") or new_id("msg"))
+                    if not agent_duration_ms:
+                        agent_duration_ms = int((time.monotonic() - agent_started) * 1000)
                     yield event
                     continue
                 if etype == "message_delta":
@@ -1112,6 +1142,10 @@ class ConversationService:
                             "agent_stop_reason": trace.stop_reason,
                             "agent_artifacts": len(artifacts),
                             "created_tasks": created,
+                            "agent_steps": agent_steps,
+                            "agent_plan": agent_plan,
+                            "agent_duration_ms": agent_duration_ms
+                            or int((time.monotonic() - agent_started) * 1000),
                         },
                     )
                     if created:

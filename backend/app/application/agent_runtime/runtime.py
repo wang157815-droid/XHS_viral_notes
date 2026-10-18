@@ -39,6 +39,8 @@ from .tool_registry import ToolContext, ToolRegistry, ToolResult, tool_registry
 _OBS_MAX_CHARS = 4000  # 单个工具观察回注模型的最大字符数（防止 context 爆炸）
 # 最终回答开头若模型仍带了"思考：…"段落，去掉它（只去首段，正文不动）
 _LEADING_THOUGHT_RE = re.compile(r"^\s*(?:\*\*)?(?:思考|Thought)(?:\*\*)?\s*[:：][^\n]*(?:\n|$)")
+# 思考文本自带的"思考："/"**思考**："标签（界面已表明这是思考，去掉冗余前缀）
+_THOUGHT_PREFIX_RE = re.compile(r"^\s*(?:\*\*)?(?:思考|Thought)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*")
 _THOUGHT_MAX_CHARS = 600  # 单步思考外发/入历史的最大字符数（推理模型的思考链可能很长）
 # natural-finish 复用已生成内容时的"打字机"合成流式参数：
 # 固定分片数 + 真实小延时，保证前端逐步渲染（asyncio.sleep(0) 不产生真实间隔会被一次性 flush）。
@@ -497,7 +499,7 @@ class AgentRuntime:
         text = assistant_text or str(resp.get("reasoning") or "").strip()
         if not text:
             text = next((str(c.get("reason")) for c in tool_calls if c.get("reason")), "")
-        text = text.strip()
+        text = _THOUGHT_PREFIX_RE.sub("", text.strip(), count=1).strip()
         return text if len(text) <= _THOUGHT_MAX_CHARS else text[:_THOUGHT_MAX_CHARS] + "…"
 
     @staticmethod
