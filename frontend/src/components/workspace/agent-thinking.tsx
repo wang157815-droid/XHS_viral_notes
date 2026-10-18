@@ -35,6 +35,21 @@ const AGENT_TOOL_LABELS: Record<string, string> = {
   retrieve_task_knowledge: "知识增强",
   render_task_canvas: "画布渲染",
   get_task_progress: "查看任务进度",
+  list_my_tasks: "查询历史任务",
+  get_task_detail: "查看任务详情",
+  get_task_canvas: "读取任务画布",
+  pause_task: "暂停任务",
+  resume_task: "恢复任务",
+  cancel_task: "取消任务",
+  retry_task: "重试任务",
+  list_knowledge_documents: "查询知识库文档",
+  get_metrics_summary: "运营指标汇总",
+  get_history_timeline: "历史时间线",
+  get_cookie_health: "Cookie 健康度",
+  get_xhs_auth_status: "小红书授权状态",
+  get_crawler_status: "爬虫状态",
+  get_focus_keywords: "关注关键词",
+  get_system_settings: "系统设置",
 };
 
 export const agentToolLabel = (tool: string) => AGENT_TOOL_LABELS[tool] || tool || "工具";

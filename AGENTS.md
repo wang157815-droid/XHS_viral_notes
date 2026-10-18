@@ -710,6 +710,7 @@ MULTIMODAL_MODEL_NAME="qwen3-vl-plus"
 - 阶段工具 `tools/stages.py`：把 6 阶段流水线拆成 `create_analysis_task` → `parse_task_input` → `crawl_task_notes` → `analyze_task_images/videos` → `build_viral_model` → `generate_task_insights`/`retrieve_task_knowledge` → `render_task_canvas`（+ `get_task_progress`），Agent 自由编排；工具内校验归属、前置阶段、单任务互斥、失败上限 2 次。阶段完成状态存 `datas/agent_stage_runs/<task_id>.json`。
 - 关键步骤确认：`requires_confirmation=True` 的工具在流式会话（`ctx.extra.interactive_confirm`）里先推 `agent_confirm_required`，前端调 `POST /conversations/{id}/agent-confirmations/{cid}`；超时 300s 视为拒绝；非流式入口不拦截。
 - 前端：`components/ui/thinking-prompt-input.tsx`（含可复用 `ThinkingTrace`），会话里由 `components/workspace/agent-thinking.tsx` 渲染思考过程 + 确认卡。注意本项目 `rounded-xl/2xl` 被改为 32/48px。
+- 系统接口工具 `tools/system_api.py`：直接调用 `api/routes` 路由函数并传入 `ctx.current_user`（权限/归属与 HTTP 接口一致）。开放任务列表/详情/画布、pause/resume/cancel/retry（需确认）、知识库文档、指标汇总（仅 admin）、时间线、Cookie/授权/爬虫状态、关注关键词、系统设置（只读）。调用带 `Query()` 默认值的路由函数时必须显式传所有参数。新增工具需同步 `agent-thinking.tsx` 的 `AGENT_TOOL_LABELS`。
 - Plan 模式：输入框 `Plan` 开关（`components/workspace/plan-mode-toggle.tsx`）把 `plan_mode` 放进 `advanced_config`；`agent_runtime/prompts.py` 据此要求先 `set_plan`，未开启时仅 ≥4 步任务才建计划。
 - 前端类型检查需在容器内跑：`docker compose -f docker-compose.base44.yml exec -T frontend npx tsc --noEmit -p .`（宿主机没有 typescript）。
 - 测试：`docker compose -f docker-compose.base44.yml exec -T backend sh -c "cd /app && /venv/bin/python -m pytest -c backend/tests/pytest.ini backend/tests/test_agent_confirmation_and_stage_tools.py -q"`（需先 pip 安装 pytest pytest-asyncio）。
