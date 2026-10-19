@@ -71,6 +71,7 @@ class DocumentSearchResult(BaseModel):
     text: str = Field(..., description="匹配的文本片段")
     score: float = Field(..., description="相似度分数")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    trust: Optional[str] = Field(default=None, description="信任级：owner_doc / shared_doc")
 
     def to_dict(self) -> Dict[str, Any]:
         """转为字典"""
@@ -79,5 +80,6 @@ class DocumentSearchResult(BaseModel):
             'chunk_index': self.chunk_index,
             'text': self.text,
             'score': self.score,
-            'metadata': self.metadata
+            'metadata': self.metadata,
+            'trust': self.trust
         }

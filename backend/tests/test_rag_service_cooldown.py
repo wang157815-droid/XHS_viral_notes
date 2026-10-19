@@ -60,7 +60,7 @@ class FakeRagService:
         top_k=5,
         min_score=0.0,
         owner_user_id=None,
-        include_all=True,
+        scope=None,
     ):
         self.calls.append({"query": query, "owner_user_id": owner_user_id})
         return []

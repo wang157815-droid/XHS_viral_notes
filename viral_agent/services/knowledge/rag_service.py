@@ -11,6 +11,7 @@ from viral_agent.models.document import KnowledgeDocument, DocumentSearchResult
 
 from backend.app.infrastructure.db.engine import get_business_db_session
 from backend.app.infrastructure.db.schema import ensure_business_schema
+from backend.app.services.knowledge_scope import build_scope_filter, resolve_scope, trust_level
 
 # 加载环境变量
 load_dotenv()
@@ -132,7 +133,7 @@ class RAGService:
         top_k: int = 5,
         min_score: float = 0.0,
         owner_user_id: Optional[str] = None,
-        include_all: bool = True,
+        scope: Optional[str] = None,
         doc_ids: Optional[List[str]] = None,
     ) -> List[DocumentSearchResult]:
         """
@@ -143,27 +144,26 @@ class RAGService:
             domains: 限定领域（可选）
             top_k: 返回结果数
             min_score: 最小相似度分数
+            owner_user_id: 当前用户
+            scope: legacy | owner_or_admin | strict；None 取 flag ``KNOWLEDGE_SEARCH_SCOPE``
 
         Returns:
-            搜索结果列表
+            搜索结果列表（每条带 ``trust``：owner_doc / shared_doc）
         """
+        resolved_scope = resolve_scope(scope)
         try:
             query_embedding = self._get_embeddings([query])[0]
             params: Dict[str, Any] = {
                 "embedding": _format_vector(query_embedding),
                 "top_k": top_k,
                 "embedding_model": self.embedding_model,
-                "owner_user_id": owner_user_id or "",
             }
             domain_clause = ""
             if domains:
                 domain_clause = "AND c.domains ?| :domains"
                 params["domains"] = domains
-            owner_clause = ""
-            join_clause = ""
-            if not include_all:
-                join_clause = "JOIN knowledge_documents d ON d.doc_id = c.doc_id"
-                owner_clause = "AND d.owner_user_id = :owner_user_id"
+            owner_clause, scope_params = build_scope_filter(resolved_scope, owner_user_id)
+            params.update(scope_params)
             doc_clause = ""
             if doc_ids:
                 cleaned = [str(d).strip() for d in doc_ids if str(d).strip()]
@@ -178,9 +178,10 @@ class RAGService:
                     _sql_text(
                         f"""
                         SELECT c.doc_id, c.chunk_index, c.text, c.metadata,
+                               d.owner_user_id AS doc_owner_user_id,
                                1 - (c.embedding <=> CAST(:embedding AS vector)) AS score
                         FROM knowledge_chunks c
-                        {join_clause}
+                        JOIN knowledge_documents d ON d.doc_id = c.doc_id
                         WHERE c.embedding IS NOT NULL
                           AND c.embedding_model = :embedding_model
                           {domain_clause}
@@ -199,6 +200,7 @@ class RAGService:
                     text=str(row["text"] or ""),
                     score=round(float(row["score"] or 0), 4),
                     metadata=dict(row["metadata"] or {}),
+                    trust=trust_level(row["doc_owner_user_id"], owner_user_id),
                 )
                 for row in rows
                 if float(row["score"] or 0) >= min_score

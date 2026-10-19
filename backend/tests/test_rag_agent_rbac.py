@@ -30,13 +30,13 @@ class FakeRagService:
         top_k=5,
         min_score=0.0,
         owner_user_id=None,
-        include_all=True,
+        scope=None,
     ):
         self.calls.append(
             {
                 "query": query,
                 "owner_user_id": owner_user_id,
-                "include_all": include_all,
+                "scope": scope,
             }
         )
         return []
@@ -74,4 +74,5 @@ async def test_rag_agent_filters_by_task_owner(monkeypatch):
     assert result.ok is True
     assert fake_service.calls
     assert fake_service.calls[0]["owner_user_id"] == "owner-1"
-    assert fake_service.calls[0]["include_all"] is False
+    # M1：流水线 RAGAgent 固定 strict
+    assert fake_service.calls[0]["scope"] == "strict"

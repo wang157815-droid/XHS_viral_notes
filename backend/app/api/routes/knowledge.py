@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from loguru import logger
@@ -20,7 +20,8 @@ from pydantic import BaseModel, Field
 from ...core.responses import ok
 from ...core.security import RoleLevel, get_current_user, require_admin_user, role_allows
 from ...infrastructure.db.engine import get_business_db_session
-from ...services.knowledge_registry import knowledge_registry
+from ...infrastructure.db.metrics_store import TaskMetricRecord, metrics_store
+from ...services.knowledge_registry import VISIBILITY_SHARED, knowledge_registry
 
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -43,13 +44,22 @@ def _require_min_role(current_user: dict, minimum: RoleLevel) -> None:
         raise HTTPException(status_code=403, detail="权限不足")
 
 
-def _require_document_access(doc_id: str, current_user: dict) -> dict:
+def _require_document_access(doc_id: str, current_user: dict, *, allow_shared: bool = False) -> dict:
     record = knowledge_registry.get_document(doc_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
     if _is_admin(current_user) or record.get("owner_user_id") == _user_id(current_user):
         return record
+    if allow_shared and record.get("visibility") == VISIBILITY_SHARED:
+        return record
     raise HTTPException(status_code=403, detail="无权访问此文档")
+
+
+def _with_read_only(item: dict, current_user: dict) -> dict:
+    """普通用户看到的他人 shared 文档为只读。"""
+    item = dict(item)
+    item["read_only"] = not _is_admin(current_user) and item.get("owner_user_id") != _user_id(current_user)
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -58,15 +68,72 @@ def _require_document_access(doc_id: str, current_user: dict) -> dict:
 @router.get("/documents")
 async def list_documents(current_user: dict = Depends(get_current_user)):
     include_all = _is_admin(current_user)
+    items = knowledge_registry.list_documents(
+        owner_user_id=_user_id(current_user),
+        include_all=include_all,
+        include_shared=True,
+    )
     return ok(
         {
-            "items": knowledge_registry.list_documents(
-                owner_user_id=_user_id(current_user),
-                include_all=include_all,
-            ),
+            "items": [_with_read_only(item, current_user) for item in items],
             "include_all_effective": include_all,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# visibility（M1：仅 admin，写审计）
+# ---------------------------------------------------------------------------
+class VisibilityPayload(BaseModel):
+    visibility: Literal["private", "shared"]
+
+
+class BatchVisibilityPayload(BaseModel):
+    doc_ids: List[str] = Field(..., min_length=1, max_length=500)
+    visibility: Literal["private", "shared"]
+
+
+def _apply_visibility(doc_ids: List[str], visibility: str, current_user: dict) -> List[dict]:
+    changed = knowledge_registry.set_visibility(doc_ids, visibility)
+    for item in changed:
+        metrics_store.record_task_metric(
+            TaskMetricRecord(
+                metric_type="knowledge_visibility_change",
+                agent="admin_api",
+                stage="knowledge",
+                metadata={
+                    "doc_id": item["doc_id"],
+                    "from": item.get("previous_visibility"),
+                    "to": item.get("visibility"),
+                    "actor_user_id": _user_id(current_user),
+                },
+            )
+        )
+    return changed
+
+
+@router.patch("/documents/{doc_id}/visibility")
+async def set_document_visibility(
+    doc_id: str,
+    payload: VisibilityPayload,
+    current_user: dict = Depends(require_admin_user),
+):
+    changed = await asyncio.to_thread(_apply_visibility, [doc_id], payload.visibility, current_user)
+    if not changed:
+        raise HTTPException(status_code=404, detail=f"文档不存在: {doc_id}")
+    return ok(changed[0])
+
+
+@router.post("/documents/visibility/batch")
+async def batch_set_document_visibility(
+    payload: BatchVisibilityPayload,
+    current_user: dict = Depends(require_admin_user),
+):
+    """一次性批量入口：供 M1.1 确认的 shared 名单使用。"""
+    doc_ids = list(dict.fromkeys(d.strip() for d in payload.doc_ids if d.strip()))
+    changed = await asyncio.to_thread(_apply_visibility, doc_ids, payload.visibility, current_user)
+    found = {item["doc_id"] for item in changed}
+    return ok({"updated": changed, "not_found": [d for d in doc_ids if d not in found]})
 
 
 @router.delete("/documents/{doc_id}")
@@ -243,7 +310,7 @@ async def get_document_chunks(
     - 未向量化：回落到磁盘文件，用 document_parser 现场重新解析分块
     - 两种来源返回结构一致，前端无需区分
     """
-    record = _require_document_access(doc_id, current_user)
+    record = _require_document_access(doc_id, current_user, allow_shared=True)
 
     chunks: List[dict] = []
     source = "reparsed"

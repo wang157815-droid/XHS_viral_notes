@@ -17,6 +17,8 @@ interface Doc {
   vector_status?: string;
   vector_message?: string;
   uploaded_at?: string;
+  visibility?: "private" | "shared";
+  read_only?: boolean;
 }
 
 interface ListDocsResp {
@@ -194,7 +196,7 @@ function DocumentsView({
             <DocCard
               key={doc.doc_id}
               doc={doc}
-              canDelete={canDelete}
+              canDelete={canDelete && !doc.read_only}
               onDelete={() => void onDelete(doc.doc_id)}
               onView={() => onView(doc)}
             />
@@ -247,6 +249,14 @@ function DocCard({
             <span>{formatBytes(doc.size_bytes)}</span>
             <span>·</span>
             <span>{doc.chunks} 分块</span>
+            {doc.visibility === "shared" ? (
+              <span
+                className="rounded-full bg-[#F0F4FF] px-2 py-0.5 text-[11px] font-semibold text-[#4A7AE8]"
+                title={doc.read_only ? "共享文档，只读" : "已设为共享"}
+              >
+                {doc.read_only ? "共享 · 只读" : "共享"}
+              </span>
+            ) : null}
             {statusBadge ? (
               <span
                 className="rounded-full px-2 py-0.5 text-[11px] font-semibold"

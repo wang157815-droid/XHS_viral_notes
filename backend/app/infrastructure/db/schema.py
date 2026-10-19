@@ -126,6 +126,7 @@ CREATE INDEX IF NOT EXISTS knowledge_documents_uploaded_idx ON knowledge_documen
 ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS owner_user_id VARCHAR(128) NOT NULL DEFAULT 'admin';
 UPDATE knowledge_documents SET owner_user_id = COALESCE(NULLIF(owner_user_id, ''), NULLIF(uploaded_by, ''), 'admin');
 CREATE INDEX IF NOT EXISTS knowledge_documents_owner_uploaded_idx ON knowledge_documents(owner_user_id, uploaded_at DESC);
+{knowledge_visibility_sql()}
 
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     chunk_id VARCHAR(128) PRIMARY KEY,
@@ -195,6 +196,18 @@ CREATE INDEX IF NOT EXISTS conversation_messages_conv_created_idx
     ON conversation_messages(conversation_id, created_at ASC);
 
 {observability_schema_sql()}
+"""
+
+
+def knowledge_visibility_sql() -> str:
+    """M1：knowledge_documents.visibility。
+
+    只用 ADD COLUMN IF NOT EXISTS：列已存在时整条跳过，启动时重复执行不会改写
+    已标记为 shared 的文档。这里不得出现任何 UPDATE/SET visibility。
+    """
+    return """
+ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS visibility VARCHAR(16) NOT NULL DEFAULT 'private'
+    CHECK (visibility IN ('private', 'shared'));
 """
 
 

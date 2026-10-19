@@ -19,13 +19,13 @@ class FakeRag:
         top_k=5,
         min_score=0.0,
         owner_user_id=None,
-        include_all=True,
-        restrict_doc_ids=None,
+        scope=None,
+        doc_ids=None,
     ):
         self.calls.append(
             {
                 "owner_user_id": owner_user_id,
-                "include_all": include_all,
+                "scope": scope,
             }
         )
         return self.results
@@ -58,6 +58,7 @@ async def test_knowledge_qa_returns_citations(monkeypatch):
     answer, citations, debug = await service.answer(
         question="知识库里防晒合规怎么说",
         intent=IntentClassification(intent="knowledge_qa", should_retrieve_knowledge=True),
+        current_user={"user_id": "u1", "role": "analyst"},
     )
 
     assert "防晒" in answer
@@ -73,6 +74,7 @@ async def test_knowledge_qa_no_results_has_no_fake_citations():
     answer, citations, debug = await service.answer(
         question="知识库里不存在的问题",
         intent=IntentClassification(intent="knowledge_qa", should_retrieve_knowledge=True),
+        current_user={"user_id": "u1", "role": "analyst"},
     )
 
     assert "没有在当前知识库中检索到" in answer
@@ -89,6 +91,7 @@ async def test_knowledge_qa_retrieval_failure_degrades():
     answer, citations, debug = await service.answer(
         question="知识库里规则怎么说",
         intent=IntentClassification(intent="knowledge_qa", should_retrieve_knowledge=True),
+        current_user={"user_id": "u1", "role": "analyst"},
     )
 
     assert "知识库检索不可用" in answer
@@ -107,11 +110,12 @@ async def test_knowledge_qa_passes_owner_filter_for_non_admin():
         current_user={"user_id": "u1", "role": "analyst"},
     )
 
-    assert rag.calls[-1] == {"owner_user_id": "u1", "include_all": False}
+    # M1：不再传 include_all，scope 由 RAGService 取 flag 默认档位
+    assert rag.calls[-1] == {"owner_user_id": "u1", "scope": None}
 
 
 @pytest.mark.asyncio
-async def test_knowledge_qa_allows_admin_global_search():
+async def test_knowledge_qa_admin_uses_default_scope_not_global():
     rag = FakeRag([])
     service = KnowledgeQAService(rag_factory=lambda: rag)
 
@@ -121,4 +125,5 @@ async def test_knowledge_qa_allows_admin_global_search():
         current_user={"user_id": "admin", "role": "admin"},
     )
 
-    assert rag.calls[-1] == {"owner_user_id": "admin", "include_all": True}
+    # M1：admin 在对话检索中也按档位走，不再看全部
+    assert rag.calls[-1] == {"owner_user_id": "admin", "scope": None}

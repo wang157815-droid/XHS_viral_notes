@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from ...core.security import RoleLevel, role_allows
 from ...domain.conversation import IntentClassification, KnowledgeCitation
 from ...llm.model_gateway import ModelInvocationError, model_gateway
 
@@ -123,20 +123,24 @@ class KnowledgeQAService:
         current_user: Optional[Dict[str, Any]] = None,
         restrict_doc_ids: Optional[List[str]] = None,
     ) -> List[Any]:
+        owner_user_id = str((current_user or {}).get("user_id") or "")
+        if not owner_user_id:
+            # M1：无用户身份时不检索（失败关闭），admin 也按档位走，不再看全部
+            logger.warning("Knowledge QA: current_user 为空，跳过知识库检索并返回空结果")
+            return []
         rag = self._create_rag()
         combined: List[Any] = []
-        include_all = not current_user or role_allows(current_user.get("role"), RoleLevel.admin)
-        owner_user_id = str((current_user or {}).get("user_id") or "")
         for query in queries:
             results = await asyncio.to_thread(
-                rag.search,
-                query,
-                None,
-                5,
-                0.0,
-                owner_user_id,
-                include_all,
-                restrict_doc_ids,
+                partial(
+                    rag.search,
+                    query,
+                    domains=None,
+                    top_k=5,
+                    min_score=0.0,
+                    owner_user_id=owner_user_id,
+                    doc_ids=restrict_doc_ids,
+                )
             )
             combined.extend(results or [])
         return combined

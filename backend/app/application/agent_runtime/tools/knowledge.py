@@ -36,7 +36,6 @@ async def _search_knowledge(args: Dict[str, Any], ctx: ToolContext) -> ToolResul
             top_k=top_k,
             min_score=0.0,
             owner_user_id=ctx.owner_user_id or None,
-            include_all=True,
         )
 
     results = await asyncio.to_thread(_do_search)
@@ -47,6 +46,7 @@ async def _search_knowledge(args: Dict[str, Any], ctx: ToolContext) -> ToolResul
                 "doc_id": str(getattr(r, "doc_id", "") or ""),
                 "chunk_index": int(getattr(r, "chunk_index", 0) or 0),
                 "score": round(float(getattr(r, "score", 0) or 0), 4),
+                "trust": getattr(r, "trust", None),
                 "text": str(getattr(r, "text", "") or "")[:600],
             }
         )

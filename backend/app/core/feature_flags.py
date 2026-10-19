@@ -25,6 +25,8 @@ _DEFAULTS: dict[str, str] = {
     "BACKLOG_BACKEND": "memory",
     "IDEMPOTENCY_BACKEND": "memory",
     "VIDEO_ANALYSIS_ENABLED": "true",
+    # M1：知识库检索档位 legacy | owner_or_admin | strict
+    "KNOWLEDGE_SEARCH_SCOPE": "owner_or_admin",
 }
 
 

@@ -30,8 +30,18 @@ except ImportError:  # pragma: no cover
     _SA_AVAILABLE = False
 
 
+VISIBILITY_PRIVATE = "private"
+VISIBILITY_SHARED = "shared"
+VISIBILITIES = (VISIBILITY_PRIVATE, VISIBILITY_SHARED)
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _check_visibility(visibility: str) -> None:
+    if visibility not in VISIBILITIES:
+        raise ValueError(f"非法 visibility: {visibility}")
 
 
 class _JsonStore:
@@ -77,13 +87,18 @@ class KnowledgeRegistry:
         *,
         owner_user_id: Optional[str] = None,
         include_all: bool = False,
+        include_shared: bool = False,
     ) -> List[Dict[str, Any]]:
         data = self._documents.load()
         items = []
         for record in data.values():
             item = dict(record)
             item["owner_user_id"] = item.get("owner_user_id") or item.get("uploaded_by") or "admin"
-            if not include_all and item.get("owner_user_id") != owner_user_id:
+            item["visibility"] = item.get("visibility") or VISIBILITY_PRIVATE
+            visible = item.get("owner_user_id") == owner_user_id or (
+                include_shared and item["visibility"] == VISIBILITY_SHARED
+            )
+            if not include_all and not visible:
                 continue
             items.append(item)
         items.sort(key=lambda d: d.get("uploaded_at") or "", reverse=True)
@@ -95,6 +110,7 @@ class KnowledgeRegistry:
             return None
         item = dict(record)
         item["owner_user_id"] = item.get("owner_user_id") or item.get("uploaded_by") or "admin"
+        item["visibility"] = item.get("visibility") or VISIBILITY_PRIVATE
         return item
 
     def register_document(
@@ -130,6 +146,7 @@ class KnowledgeRegistry:
             "vector_message": vector_message,
             "uploaded_by": uploaded_by,
             "owner_user_id": owner_user_id or uploaded_by or "admin",
+            "visibility": VISIBILITY_PRIVATE,
             "uploaded_at": _utc_now(),
         }
         data = self._documents.load()
@@ -153,6 +170,21 @@ class KnowledgeRegistry:
         data[doc_id] = record
         self._documents.save(data)
         return record
+
+    def set_visibility(self, doc_ids: List[str], visibility: str) -> List[Dict[str, Any]]:
+        """批量设置 visibility，返回实际存在并被更新的文档（含旧值 ``previous_visibility``）。"""
+        _check_visibility(visibility)
+        data = self._documents.load()
+        changed: List[Dict[str, Any]] = []
+        for doc_id in doc_ids:
+            record = data.get(doc_id)
+            if not record:
+                continue
+            previous = record.get("visibility") or VISIBILITY_PRIVATE
+            record["visibility"] = visibility
+            changed.append({"doc_id": doc_id, "previous_visibility": previous, "visibility": visibility})
+        self._documents.save(data)
+        return changed
 
     def absolute_stored_path(self, record: Dict[str, Any]) -> Optional[Path]:
         rel = record.get("stored_path")
@@ -196,11 +228,14 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
         *,
         owner_user_id: Optional[str] = None,
         include_all: bool = False,
+        include_shared: bool = False,
     ) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {}
         where_sql = ""
         if not include_all:
             where_sql = "WHERE owner_user_id = :owner_user_id"
+            if include_shared:
+                where_sql += " OR visibility = 'shared'"
             params["owner_user_id"] = owner_user_id or ""
         with get_business_db_session() as session:
             rows = session.execute(
@@ -251,6 +286,7 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
             "vector_message": vector_message,
             "uploaded_by": uploaded_by,
             "owner_user_id": owner_user_id or uploaded_by or "admin",
+            "visibility": VISIBILITY_PRIVATE,
             "uploaded_at": _utc_now(),
             "metadata": {},
         }
@@ -299,6 +335,27 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
             )
         return self.get_document(doc_id)
 
+    def set_visibility(self, doc_ids: List[str], visibility: str) -> List[Dict[str, Any]]:
+        _check_visibility(visibility)
+        changed: List[Dict[str, Any]] = []
+        with get_business_db_session() as session:
+            for doc_id in doc_ids:
+                row = session.execute(
+                    text(
+                        """
+                        UPDATE knowledge_documents AS d
+                        SET visibility = :visibility
+                        FROM (SELECT doc_id, visibility FROM knowledge_documents WHERE doc_id = :doc_id FOR UPDATE) AS old
+                        WHERE d.doc_id = old.doc_id
+                        RETURNING d.doc_id, old.visibility AS previous_visibility, d.visibility
+                        """
+                    ),
+                    {"doc_id": doc_id, "visibility": visibility},
+                ).mappings().first()
+                if row:
+                    changed.append(dict(row))
+        return changed
+
     def delete_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
         record = self.get_document(doc_id)
         if not record:
@@ -328,6 +385,7 @@ class SqlAlchemyKnowledgeRegistry(KnowledgeRegistry):
         data["keywords"] = list(data.get("keywords") or [])
         data["domains"] = list(data.get("domains") or [])
         data["owner_user_id"] = data.get("owner_user_id") or data.get("uploaded_by") or "admin"
+        data["visibility"] = data.get("visibility") or VISIBILITY_PRIVATE
         data["uploaded_at"] = cls._iso(data.get("uploaded_at"))
         return data
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from functools import partial
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...domain.task_context import TaskContextWriter
@@ -182,14 +183,17 @@ class RAGAgent(BaseAgent):
 
         async def _one(q: str) -> List[Any]:
             try:
+                # M1：流水线 RAGAgent 固定 strict（本人 + shared），不使用过渡档
                 return await asyncio.to_thread(
-                    service.search,
-                    q,
-                    None,
-                    5,
-                    0.0,
-                    owner_user_id,
-                    False,
+                    partial(
+                        service.search,
+                        q,
+                        domains=None,
+                        top_k=5,
+                        min_score=0.0,
+                        owner_user_id=owner_user_id,
+                        scope="strict",
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
