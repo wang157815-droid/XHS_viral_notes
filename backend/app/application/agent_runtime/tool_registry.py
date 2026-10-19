@@ -21,6 +21,9 @@ from loguru import logger
 
 ToolCost = Literal["cheap", "expensive"]
 
+# 单个工具观察回注模型的最大字符数（AgentRuntime._truncate 与审计 obs_truncated 共用）
+OBS_MAX_CHARS = 4000
+
 
 @dataclass
 class ToolContext:
@@ -103,6 +106,10 @@ class ToolAuditRecord:
     conversation_id: str
     error: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+    # M2 观察审计：原始观察字符数 / 回注时是否会被截断 / 结果关联的数据集句柄
+    obs_chars: int = 0
+    obs_truncated: bool = False
+    obs_handle: Optional[str] = None
 
 
 class ToolRegistry:
@@ -179,7 +186,7 @@ class ToolRegistry:
             duration_ms = int((time.monotonic() - start) * 1000)
             if not isinstance(result, ToolResult):
                 result = ToolResult(ok=True, content=str(result))
-            self._record(name, result.ok, duration_ms, ctx, error=result.error)
+            self._record(name, result.ok, duration_ms, ctx, error=result.error, result=result)
             return result
         except Exception as exc:  # noqa: BLE001 —— 工具不可信，统一兜底
             duration_ms = int((time.monotonic() - start) * 1000)
@@ -210,7 +217,10 @@ class ToolRegistry:
         ctx: ToolContext,
         *,
         error: Optional[str] = None,
+        result: Optional[ToolResult] = None,
     ) -> None:
+        content = (result.content or "") if result is not None else ""
+        handle = (result.data or {}).get("handle") if result is not None else None
         rec = ToolAuditRecord(
             name=name,
             ok=ok,
@@ -218,6 +228,9 @@ class ToolRegistry:
             owner_user_id=ctx.owner_user_id,
             conversation_id=ctx.conversation_id,
             error=error,
+            obs_chars=len(content),
+            obs_truncated=len(content) > OBS_MAX_CHARS,
+            obs_handle=handle if isinstance(handle, str) and handle else None,
         )
         self._audit.append(rec)
         if len(self._audit) > 500:

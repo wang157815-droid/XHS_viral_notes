@@ -21,11 +21,23 @@ from uuid import uuid4
 
 from loguru import logger
 
+from ..core.feature_flags import get_flag_bool
 from ..core.tracing import get_trace_id
 from ..infrastructure.db import TaskMetricRecord, metrics_store
 from .agent_model_policy import agent_model_policy as default_policy, AgentModelPolicy
 from .model_profiles import ModelProfile, model_profile_registry as default_profile_registry, ModelProfileRegistry
 from .provider_registry import ProviderConfig, provider_registry as default_provider_registry, ProviderRegistry
+
+
+def _cache_hit_tokens(usage_obj: Any) -> Optional[int]:
+    if usage_obj is None:
+        return None
+    val = getattr(usage_obj, "prompt_cache_hit_tokens", None)
+    if val is None:
+        # OpenAI 风格：usage.prompt_tokens_details.cached_tokens
+        details = getattr(usage_obj, "prompt_tokens_details", None)
+        val = getattr(details, "cached_tokens", None) if details is not None else None
+    return int(val) if isinstance(val, (int, float)) else None
 
 
 class ModelInvocationError(RuntimeError):
@@ -51,6 +63,11 @@ class ModelAuditRecord:
     error_code: Optional[str] = None
 
 
+def _manifest_kw(context_manifest: Any) -> Dict[str, Any]:
+    """只在调用方确实给了清单时才透传（兼容测试中替换的旧签名 chat）。"""
+    return {"context_manifest": context_manifest} if context_manifest is not None else {}
+
+
 @dataclass
 class ModelGatewayConfig:
     policy: AgentModelPolicy = field(default_factory=lambda: default_policy)
@@ -74,6 +91,7 @@ class ModelGateway:
         modality: str = "text",
         task_id: Optional[str] = None,
         overrides: Optional[Dict[str, Any]] = None,
+        context_manifest: Any = None,
     ) -> Dict[str, Any]:
         """
         通用 chat 调用，支持多 Provider fallback。
@@ -124,6 +142,8 @@ class ModelGateway:
                     input_tokens=usage.get("prompt_tokens", self._estimate_tokens_from_messages(messages)),
                     output_tokens=usage.get("completion_tokens", self._estimate_tokens(content)),
                     ok=True,
+                    usage=usage,
+                    context_manifest=context_manifest,
                 )
                 return {
                     "content": content,
@@ -145,6 +165,7 @@ class ModelGateway:
                     output_tokens=0,
                     ok=False,
                     error_code=exc.code,
+                    context_manifest=context_manifest,
                 )
                 last_error = exc
                 if idx < len(candidates) - 1:
@@ -221,6 +242,7 @@ class ModelGateway:
         tool_choice: str | Dict[str, Any] = "auto",
         task_id: Optional[str] = None,
         overrides: Optional[Dict[str, Any]] = None,
+        context_manifest: Any = None,
     ) -> Dict[str, Any]:
         """Chat completion with OpenAI-compatible tool calling.
 
@@ -250,6 +272,8 @@ class ModelGateway:
                 input_tokens=usage.get("prompt_tokens", self._estimate_tokens_from_messages(messages)),
                 output_tokens=usage.get("completion_tokens", self._estimate_tokens(content)),
                 ok=True,
+                usage=usage,
+                context_manifest=context_manifest,
             )
             return {
                 "content": content,
@@ -270,6 +294,7 @@ class ModelGateway:
                 task_id=task_id,
                 overrides=overrides,
                 original_error=exc,
+                **_manifest_kw(context_manifest),
             )
 
     async def chat_stream(
@@ -280,6 +305,7 @@ class ModelGateway:
         modality: str = "text",
         task_id: Optional[str] = None,
         overrides: Optional[Dict[str, Any]] = None,
+        context_manifest: Any = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Yield text chunks for user-visible conversation answers."""
 
@@ -307,6 +333,7 @@ class ModelGateway:
                 input_tokens=input_tokens,
                 output_tokens=self._estimate_tokens(content),
                 ok=True,
+                context_manifest=context_manifest,
             )
             yield {"type": "message_done", "message_id": message_id, "content": content}
         except ModelInvocationError as exc:
@@ -318,6 +345,7 @@ class ModelGateway:
                     modality=modality,
                     task_id=task_id,
                     overrides=overrides,
+                    **_manifest_kw(context_manifest),
                 )
                 content = str(fallback.get("content") or "").strip()
                 if content:
@@ -451,6 +479,8 @@ class ModelGateway:
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
                     "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
                     "total_tokens": getattr(response.usage, "total_tokens", 0) if response.usage else 0,
+                    # DeepSeek 返回 prompt_cache_hit_tokens；其他供应商没有 → None
+                    "prompt_cache_hit_tokens": _cache_hit_tokens(response.usage),
                 }
                 return content, usage
             except Exception as exc:
@@ -520,6 +550,8 @@ class ModelGateway:
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) if response.usage else 0,
                     "completion_tokens": getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
                     "total_tokens": getattr(response.usage, "total_tokens", 0) if response.usage else 0,
+                    # DeepSeek 返回 prompt_cache_hit_tokens；其他供应商没有 → None
+                    "prompt_cache_hit_tokens": _cache_hit_tokens(response.usage),
                 }
                 return content, tool_calls, usage, reasoning
             except Exception as exc:
@@ -549,6 +581,7 @@ class ModelGateway:
         task_id: Optional[str],
         overrides: Optional[Dict[str, Any]],
         original_error: ModelInvocationError,
+        context_manifest: Any = None,
     ) -> Dict[str, Any]:
         tool_names = [
             str((item.get("function") or {}).get("name") or "")
@@ -572,6 +605,7 @@ class ModelGateway:
             modality="text",
             task_id=task_id,
             overrides={**(overrides or {}), "temperature": 0.1},
+            **_manifest_kw(context_manifest),
         )
         raw = str(result.get("content") or "{}").strip()
         parsed: Dict[str, Any]
@@ -804,6 +838,8 @@ class ModelGateway:
         output_tokens: int,
         ok: bool,
         error_code: Optional[str] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        context_manifest: Any = None,
     ) -> None:
         record = ModelAuditRecord(
             task_id=task_id,
@@ -822,6 +858,14 @@ class ModelGateway:
         self._audit_log.append(record)
         if len(self._audit_log) > 500:
             self._audit_log = self._audit_log[-250:]
+        metadata: Dict[str, Any] = {
+            "profile_id": profile.profile_id,
+            "model_name": profile.model_name,
+            "provider": provider.name,
+            "modality": profile.modality,
+        }
+        if get_flag_bool("CONTEXT_MANIFEST_ENABLED", True):
+            metadata["context"] = self._context_metadata(context_manifest, usage)
         metrics_store.record_task_metric(
             TaskMetricRecord(
                 task_id=task_id,
@@ -834,12 +878,7 @@ class ModelGateway:
                 tokens_out=output_tokens,
                 status="ok" if ok else "error",
                 error_code=error_code,
-                metadata={
-                    "profile_id": profile.profile_id,
-                    "model_name": profile.model_name,
-                    "provider": provider.name,
-                    "modality": profile.modality,
-                },
+                metadata=metadata,
             )
         )
         logger.debug(
@@ -852,6 +891,19 @@ class ModelGateway:
             duration_ms,
             error_code,
         )
+
+    @staticmethod
+    def _context_metadata(context_manifest: Any, usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """metadata.context（§E.1）：清单（若有）+ cache.prompt_cache_hit_tokens（取不到为 None）。"""
+        if context_manifest is None:
+            ctx: Dict[str, Any] = {}
+        elif hasattr(context_manifest, "to_dict"):
+            ctx = dict(context_manifest.to_dict())
+        else:
+            ctx = dict(context_manifest)
+        hit = (usage or {}).get("prompt_cache_hit_tokens")
+        ctx["cache"] = {"prompt_cache_hit_tokens": int(hit) if isinstance(hit, (int, float)) else None}
+        return ctx
 
     def get_audit_log(self, limit: int = 100) -> List[ModelAuditRecord]:
         return list(self._audit_log[-limit:])

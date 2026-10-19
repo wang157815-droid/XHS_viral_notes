@@ -1,0 +1,18 @@
+{
+  "_comment": "M2 程序性记忆目录（设计 v1.1 §A.5）：只做登记（agent / 记忆策略 / 预算），不做内容拼接；运行时只读。budget_tokens 为 null 表示尚未设定，待 M2 审计数据校准。",
+  "canvas_render_disclaimer": {"agent": "CanvasRenderAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "image_6elements": {"agent": "ImageAnalysisAgent", "memory_policy": "isolated", "budget_tokens": 3000},
+  "input_parser": {"agent": "InputParserAgent", "memory_policy": "profile", "budget_tokens": null,
+                   "profile_slots": ["track", "audience", "competitors"]},
+  "insight_summary": {"agent": "InsightAgent", "memory_policy": "profile+rules", "budget_tokens": 9000,
+                      "profile_slots": ["brand_tone", "audience", "taboo_words", "competitors"]},
+  "pain_point_insight": {"agent": "InsightAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "paragraph_refinement": {"agent": "module_regeneration", "memory_policy": "isolated", "budget_tokens": null},
+  "rag_query_rewrite": {"agent": "RAGAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "sheet2_narrative": {"agent": "Sheet2NarrativeAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "video_6elements": {"agent": "VideoAnalysisAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "viral_model_direction_normalize": {"agent": "ViralModelAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "viral_model_naming": {"agent": "ViralModelAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "viral_model_note_fit_review": {"agent": "ViralModelAgent", "memory_policy": "isolated", "budget_tokens": null},
+  "viral_model_small_cluster_validate": {"agent": "ViralModelAgent", "memory_policy": "isolated", "budget_tokens": null}
+}

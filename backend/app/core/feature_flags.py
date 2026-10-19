@@ -27,6 +27,10 @@ _DEFAULTS: dict[str, str] = {
     "VIDEO_ANALYSIS_ENABLED": "true",
     # M1：知识库检索档位 legacy | owner_or_admin | strict
     "KNOWLEDGE_SEARCH_SCOPE": "owner_or_admin",
+    # M2：网关审计写 metadata.context（只多写 metadata）
+    "CONTEXT_MANIFEST_ENABLED": "true",
+    # M2：检索失败显式上报（RAGService.search 抛 RetrievalUnavailableError），关闭 = 旧行为返回 []
+    "RETRIEVAL_FAILURE_EXPLICIT": "true",
 }
 
 

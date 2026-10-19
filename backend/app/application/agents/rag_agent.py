@@ -90,7 +90,14 @@ class RAGAgent(BaseAgent):
             rewritten_queries = [query_text] if query_text else keywords[:3]
 
         owner_user_id = self._owner_user_id(task_id)
-        business_rules, hits = await self._search_pgvector(task_id, rewritten_queries, owner_user_id)
+        search_status: Dict[str, Any] = {}
+        business_rules, hits = await self._search_pgvector(
+            task_id, rewritten_queries, owner_user_id, status=search_status
+        )
+        # M2：区分检索失败与无命中（兜底规则逻辑不变）
+        retrieval_status = (
+            "ok" if business_rules else ("unavailable" if search_status.get("failed") else "empty")
+        )
 
         if not business_rules:
             business_rules = _fallback_business_rules()
@@ -110,6 +117,7 @@ class RAGAgent(BaseAgent):
             "business_rules": business_rules,
             "hits": hits,
             "vector_dim": 0,
+            "retrieval_status": retrieval_status,
         }
 
         TaskContextWriter(context.task_context).write(
@@ -174,14 +182,23 @@ class RAGAgent(BaseAgent):
         task_id: str,
         queries: List[str],
         owner_user_id: str,
+        status: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """多 query 检索 + 按 (doc_id, chunk_index) 去重聚合。"""
+        """多 query 检索 + 按 (doc_id, chunk_index) 去重聚合。
+
+        ``status``（可选，M2）：写入 ``failed=True`` 表示检索失败（而非无命中）。
+        """
+        status = status if status is not None else {}
+        status["failed"] = False
         service = _get_rag_service()
         if service is None:
+            status["failed"] = True
             await self.emit_log(task_id, "info", "RAGService 未就绪（pgvector / deps 不可用），使用占位业务约束")
             return [], []
+        failures = 0
 
         async def _one(q: str) -> List[Any]:
+            nonlocal failures
             try:
                 # M1：流水线 RAGAgent 固定 strict（本人 + shared），不使用过渡档
                 return await asyncio.to_thread(
@@ -196,6 +213,7 @@ class RAGAgent(BaseAgent):
                     )
                 )
             except Exception as exc:  # noqa: BLE001
+                failures += 1
                 msg = str(exc)
                 if "dimension" in msg or "vector" in msg:
                     await self.emit_log(
@@ -211,6 +229,8 @@ class RAGAgent(BaseAgent):
                 return []
 
         all_results = await asyncio.gather(*[_one(q) for q in queries], return_exceptions=False)
+        # 全部 query 均失败才算「检索失败」；部分失败按实际命中处理
+        status["failed"] = bool(queries) and failures == len(queries)
 
         # 去重 + 聚合：(doc_id, chunk_index) 作 key，保留最高分
         seen: Dict[Tuple[str, int], Dict[str, Any]] = {}

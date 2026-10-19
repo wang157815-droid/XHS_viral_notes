@@ -33,10 +33,10 @@ from loguru import logger
 
 from ...llm.model_gateway import ModelInvocationError, model_gateway
 from .prompts import PLANNER_SYSTEM_PROMPT, build_goal_prompt
-from .tool_registry import ToolContext, ToolRegistry, ToolResult, tool_registry
+from .tool_registry import OBS_MAX_CHARS, ToolContext, ToolRegistry, ToolResult, tool_registry
 
 
-_OBS_MAX_CHARS = 4000  # 单个工具观察回注模型的最大字符数（防止 context 爆炸）
+_OBS_MAX_CHARS = OBS_MAX_CHARS  # 单个工具观察回注模型的最大字符数（防止 context 爆炸）
 # 最终回答开头若模型仍带了"思考：…"段落，去掉它（只去首段，正文不动）
 _LEADING_THOUGHT_RE = re.compile(r"^\s*(?:\*\*)?(?:思考|Thought)(?:\*\*)?\s*[:：][^\n]*(?:\n|$)")
 # 思考文本自带的"思考："/"**思考**："标签（界面已表明这是思考，去掉冗余前缀）

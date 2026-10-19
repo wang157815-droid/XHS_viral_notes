@@ -12,9 +12,16 @@ from viral_agent.models.document import KnowledgeDocument, DocumentSearchResult
 from backend.app.infrastructure.db.engine import get_business_db_session
 from backend.app.infrastructure.db.schema import ensure_business_schema
 from backend.app.services.knowledge_scope import build_scope_filter, resolve_scope, trust_level
+from backend.app.core.feature_flags import get_flag_bool
 
 # 加载环境变量
 load_dotenv()
+
+
+class RetrievalUnavailableError(RuntimeError):
+    """检索失败（embedding / pgvector 异常），与「无命中」区分（M2）。"""
+
+    code = "RETRIEVAL_UNAVAILABLE"
 
 
 class RAGService:
@@ -209,6 +216,9 @@ class RAGService:
 
         except Exception as e:
             logger.error(f"搜索失败: {e}")
+            # M2：失败与无命中区分；flag 关闭时保持旧行为（返回 []）
+            if get_flag_bool("RETRIEVAL_FAILURE_EXPLICIT", True):
+                raise RetrievalUnavailableError(str(e)) from e
             return []
 
     def delete_document(self, doc_id: str) -> bool:

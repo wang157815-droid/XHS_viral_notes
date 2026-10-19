@@ -36,7 +36,7 @@ class KnowledgeQAService:
             return (
                 "当前知识库检索不可用，我可以先按普通经验回答，但不会伪造知识库引用。请稍后检查 Embedding 或 pgvector 配置后重试。",
                 [],
-                {"rewrite_queries": queries, "model_error_code": "KNOWLEDGE_RETRIEVAL_UNAVAILABLE"},
+                {"rewrite_queries": queries, "model_error_code": "KNOWLEDGE_RETRIEVAL_UNAVAILABLE", "retrieval_status": "unavailable"},
             )
 
         citations = self._to_citations(raw_results)
@@ -44,7 +44,7 @@ class KnowledgeQAService:
             return (
                 "我没有在当前知识库中检索到足够相关的内容，因此暂时无法给出带引用的知识库回答。",
                 [],
-                {"rewrite_queries": queries, "retrieval_summary": {"vector": 0}},
+                {"rewrite_queries": queries, "retrieval_summary": {"vector": 0}, "retrieval_status": "empty"},
             )
 
         prompt_messages = self._build_prompt(question, conversation_summary, citations)
@@ -108,7 +108,7 @@ class KnowledgeQAService:
                     },
                 ],
                 [],
-                {"rewrite_queries": queries, "retrieval_summary": {"vector": 0}},
+                {"rewrite_queries": queries, "retrieval_summary": {"vector": 0}, "retrieval_status": "empty"},
             )
         return (
             self._build_prompt(question, conversation_summary, citations),

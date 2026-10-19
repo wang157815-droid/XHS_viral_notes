@@ -20,9 +20,29 @@ PromptRegistry：极简提示词加载器（阶段4.0）。
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from threading import RLock
-from typing import Dict
+from typing import Any, Dict
+
+CATALOG_FILE = "_catalog.json"
+
+
+def prompt_version(content: str) -> str:
+    """prompt 版本哈希：sha256(content)[:12]（M2，§A.5）。"""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+
+
+class PromptText(str):
+    """prompt 原文（仍是 str，调用方无感），额外带 ``version`` 属性。"""
+
+    version: str
+
+    def __new__(cls, content: str) -> "PromptText":
+        obj = super().__new__(cls, content)
+        obj.version = prompt_version(content)
+        return obj
 
 
 class PromptRegistry:
@@ -33,18 +53,30 @@ class PromptRegistry:
         self._cache: Dict[str, str] = {}
         self._lock = RLock()
 
-    def load(self, name: str) -> str:
+    def load(self, name: str) -> PromptText:
         """读取 prompt 文件原文（带缓存）。
 
         name: 文件名（含扩展名），例如 "insight_industry.md"
+        返回值是 str 子类，``.version`` 为 sha256(content)[:12]，记入审计。
         """
         with self._lock:
             if name not in self._cache:
                 path = self._root / name
                 if not path.exists():
                     raise FileNotFoundError(f"Prompt file not found: {path}")
-                self._cache[name] = path.read_text(encoding="utf-8")
+                self._cache[name] = PromptText(path.read_text(encoding="utf-8"))
             return self._cache[name]
+
+    def version(self, name: str) -> str:
+        return self.load(name).version
+
+    def catalog(self) -> Dict[str, Any]:
+        """读取 ``_catalog.json`` 登记表（只读；不含 ``_`` 开头的说明键）。"""
+        path = self._root / CATALOG_FILE
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if not k.startswith("_")}
 
     def list_all(self) -> list[str]:
         """列出所有业务 prompt 文件（不含下划线前缀的内部文件）。"""

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from ....core.feature_flags import get_flag_bool
 from ..tool_registry import ToolContext, ToolRegistry, ToolResult, ToolSpec
 
 
@@ -38,7 +39,19 @@ async def _search_knowledge(args: Dict[str, Any], ctx: ToolContext) -> ToolResul
             owner_user_id=ctx.owner_user_id or None,
         )
 
-    results = await asyncio.to_thread(_do_search)
+    try:
+        results = await asyncio.to_thread(_do_search)
+    except Exception as exc:  # noqa: BLE001
+        # M2：检索失败 ≠ 无命中。flag 关闭时保持旧行为（异常交给 registry 兜底）
+        if not get_flag_bool("RETRIEVAL_FAILURE_EXPLICIT", True):
+            raise
+        logger.warning("[tool.search_knowledge] 检索不可用: {}", exc)
+        return ToolResult(
+            ok=False,
+            content=f"知识库检索暂时不可用（{type(exc).__name__}），无法判断是否存在相关内容。不要据此认为知识库没有相关内容。",
+            error="RETRIEVAL_UNAVAILABLE",
+            display="知识库检索不可用",
+        )
     items: List[Dict[str, Any]] = []
     for r in results or []:
         items.append(
