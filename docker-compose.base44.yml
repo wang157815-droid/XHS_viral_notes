@@ -38,15 +38,19 @@ services:
           /venv/bin/pip install -q -r requirements.txt chromadb opencv-python-headless sqlalchemy asyncpg alembic redis arq pgvector
           touch /venv/.ok-$$(md5sum requirements.txt | cut -d' ' -f1)
         fi
+        # 扫码登录需要 Chromium（浏览器缓存在 pw-browsers 卷中，仅首次安装）
+        [ -f /pw-browsers/.ok-chromium ] || { /venv/bin/playwright install --with-deps chromium && touch /pw-browsers/.ok-chromium; }
         [ -d node_modules ] || npm install --silent
         exec /venv/bin/python backend/run.py --host 0.0.0.0 --port 8100 --reload
     volumes:
       - .:/app
       - venv:/venv
+      - pw-browsers:/pw-browsers
     env_file:
       - ./.env.base44-defaults
       - /run/base44/app.env
     environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/pw-browsers
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - POSTGRES_HOST=postgres
@@ -95,4 +99,5 @@ services:
 volumes:
   pg-data:
   venv:
+  pw-browsers:
   fe-node-modules:
